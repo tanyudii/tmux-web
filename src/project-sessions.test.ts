@@ -148,6 +148,25 @@ test("killProjectSession tolerates the tmux session already being gone", async (
   assert.deepEqual(removeCalls, ["/data/worktrees/proj1-ab12cd/feature-x"]);
 });
 
+test("killProjectSession tolerates the tmux server having shut down entirely (last session was already killed)", async () => {
+  // tmux's own server process exits once its last session dies, so a
+  // force-retry after that can hit "no server running" instead of
+  // "can't find session" -- both mean "there's nothing left to kill".
+  const removeCalls: string[] = [];
+  const deps = makeDeps({
+    killSession: async () => {
+      throw new Error("no server running on /tmp/tmux-1000/default");
+    },
+    removeWorktree: async (_repoPath, worktreePath) => {
+      removeCalls.push(worktreePath);
+    },
+  });
+
+  await killProjectSession(PROJECT, "feature-x", deps, { force: true });
+
+  assert.deepEqual(removeCalls, ["/data/worktrees/proj1-ab12cd/feature-x"]);
+});
+
 test("killProjectSession rethrows unexpected killSession errors", async () => {
   const deps = makeDeps({
     killSession: async () => {
