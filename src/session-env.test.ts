@@ -145,6 +145,34 @@ test("startSessionEnv throws EnvAlreadyRunningError when already starting", asyn
   await assert.rejects(() => startSessionEnv(PROJECT, "feature-x", deps, store), EnvAlreadyRunningError);
 });
 
+test("startSessionEnv rejects a second truly concurrent start() for the same session (no TOCTOU race)", async () => {
+  let composeUpCalls = 0;
+  const deps = makeDeps({
+    composeUp: async () => {
+      composeUpCalls++;
+    },
+  });
+  const store = createSessionEnvStore();
+
+  // Both calls fire before either has a chance to claim the store entry --
+  // this is what a security review flagged as a TOCTOU gap between the
+  // "already starting" check and the store.set() that used to happen only
+  // after an intervening `await safeComposePs(...)`.
+  const results = await Promise.allSettled([
+    startSessionEnv(PROJECT, "feature-x", deps, store),
+    startSessionEnv(PROJECT, "feature-x", deps, store),
+  ]);
+
+  const fulfilled = results.filter((r) => r.status === "fulfilled");
+  const rejected = results.filter((r) => r.status === "rejected");
+  assert.equal(fulfilled.length, 1);
+  assert.equal(rejected.length, 1);
+  assert.ok(rejected[0].status === "rejected" && rejected[0].reason instanceof EnvAlreadyRunningError);
+
+  await flush();
+  assert.equal(composeUpCalls, 1);
+});
+
 test("startSessionEnv runs pre-run -> compose up -> post-run, then status reports running", async () => {
   const calls: string[] = [];
   const config: EnvConfig = {
