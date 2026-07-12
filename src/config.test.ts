@@ -1,11 +1,14 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { parseConfig, ConfigError } from "./config.ts";
 
 const VALID_ENV = {
   TMUX_WEB_TOKEN: "a-secret-token-that-is-long-enough",
   TMUX_WEB_PORT: "5309",
   TMUX_WEB_BIND_HOST: "10.0.0.1",
+  TMUX_WEB_DATA_DIR: "/data/tmux-web",
 };
 
 test("parseConfig returns the parsed values for a fully-specified env", () => {
@@ -13,7 +16,13 @@ test("parseConfig returns the parsed values for a fully-specified env", () => {
     token: "a-secret-token-that-is-long-enough",
     port: 5309,
     bindHost: "10.0.0.1",
+    dataDir: "/data/tmux-web",
   });
+});
+
+test("parseConfig defaults TMUX_WEB_DATA_DIR to ~/.tmux-web when unset", () => {
+  const { TMUX_WEB_DATA_DIR, ...rest } = VALID_ENV;
+  assert.equal(parseConfig(rest).dataDir, join(homedir(), ".tmux-web"));
 });
 
 test("parseConfig throws when TMUX_WEB_TOKEN is missing", () => {
