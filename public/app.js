@@ -21,6 +21,10 @@ const newSessionBtn = document.getElementById("new-session");
 const terminalEl = document.getElementById("terminal");
 const emptyStateEl = document.getElementById("empty-state");
 
+const changesSidebar = document.getElementById("changes-sidebar");
+const changesBodyEl = document.getElementById("changes-body");
+const toggleChangesBtn = document.getElementById("toggle-changes");
+
 let token = sessionStorage.getItem(TOKEN_KEY) || "";
 let currentProject = null; // { id, name, repoPath, createdAt }
 let activeSessionName = null; // display name (slug), not the full tmux name
@@ -28,6 +32,8 @@ let socket = null;
 let term = null;
 let fitAddon = null;
 let sessionPollTimer = null;
+let changesPollTimer = null;
+let expandedDiffKey = null; // "mode:path" of the single currently-open inline diff, or null
 
 function apiFetch(path, options) {
   const headers = Object.assign({}, (options && options.headers) || {}, {
@@ -291,6 +297,10 @@ function attachToSession(session) {
 
   window.addEventListener("resize", sendResize);
   highlightActiveSession();
+
+  expandedDiffKey = null;
+  refreshChanges();
+  changesPollTimer = setInterval(refreshChanges, 5000);
 }
 
 function sendResize() {
@@ -318,6 +328,202 @@ function detachTerminal() {
   activeSessionName = null;
   emptyStateEl.style.display = "block";
   highlightActiveSession();
+
+  stopChangesPolling();
+  expandedDiffKey = null;
+  changesBodyEl.textContent = "";
+}
+
+// --- Changes sidebar (right) ---
+
+toggleChangesBtn.addEventListener("click", () => {
+  changesSidebar.classList.toggle("collapsed");
+});
+
+function stopChangesPolling() {
+  if (changesPollTimer) clearInterval(changesPollTimer);
+  changesPollTimer = null;
+}
+
+async function refreshChanges() {
+  if (!currentProject || !activeSessionName) return;
+  const res = await apiFetch(
+    projectSessionsUrl("/" + encodeURIComponent(activeSessionName) + "/changes"),
+  );
+  if (res.status === 401) {
+    sessionStorage.removeItem(TOKEN_KEY);
+    location.reload();
+    return;
+  }
+  if (!res.ok) return; // e.g. 404 if the worktree just got removed elsewhere
+  const grouped = await res.json();
+  renderChangesTree(grouped);
+}
+
+const GROUP_LABELS = { staged: "Staged", unstaged: "Unstaged", untracked: "Untracked" };
+const STATUS_BADGES = { added: "A", modified: "M", deleted: "D", renamed: "R", untracked: "U" };
+
+function renderChangesTree(grouped) {
+  changesBodyEl.textContent = "";
+  let anyFiles = false;
+
+  for (const mode of ["staged", "unstaged", "untracked"]) {
+    const files = grouped[mode] || [];
+    if (files.length === 0) continue;
+    anyFiles = true;
+
+    const title = document.createElement("div");
+    title.className = "changes-group-title";
+    title.textContent = GROUP_LABELS[mode] + " (" + files.length + ")";
+    changesBodyEl.appendChild(title);
+
+    const tree = buildFileTree(files);
+    renderTreeChildren(tree, changesBodyEl, mode);
+  }
+
+  if (!anyFiles) {
+    const empty = document.createElement("div");
+    empty.className = "changes-empty";
+    empty.textContent = "No changes.";
+    changesBodyEl.appendChild(empty);
+  }
+
+  if (expandedDiffKey) {
+    const [mode, path] = [expandedDiffKey.slice(0, expandedDiffKey.indexOf(":")), expandedDiffKey.slice(expandedDiffKey.indexOf(":") + 1)];
+    const fileEl = changesBodyEl.querySelector('.tree-file[data-mode="' + CSS.escape(mode) + '"][data-path="' + CSS.escape(path) + '"]');
+    if (fileEl) openDiffFor(fileEl, path, mode);
+    else expandedDiffKey = null;
+  }
+}
+
+function buildFileTree(files) {
+  const root = { children: new Map() };
+  for (const file of files) {
+    const parts = file.path.split("/");
+    let node = root;
+    for (let i = 0; i < parts.length; i++) {
+      const part = parts[i];
+      const isLast = i === parts.length - 1;
+      if (!node.children.has(part)) {
+        node.children.set(part, { name: part, children: new Map(), file: isLast ? file : null });
+      }
+      node = node.children.get(part);
+    }
+  }
+  return root;
+}
+
+function renderTreeChildren(node, container, mode) {
+  const entries = Array.from(node.children.values()).sort((a, b) => {
+    const aIsFolder = a.children.size > 0;
+    const bIsFolder = b.children.size > 0;
+    if (aIsFolder !== bIsFolder) return aIsFolder ? -1 : 1;
+    return a.name.localeCompare(b.name);
+  });
+
+  for (const entry of entries) {
+    if (entry.children.size > 0) {
+      const folderRow = document.createElement("div");
+      folderRow.className = "tree-folder";
+      folderRow.textContent = "\u{1F4C1} " + entry.name;
+      const childrenEl = document.createElement("div");
+      childrenEl.className = "tree-children";
+      folderRow.addEventListener("click", () => {
+        childrenEl.style.display = childrenEl.style.display === "none" ? "block" : "none";
+      });
+      container.appendChild(folderRow);
+      container.appendChild(childrenEl);
+      renderTreeChildren(entry, childrenEl, mode);
+      continue;
+    }
+
+    const file = entry.file;
+    const fileRow = document.createElement("div");
+    fileRow.className = "tree-file status-" + file.status;
+    fileRow.dataset.mode = mode;
+    fileRow.dataset.path = file.path;
+
+    const badge = document.createElement("span");
+    badge.className = "status-badge";
+    badge.textContent = STATUS_BADGES[file.status] || "?";
+    const label = document.createElement("span");
+    label.textContent = entry.name;
+
+    fileRow.appendChild(badge);
+    fileRow.appendChild(label);
+    fileRow.addEventListener("click", () => toggleDiff(fileRow, file.path, mode));
+    container.appendChild(fileRow);
+  }
+}
+
+async function toggleDiff(fileEl, path, mode) {
+  const key = mode + ":" + path;
+  const existing = fileEl.nextElementSibling;
+  if (existing && existing.classList.contains("diff-panel")) {
+    existing.remove();
+    if (expandedDiffKey === key) expandedDiffKey = null;
+    return;
+  }
+  await openDiffFor(fileEl, path, mode);
+}
+
+async function openDiffFor(fileEl, path, mode) {
+  const key = mode + ":" + path;
+  const existing = fileEl.nextElementSibling;
+  if (existing && existing.classList.contains("diff-panel")) existing.remove();
+
+  expandedDiffKey = key;
+  const panel = document.createElement("div");
+  panel.className = "diff-panel";
+  panel.textContent = "Loading diff…";
+  fileEl.after(panel);
+
+  const res = await apiFetch(
+    projectSessionsUrl(
+      "/" + encodeURIComponent(activeSessionName) + "/diff?path=" + encodeURIComponent(path) + "&mode=" + mode,
+    ),
+  );
+  if (!res.ok) {
+    panel.textContent = "Could not load diff.";
+    return;
+  }
+  const result = await res.json();
+  panel.textContent = "";
+
+  if (result.isBinary) {
+    const note = document.createElement("div");
+    note.className = "diff-note";
+    note.textContent = "Binary file changed.";
+    panel.appendChild(note);
+    return;
+  }
+
+  if (result.isUntracked) {
+    const note = document.createElement("div");
+    note.className = "diff-note";
+    note.textContent = "New file:";
+    panel.appendChild(note);
+    panel.appendChild(renderDiffLines(result.diff.split("\n").map((line) => "+" + line).join("\n")));
+    return;
+  }
+
+  panel.appendChild(renderDiffLines(result.diff));
+}
+
+function renderDiffLines(diffText) {
+  const container = document.createElement("div");
+  container.className = "diff-content";
+  for (const line of diffText.split("\n")) {
+    const lineEl = document.createElement("div");
+    lineEl.textContent = line || " ";
+    if (line.startsWith("+++") || line.startsWith("---")) lineEl.classList.add("diff-line", "diff-file-header");
+    else if (line.startsWith("@@")) lineEl.classList.add("diff-line", "diff-hunk");
+    else if (line.startsWith("+")) lineEl.classList.add("diff-line", "diff-add");
+    else if (line.startsWith("-")) lineEl.classList.add("diff-line", "diff-del");
+    else lineEl.classList.add("diff-line", "diff-context");
+    container.appendChild(lineEl);
+  }
+  return container;
 }
 
 if (token) {

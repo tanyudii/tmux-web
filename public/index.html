@@ -192,6 +192,145 @@
         margin: auto;
         color: #777;
       }
+
+      /* --- Changes sidebar (right) --- */
+      #changes-sidebar {
+        width: 320px;
+        background: var(--panel);
+        border-left: 1px solid var(--border);
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+        transition: width 0.15s ease;
+      }
+      #changes-sidebar.collapsed {
+        width: 36px;
+      }
+      #changes-sidebar.collapsed #changes-body {
+        display: none;
+      }
+      .changes-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 0.5rem;
+        border-bottom: 1px solid var(--border);
+        flex-shrink: 0;
+      }
+      .changes-header h1 {
+        font-size: 0.85rem;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        color: #999;
+        margin: 0;
+        white-space: nowrap;
+      }
+      #changes-sidebar.collapsed .changes-header h1 {
+        display: none;
+      }
+      #toggle-changes {
+        background: transparent;
+        border: none;
+        color: var(--text);
+        cursor: pointer;
+        font-size: 1rem;
+        padding: 0.25rem 0.4rem;
+      }
+      #toggle-changes:hover {
+        color: var(--accent);
+      }
+      #changes-body {
+        flex: 1;
+        overflow-y: auto;
+        padding: 0.5rem;
+        font-size: 0.85rem;
+      }
+      .changes-group-title {
+        font-size: 0.75rem;
+        text-transform: uppercase;
+        color: #888;
+        margin: 0.75rem 0 0.25rem;
+      }
+      .changes-empty {
+        color: #666;
+        padding: 0.5rem 0;
+      }
+      .tree-folder,
+      .tree-file {
+        display: flex;
+        align-items: center;
+        gap: 0.35rem;
+        padding: 0.15rem 0.25rem;
+        border-radius: 3px;
+        cursor: pointer;
+        white-space: nowrap;
+      }
+      .tree-folder:hover,
+      .tree-file:hover {
+        background: #2a2d2e;
+      }
+      .tree-file.status-added .status-badge {
+        color: #4caf50;
+      }
+      .tree-file.status-modified .status-badge {
+        color: #dcb04a;
+      }
+      .tree-file.status-deleted .status-badge {
+        color: var(--danger);
+      }
+      .tree-file.status-untracked .status-badge {
+        color: #4caf50;
+      }
+      .tree-file.status-renamed .status-badge {
+        color: #4a9edc;
+      }
+      .status-badge {
+        font-family: monospace;
+        font-weight: 700;
+        width: 1em;
+        flex-shrink: 0;
+      }
+      .tree-children {
+        margin-left: 1rem;
+      }
+      .diff-panel {
+        margin: 0.25rem 0 0.5rem 1rem;
+        border: 1px solid var(--border);
+        border-radius: 4px;
+        overflow-x: auto;
+        background: var(--bg);
+      }
+      .diff-content {
+        font-family: monospace;
+        font-size: 0.78rem;
+        white-space: pre;
+        padding: 0.25rem 0;
+      }
+      .diff-line {
+        padding: 0 0.5rem;
+      }
+      .diff-add {
+        background: rgba(76, 175, 80, 0.15);
+        color: #8fd694;
+      }
+      .diff-del {
+        background: rgba(168, 50, 50, 0.15);
+        color: #e08b8b;
+      }
+      .diff-hunk {
+        color: #4a9edc;
+      }
+      .diff-file-header {
+        color: #888;
+      }
+      .diff-context {
+        color: var(--text);
+      }
+      .diff-note {
+        padding: 0.4rem 0.5rem;
+        color: #888;
+        font-style: italic;
+      }
     </style>
   </head>
   <body>
@@ -224,6 +363,13 @@
         <div id="terminal-container">
           <div id="terminal"></div>
           <div id="empty-state">Select or create a session to attach.</div>
+        </div>
+        <div id="changes-sidebar">
+          <div class="changes-header">
+            <h1>Changes</h1>
+            <button id="toggle-changes" title="Toggle changes panel">&hArr;</button>
+          </div>
+          <div id="changes-body"></div>
         </div>
       </div>
     </div>
