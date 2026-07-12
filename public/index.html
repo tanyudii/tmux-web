@@ -27,6 +27,9 @@
         display: flex;
         flex-direction: column;
       }
+      button {
+        font-family: inherit;
+      }
       #login {
         margin: auto;
         padding: 2rem;
@@ -46,7 +49,8 @@
         border-radius: 4px;
       }
       #login button,
-      .sidebar button {
+      .sidebar button,
+      .primary-button {
         padding: 0.5rem;
         background: var(--accent);
         border: none;
@@ -59,8 +63,70 @@
         flex: 1;
         min-height: 0;
       }
+
+      /* --- Project list view --- */
+      #project-list-view {
+        flex: 1;
+        min-height: 0;
+        overflow-y: auto;
+        padding: 1.5rem;
+        max-width: 720px;
+        margin: 0 auto;
+        width: 100%;
+      }
+      #project-list-view header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 1rem;
+      }
+      .project-item {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 1rem;
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        margin-bottom: 0.5rem;
+        cursor: pointer;
+      }
+      .project-item:hover {
+        border-color: var(--accent);
+      }
+      .project-item .project-name {
+        font-weight: 600;
+      }
+      .project-item .project-path {
+        color: #888;
+        font-size: 0.85rem;
+        font-family: monospace;
+      }
+      .project-item .kill {
+        background: transparent;
+        border: none;
+        color: #999;
+        cursor: pointer;
+        font-size: 1.1rem;
+        padding: 0 0.5rem;
+      }
+      .project-item .kill:hover {
+        color: var(--danger);
+      }
+      #empty-projects {
+        color: #777;
+        padding: 2rem 0;
+        text-align: center;
+      }
+
+      /* --- Project detail (sessions) view --- */
+      #project-detail-view {
+        display: none;
+        flex: 1;
+        min-height: 0;
+      }
       .sidebar {
-        width: 220px;
+        width: 240px;
         background: var(--panel);
         border-right: 1px solid var(--border);
         display: flex;
@@ -75,6 +141,17 @@
         letter-spacing: 0.05em;
         color: #999;
         margin: 0.25rem 0;
+      }
+      #back-to-projects {
+        background: transparent;
+        border: none;
+        color: var(--text);
+        text-align: left;
+        cursor: pointer;
+        padding: 0.25rem 0;
+      }
+      #back-to-projects:hover {
+        color: var(--accent);
       }
       .session-item {
         display: flex;
@@ -126,14 +203,28 @@
     </form>
 
     <div id="app">
-      <div class="sidebar">
-        <h1>Sessions</h1>
-        <div id="session-list"></div>
-        <button id="new-session">+ New session</button>
+      <div id="project-list-view">
+        <header>
+          <h1>Projects</h1>
+          <button class="primary-button" id="add-project">+ Add project</button>
+        </header>
+        <div id="project-list"></div>
+        <div id="empty-projects" style="display: none">
+          No projects yet. Add one by pointing at a git repo on this server.
+        </div>
       </div>
-      <div id="terminal-container">
-        <div id="terminal"></div>
-        <div id="empty-state">Select or create a session to attach.</div>
+
+      <div id="project-detail-view">
+        <div class="sidebar">
+          <button id="back-to-projects">&larr; Projects</button>
+          <h1 id="project-detail-title"></h1>
+          <div id="session-list"></div>
+          <button id="new-session">+ New session</button>
+        </div>
+        <div id="terminal-container">
+          <div id="terminal"></div>
+          <div id="empty-state">Select or create a session to attach.</div>
+        </div>
       </div>
     </div>
 
