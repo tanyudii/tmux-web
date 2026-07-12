@@ -13,10 +13,13 @@ import {
   getProject as getProjectImpl,
 } from "./projects.ts";
 import { isGitRepo, addWorktree, removeWorktree } from "./worktree.ts";
+import { getChangedFiles, getFileDiff } from "./git-status.ts";
 import {
   listProjectSessions as listProjectSessionsImpl,
   createProjectSession as createProjectSessionImpl,
   killProjectSession as killProjectSessionImpl,
+  getProjectSessionChanges as getProjectSessionChangesImpl,
+  getProjectSessionDiff as getProjectSessionDiffImpl,
   type ProjectSessionsDeps,
 } from "./project-sessions.ts";
 
@@ -46,6 +49,8 @@ function main(): void {
     killSession,
     addWorktree,
     removeWorktree,
+    getChangedFiles,
+    getFileDiff,
     worktreesRoot,
   };
 
@@ -64,6 +69,11 @@ function main(): void {
       createProjectSessionImpl(project, name, projectSessionsDeps),
     killProjectSession: (project, slug, options) =>
       killProjectSessionImpl(project, slug, projectSessionsDeps, options),
+
+    getProjectSessionChanges: (project, slug) =>
+      getProjectSessionChangesImpl(project, slug, projectSessionsDeps),
+    getProjectSessionDiff: (project, slug, filePath, mode) =>
+      getProjectSessionDiffImpl(project, slug, filePath, mode, projectSessionsDeps),
   });
 
   const wss = new WebSocketServer({ noServer: true });
