@@ -6,6 +6,7 @@ import {
   listSessions,
   createSession,
   killSession,
+  ValidationError,
 } from "./tmux.ts";
 
 test("parseSessionList returns an empty array for empty output", () => {
@@ -105,7 +106,7 @@ test("createSession rejects invalid names without calling exec", async () => {
     return { stdout: "" };
   };
 
-  await assert.rejects(() => createSession("bad name", fakeExec));
+  await assert.rejects(() => createSession("bad name", fakeExec), ValidationError);
   assert.equal(called, false);
 });
 
@@ -128,7 +129,7 @@ test("killSession rejects invalid names without calling exec", async () => {
     return { stdout: "" };
   };
 
-  await assert.rejects(() => killSession("../etc", fakeExec));
+  await assert.rejects(() => killSession("../etc", fakeExec), ValidationError);
   assert.equal(called, false);
 });
 

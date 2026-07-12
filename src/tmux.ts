@@ -22,6 +22,8 @@ export function isValidSessionName(name: string): boolean {
   return VALID_NAME_PATTERN.test(name);
 }
 
+export class ValidationError extends Error {}
+
 export function parseSessionList(output: string): TmuxSession[] {
   return output
     .split("\n")
@@ -57,14 +59,14 @@ export async function listSessions(exec: ExecFn = defaultExec): Promise<TmuxSess
 
 export async function createSession(name: string, exec: ExecFn = defaultExec): Promise<void> {
   if (!isValidSessionName(name)) {
-    throw new Error(`Invalid session name: ${name}`);
+    throw new ValidationError(`Invalid session name: ${name}`);
   }
   await exec("tmux", ["new-session", "-d", "-s", name]);
 }
 
 export async function killSession(name: string, exec: ExecFn = defaultExec): Promise<void> {
   if (!isValidSessionName(name)) {
-    throw new Error(`Invalid session name: ${name}`);
+    throw new ValidationError(`Invalid session name: ${name}`);
   }
   await exec("tmux", ["kill-session", "-t", name]);
 }
