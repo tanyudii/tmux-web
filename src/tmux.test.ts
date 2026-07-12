@@ -106,7 +106,7 @@ test("createSession rejects invalid names without calling exec", async () => {
     return { stdout: "" };
   };
 
-  await assert.rejects(() => createSession("bad name", fakeExec), ValidationError);
+  await assert.rejects(() => createSession("bad name", {}, fakeExec), ValidationError);
   assert.equal(called, false);
 });
 
@@ -117,9 +117,23 @@ test("createSession calls tmux new-session -d -s <name> for a valid name", async
     return { stdout: "" };
   };
 
-  await createSession("main", fakeExec);
+  await createSession("main", {}, fakeExec);
 
   assert.deepEqual(calls, [{ file: "tmux", args: ["new-session", "-d", "-s", "main"] }]);
+});
+
+test("createSession passes -c <cwd> when a working directory is given", async () => {
+  const calls: Array<{ file: string; args: string[] }> = [];
+  const fakeExec = async (file: string, args: string[]) => {
+    calls.push({ file, args });
+    return { stdout: "" };
+  };
+
+  await createSession("main", { cwd: "/home/user/worktrees/main" }, fakeExec);
+
+  assert.deepEqual(calls, [
+    { file: "tmux", args: ["new-session", "-d", "-s", "main", "-c", "/home/user/worktrees/main"] },
+  ]);
 });
 
 test("killSession rejects invalid names without calling exec", async () => {
