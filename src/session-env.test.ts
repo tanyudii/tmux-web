@@ -178,11 +178,14 @@ test("startSessionEnv reports 'error' when compose up itself fails", async () =>
 });
 
 test("startSessionEnv reports 'error' with services+openUrl still visible when only post-run fails", async () => {
+  let upCalled = false;
   const config: EnvConfig = { ...AVAILABLE_CONFIG, postRunScript: `${WORKTREE_PATH}/.tmux-web-env/post-run.sh` };
   const deps = makeDeps({
     loadEnvConfig: async () => config,
-    composeUp: async () => {},
-    composePs: async () => [{ service: "web", state: "running" }],
+    composeUp: async () => {
+      upCalled = true;
+    },
+    composePs: async () => (upCalled ? [{ service: "web", state: "running" }] : []),
     composePort: async () => 54321,
     runScript: async () => {
       throw new Error("migration failed");
