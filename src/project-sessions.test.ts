@@ -4,6 +4,8 @@ import {
   listProjectSessions,
   createProjectSession,
   killProjectSession,
+  getProjectSessionChanges,
+  getProjectSessionDiff,
   type ProjectSessionsDeps,
 } from "./project-sessions.ts";
 import type { Project } from "./projects.ts";
@@ -24,6 +26,8 @@ function makeDeps(overrides: Partial<ProjectSessionsDeps> = {}): ProjectSessions
     killSession: async () => {},
     addWorktree: async () => {},
     removeWorktree: async () => {},
+    getChangedFiles: async () => ({ staged: [], unstaged: [], untracked: [] }),
+    getFileDiff: async () => ({ diff: "", isUntracked: false, isBinary: false }),
     worktreesRoot: "/data/worktrees",
     ...overrides,
   };
@@ -175,4 +179,37 @@ test("killProjectSession rethrows unexpected killSession errors", async () => {
   });
 
   await assert.rejects(() => killProjectSession(PROJECT, "feature-x", deps), /permission denied/);
+});
+
+test("getProjectSessionChanges resolves the worktree path and delegates to getChangedFiles", async () => {
+  const calls: string[] = [];
+  const grouped = { staged: [], unstaged: [], untracked: [] };
+  const deps = makeDeps({
+    getChangedFiles: async (worktreePath: string) => {
+      calls.push(worktreePath);
+      return grouped;
+    },
+  });
+
+  const result = await getProjectSessionChanges(PROJECT, "feature-x", deps);
+
+  assert.deepEqual(calls, ["/data/worktrees/proj1-ab12cd/feature-x"]);
+  assert.equal(result, grouped);
+});
+
+test("getProjectSessionDiff resolves the worktree path and delegates to getFileDiff", async () => {
+  const calls: Array<{ worktreePath: string; filePath: string; mode: string }> = [];
+  const deps = makeDeps({
+    getFileDiff: async (worktreePath: string, filePath: string, mode: "staged" | "unstaged" | "untracked") => {
+      calls.push({ worktreePath, filePath, mode });
+      return { diff: "diff text", isUntracked: false, isBinary: false };
+    },
+  });
+
+  const result = await getProjectSessionDiff(PROJECT, "feature-x", "src/index.ts", "staged", deps);
+
+  assert.deepEqual(calls, [
+    { worktreePath: "/data/worktrees/proj1-ab12cd/feature-x", filePath: "src/index.ts", mode: "staged" },
+  ]);
+  assert.equal(result.diff, "diff text");
 });
