@@ -81,11 +81,13 @@ test("parseStatusPorcelain handles paths containing spaces (unquoted under -z)",
 
 // --- getChangedFiles / getFileDiff (fake exec) ---
 
+const fakeDirStat = async () => ({ isDirectory: () => true });
+
 test("getChangedFiles groups parsed entries into staged/unstaged/untracked", async () => {
   const fakeExec = async () => ({
     stdout: "A  staged.txt\0 M unstaged.txt\0?? untracked.txt\0",
   });
-  const result = await getChangedFiles("/repo", fakeExec);
+  const result = await getChangedFiles("/repo", fakeExec, fakeDirStat);
   assert.deepEqual(result, {
     staged: [{ path: "staged.txt", status: "added", staged: true, oldPath: undefined }],
     unstaged: [{ path: "unstaged.txt", status: "modified", staged: false, oldPath: undefined }],
@@ -99,7 +101,7 @@ test("getChangedFiles calls git status --porcelain=v1 -z scoped to the worktree"
     calls.push({ file, args });
     return { stdout: "" };
   };
-  await getChangedFiles("/repo", fakeExec);
+  await getChangedFiles("/repo", fakeExec, fakeDirStat);
   assert.deepEqual(calls, [{ file: "git", args: ["-C", "/repo", "status", "--porcelain=v1", "-z"] }]);
 });
 
