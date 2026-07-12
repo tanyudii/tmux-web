@@ -8,6 +8,7 @@ import { createServer, type ServerDeps } from "./server.ts";
 import { ValidationError } from "./tmux.ts";
 import { ProjectValidationError, type Project } from "./projects.ts";
 import { WorktreeConflictError, DirtyWorktreeError } from "./worktree.ts";
+import { WorktreeNotFoundError, GitStatusError } from "./git-status.ts";
 
 const TOKEN = "test-token-123";
 
@@ -38,6 +39,8 @@ function makeDeps(overrides: Partial<ServerDeps> = {}): ServerDeps {
       attached: false,
     }),
     killProjectSession: async () => {},
+    getProjectSessionChanges: async () => ({ staged: [], unstaged: [], untracked: [] }),
+    getProjectSessionDiff: async () => ({ diff: "", isUntracked: false, isBinary: false }),
     ...overrides,
   };
 }
@@ -395,6 +398,127 @@ test("project routes without a token return 401 and never call into deps", async
     const res = await fetch(`${baseUrl}/api/projects/${SAMPLE_PROJECT.id}/sessions`);
     assert.equal(res.status, 401);
     assert.equal(called, false);
+  });
+});
+
+// --- Changes + diff ---
+
+test("GET /api/projects/:id/sessions/:name/changes without a token returns 401", async () => {
+  await withServer(makeDeps(), async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/projects/${SAMPLE_PROJECT.id}/sessions/feature-x/changes`);
+    assert.equal(res.status, 401);
+  });
+});
+
+test("GET /api/projects/:id/sessions/:name/changes returns the grouped changes", async () => {
+  const grouped = {
+    staged: [{ path: "a.txt", status: "added", staged: true, oldPath: undefined }],
+    unstaged: [],
+    untracked: [],
+  };
+  const deps = makeDeps({ getProjectSessionChanges: async () => grouped });
+  await withServer(deps, async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/projects/${SAMPLE_PROJECT.id}/sessions/feature-x/changes`, {
+      headers: authHeaders(),
+    });
+    assert.equal(res.status, 200);
+    assert.deepEqual(await res.json(), grouped);
+  });
+});
+
+test("GET /api/projects/:id/sessions/:name/changes returns 404 for an unknown project", async () => {
+  await withServer(makeDeps(), async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/projects/unknown-id/sessions/feature-x/changes`, {
+      headers: authHeaders(),
+    });
+    assert.equal(res.status, 404);
+  });
+});
+
+test("GET /api/projects/:id/sessions/:name/changes returns 404 when the worktree is gone (WorktreeNotFoundError)", async () => {
+  const deps = makeDeps({
+    getProjectSessionChanges: async () => {
+      throw new WorktreeNotFoundError("gone");
+    },
+  });
+  await withServer(deps, async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/projects/${SAMPLE_PROJECT.id}/sessions/feature-x/changes`, {
+      headers: authHeaders(),
+    });
+    assert.equal(res.status, 404);
+  });
+});
+
+test("GET /api/projects/:id/sessions/:name/diff without a token returns 401", async () => {
+  await withServer(makeDeps(), async (baseUrl) => {
+    const res = await fetch(
+      `${baseUrl}/api/projects/${SAMPLE_PROJECT.id}/sessions/feature-x/diff?path=a.txt&mode=unstaged`,
+    );
+    assert.equal(res.status, 401);
+  });
+});
+
+test("GET /api/projects/:id/sessions/:name/diff returns the diff for the requested file", async () => {
+  const calls: Array<{ slug: string; path: string; mode: string }> = [];
+  const deps = makeDeps({
+    getProjectSessionDiff: async (_project: Project, slug: string, path: string, mode: string) => {
+      calls.push({ slug, path, mode });
+      return { diff: "+hello\n", isUntracked: false, isBinary: false };
+    },
+  });
+  await withServer(deps, async (baseUrl) => {
+    const res = await fetch(
+      `${baseUrl}/api/projects/${SAMPLE_PROJECT.id}/sessions/feature-x/diff?path=src%2Findex.ts&mode=staged`,
+      { headers: authHeaders() },
+    );
+    assert.equal(res.status, 200);
+    assert.deepEqual(await res.json(), { diff: "+hello\n", isUntracked: false, isBinary: false });
+    assert.deepEqual(calls, [{ slug: "feature-x", path: "src/index.ts", mode: "staged" }]);
+  });
+});
+
+test("GET /api/projects/:id/sessions/:name/diff returns 400 when path is missing", async () => {
+  await withServer(makeDeps(), async (baseUrl) => {
+    const res = await fetch(
+      `${baseUrl}/api/projects/${SAMPLE_PROJECT.id}/sessions/feature-x/diff?mode=unstaged`,
+      { headers: authHeaders() },
+    );
+    assert.equal(res.status, 400);
+  });
+});
+
+test("GET /api/projects/:id/sessions/:name/diff returns 400 when mode is invalid", async () => {
+  await withServer(makeDeps(), async (baseUrl) => {
+    const res = await fetch(
+      `${baseUrl}/api/projects/${SAMPLE_PROJECT.id}/sessions/feature-x/diff?path=a.txt&mode=bogus`,
+      { headers: authHeaders() },
+    );
+    assert.equal(res.status, 400);
+  });
+});
+
+test("GET /api/projects/:id/sessions/:name/diff returns 400 for a path-traversal attempt (GitStatusError)", async () => {
+  const deps = makeDeps({
+    getProjectSessionDiff: async () => {
+      throw new GitStatusError("escapes the worktree");
+    },
+  });
+  await withServer(deps, async (baseUrl) => {
+    const res = await fetch(
+      `${baseUrl}/api/projects/${SAMPLE_PROJECT.id}/sessions/feature-x/diff?path=..%2F..%2Fetc%2Fpasswd&mode=untracked`,
+      { headers: authHeaders() },
+    );
+    assert.equal(res.status, 400);
+  });
+});
+
+test("GET /api/projects/:id/sessions/:name/diff returns 404 for an unknown project", async () => {
+  await withServer(makeDeps(), async (baseUrl) => {
+    const res = await fetch(
+      `${baseUrl}/api/projects/unknown-id/sessions/feature-x/diff?path=a.txt&mode=unstaged`,
+      { headers: authHeaders() },
+    );
+    assert.equal(res.status, 404);
   });
 });
 
