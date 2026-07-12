@@ -22,6 +22,16 @@ import {
   getProjectSessionDiff as getProjectSessionDiffImpl,
   type ProjectSessionsDeps,
 } from "./project-sessions.ts";
+import { loadEnvConfig } from "./env-config.ts";
+import { composeUp, composeDown, composePs, composePort } from "./docker-compose.ts";
+import { runScript } from "./run-script.ts";
+import {
+  getSessionEnvStatus as getSessionEnvStatusImpl,
+  startSessionEnv as startSessionEnvImpl,
+  stopSessionEnv as stopSessionEnvImpl,
+  createSessionEnvStore,
+  type SessionEnvDeps,
+} from "./session-env.ts";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = join(__dirname, "..", "public");
@@ -43,6 +53,17 @@ function main(): void {
   const projectsFile = join(config.dataDir, "projects.json");
   const worktreesRoot = join(config.dataDir, "worktrees");
 
+  const sessionEnvDeps: SessionEnvDeps = {
+    loadEnvConfig,
+    runScript,
+    composeUp,
+    composeDown,
+    composePs,
+    composePort,
+    worktreesRoot,
+  };
+  const sessionEnvStore = createSessionEnvStore();
+
   const projectSessionsDeps: ProjectSessionsDeps = {
     listSessions,
     createSession,
@@ -51,6 +72,8 @@ function main(): void {
     removeWorktree,
     getChangedFiles,
     getFileDiff,
+    stopSessionEnv: (project, sessionSlug) =>
+      stopSessionEnvImpl(project, sessionSlug, sessionEnvDeps, sessionEnvStore),
     worktreesRoot,
   };
 
@@ -74,6 +97,13 @@ function main(): void {
       getProjectSessionChangesImpl(project, slug, projectSessionsDeps),
     getProjectSessionDiff: (project, slug, filePath, mode) =>
       getProjectSessionDiffImpl(project, slug, filePath, mode, projectSessionsDeps),
+
+    getProjectSessionEnvStatus: (project, slug) =>
+      getSessionEnvStatusImpl(project, slug, sessionEnvDeps, sessionEnvStore),
+    startProjectSessionEnv: (project, slug) =>
+      startSessionEnvImpl(project, slug, sessionEnvDeps, sessionEnvStore),
+    stopProjectSessionEnv: (project, slug) =>
+      stopSessionEnvImpl(project, slug, sessionEnvDeps, sessionEnvStore),
   });
 
   const wss = new WebSocketServer({ noServer: true });
