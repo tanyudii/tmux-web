@@ -13,6 +13,7 @@ import {
   EnvNotRunningError,
   type EnvStatus,
 } from "./session-env.ts";
+import { EnvConfigError } from "./env-config.ts";
 
 const DIFF_MODES: readonly DiffMode[] = ["staged", "unstaged", "untracked"];
 
@@ -97,6 +98,10 @@ function sendMappedError(res: ServerResponse, error: unknown): boolean {
   }
   if (error instanceof EnvAlreadyRunningError || error instanceof EnvNotRunningError) {
     sendJson(res, 409, { error: error.message });
+    return true;
+  }
+  if (error instanceof EnvConfigError) {
+    sendJson(res, 400, { error: error.message });
     return true;
   }
   return false;
@@ -276,8 +281,13 @@ export function createServer(deps: ServerDeps): Server {
         const sessionSlug = decodeURIComponent(envMatch[2]);
 
         if (req.method === "GET") {
-          const status = await deps.getProjectSessionEnvStatus(project, sessionSlug);
-          return sendJson(res, 200, status);
+          try {
+            const status = await deps.getProjectSessionEnvStatus(project, sessionSlug);
+            return sendJson(res, 200, status);
+          } catch (error) {
+            if (sendMappedError(res, error)) return;
+            throw error;
+          }
         }
 
         if (req.method === "POST") {
