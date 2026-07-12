@@ -8,7 +8,7 @@ import { createServer, type ServerDeps } from "./server.ts";
 import { ValidationError } from "./tmux.ts";
 import { ProjectValidationError, type Project } from "./projects.ts";
 import { WorktreeConflictError, DirtyWorktreeError } from "./worktree.ts";
-import { WorktreeNotFoundError, GitStatusError } from "./git-status.ts";
+import { WorktreeNotFoundError, GitStatusError, type GroupedChanges } from "./git-status.ts";
 
 const TOKEN = "test-token-123";
 
@@ -411,8 +411,10 @@ test("GET /api/projects/:id/sessions/:name/changes without a token returns 401",
 });
 
 test("GET /api/projects/:id/sessions/:name/changes returns the grouped changes", async () => {
-  const grouped = {
-    staged: [{ path: "a.txt", status: "added", staged: true, oldPath: undefined }],
+  const grouped: GroupedChanges = {
+    // No oldPath here -- JSON.stringify drops `undefined` properties, so the
+    // response body won't have the key at all once it round-trips.
+    staged: [{ path: "a.txt", status: "added", staged: true }],
     unstaged: [],
     untracked: [],
   };

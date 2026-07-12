@@ -5,7 +5,10 @@ import { extractBearerToken, verifyToken } from "./auth.ts";
 import { ValidationError } from "./tmux.ts";
 import { ProjectValidationError, type Project } from "./projects.ts";
 import { WorktreeConflictError, DirtyWorktreeError } from "./worktree.ts";
+import { WorktreeNotFoundError, GitStatusError, type GroupedChanges, type FileDiff, type DiffMode } from "./git-status.ts";
 import type { ProjectSession } from "./project-sessions.ts";
+
+const DIFF_MODES: readonly DiffMode[] = ["staged", "unstaged", "untracked"];
 
 export interface ServerDeps {
   token: string;
@@ -23,6 +26,14 @@ export interface ServerDeps {
     sessionSlug: string,
     options: { force?: boolean },
   ) => Promise<void>;
+
+  getProjectSessionChanges: (project: Project, sessionSlug: string) => Promise<GroupedChanges>;
+  getProjectSessionDiff: (
+    project: Project,
+    sessionSlug: string,
+    filePath: string,
+    mode: DiffMode,
+  ) => Promise<FileDiff>;
 }
 
 const MIME_TYPES: Record<string, string> = {
@@ -64,6 +75,14 @@ function sendMappedError(res: ServerResponse, error: unknown): boolean {
   }
   if (error instanceof WorktreeConflictError || error instanceof DirtyWorktreeError) {
     sendJson(res, 409, { error: error.message });
+    return true;
+  }
+  if (error instanceof GitStatusError) {
+    sendJson(res, 400, { error: error.message });
+    return true;
+  }
+  if (error instanceof WorktreeNotFoundError) {
+    sendJson(res, 404, { error: error.message });
     return true;
   }
   return false;
@@ -189,6 +208,48 @@ export function createServer(deps: ServerDeps): Server {
           throw error;
         }
         return sendEmpty(res, 204);
+      }
+
+      const changesMatch = path.match(/^\/api\/projects\/([^/]+)\/sessions\/([^/]+)\/changes$/);
+      if (changesMatch && req.method === "GET") {
+        if (!isAuthorized(req, deps.token)) return sendEmpty(res, 401);
+
+        const project = await deps.getProject(decodeURIComponent(changesMatch[1]));
+        if (!project) return sendJson(res, 404, { error: "Project not found" });
+
+        const sessionSlug = decodeURIComponent(changesMatch[2]);
+        try {
+          const changes = await deps.getProjectSessionChanges(project, sessionSlug);
+          return sendJson(res, 200, changes);
+        } catch (error) {
+          if (sendMappedError(res, error)) return;
+          throw error;
+        }
+      }
+
+      const diffMatch = path.match(/^\/api\/projects\/([^/]+)\/sessions\/([^/]+)\/diff$/);
+      if (diffMatch && req.method === "GET") {
+        if (!isAuthorized(req, deps.token)) return sendEmpty(res, 401);
+
+        const project = await deps.getProject(decodeURIComponent(diffMatch[1]));
+        if (!project) return sendJson(res, 404, { error: "Project not found" });
+
+        const filePath = url.searchParams.get("path");
+        if (!filePath) return sendJson(res, 400, { error: "Missing path query parameter" });
+
+        const mode = url.searchParams.get("mode");
+        if (!mode || !DIFF_MODES.includes(mode as DiffMode)) {
+          return sendJson(res, 400, { error: `Invalid mode, expected one of: ${DIFF_MODES.join(", ")}` });
+        }
+
+        const sessionSlug = decodeURIComponent(diffMatch[2]);
+        try {
+          const diff = await deps.getProjectSessionDiff(project, sessionSlug, filePath, mode as DiffMode);
+          return sendJson(res, 200, diff);
+        } catch (error) {
+          if (sendMappedError(res, error)) return;
+          throw error;
+        }
       }
 
       if (deps.publicDir && req.method === "GET") {
