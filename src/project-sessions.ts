@@ -21,7 +21,10 @@ export interface ProjectSessionsDeps {
   worktreesRoot?: string;
 }
 
-const SESSION_ALREADY_GONE_PATTERN = /can't find session|session not found/i;
+// "no server running" covers the case where the session being killed was
+// the tmux server's last one -- the server process exits with it, so a
+// retry sees "no server running" rather than "can't find session".
+const SESSION_ALREADY_GONE_PATTERN = /can't find session|session not found|no server running/i;
 
 function buildFullNameOrThrowValidation(project: Project, sessionSlug: string): string {
   try {
