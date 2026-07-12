@@ -9,6 +9,7 @@ import { ValidationError } from "./tmux.ts";
 import { ProjectValidationError, type Project } from "./projects.ts";
 import { WorktreeConflictError, DirtyWorktreeError } from "./worktree.ts";
 import { WorktreeNotFoundError, GitStatusError, type GroupedChanges } from "./git-status.ts";
+import { EnvUnavailableError, EnvAlreadyRunningError, EnvNotRunningError, type EnvStatus } from "./session-env.ts";
 
 const TOKEN = "test-token-123";
 
@@ -41,6 +42,9 @@ function makeDeps(overrides: Partial<ServerDeps> = {}): ServerDeps {
     killProjectSession: async () => {},
     getProjectSessionChanges: async () => ({ staged: [], unstaged: [], untracked: [] }),
     getProjectSessionDiff: async () => ({ diff: "", isUntracked: false, isBinary: false }),
+    getProjectSessionEnvStatus: async () => ({ phase: "unavailable" }),
+    startProjectSessionEnv: async () => {},
+    stopProjectSessionEnv: async () => {},
     ...overrides,
   };
 }
@@ -520,6 +524,153 @@ test("GET /api/projects/:id/sessions/:name/diff returns 404 for an unknown proje
       `${baseUrl}/api/projects/unknown-id/sessions/feature-x/diff?path=a.txt&mode=unstaged`,
       { headers: authHeaders() },
     );
+    assert.equal(res.status, 404);
+  });
+});
+
+// --- Environment setup ---
+
+test("GET /api/projects/:id/sessions/:name/env without a token returns 401", async () => {
+  await withServer(makeDeps(), async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/projects/${SAMPLE_PROJECT.id}/sessions/feature-x/env`);
+    assert.equal(res.status, 401);
+  });
+});
+
+test("GET /api/projects/:id/sessions/:name/env returns the current status", async () => {
+  const status: EnvStatus = { phase: "running", openUrl: "http://localhost:54321" };
+  const deps = makeDeps({ getProjectSessionEnvStatus: async () => status });
+  await withServer(deps, async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/projects/${SAMPLE_PROJECT.id}/sessions/feature-x/env`, {
+      headers: authHeaders(),
+    });
+    assert.equal(res.status, 200);
+    assert.deepEqual(await res.json(), status);
+  });
+});
+
+test("GET /api/projects/:id/sessions/:name/env returns 404 for an unknown project", async () => {
+  await withServer(makeDeps(), async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/projects/unknown-id/sessions/feature-x/env`, {
+      headers: authHeaders(),
+    });
+    assert.equal(res.status, 404);
+  });
+});
+
+test("POST /api/projects/:id/sessions/:name/env without a token returns 401", async () => {
+  await withServer(makeDeps(), async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/projects/${SAMPLE_PROJECT.id}/sessions/feature-x/env`, {
+      method: "POST",
+    });
+    assert.equal(res.status, 401);
+  });
+});
+
+test("POST /api/projects/:id/sessions/:name/env starts the environment and returns 202", async () => {
+  const calls: Array<{ slug: string }> = [];
+  const deps = makeDeps({
+    startProjectSessionEnv: async (_project: Project, slug: string) => {
+      calls.push({ slug });
+    },
+  });
+  await withServer(deps, async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/projects/${SAMPLE_PROJECT.id}/sessions/feature-x/env`, {
+      method: "POST",
+      headers: authHeaders(),
+    });
+    assert.equal(res.status, 202);
+    assert.deepEqual(calls, [{ slug: "feature-x" }]);
+  });
+});
+
+test("POST /api/projects/:id/sessions/:name/env returns 404 when the project hasn't opted in (EnvUnavailableError)", async () => {
+  const deps = makeDeps({
+    startProjectSessionEnv: async () => {
+      throw new EnvUnavailableError("no .tmux-web-env");
+    },
+  });
+  await withServer(deps, async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/projects/${SAMPLE_PROJECT.id}/sessions/feature-x/env`, {
+      method: "POST",
+      headers: authHeaders(),
+    });
+    assert.equal(res.status, 404);
+  });
+});
+
+test("POST /api/projects/:id/sessions/:name/env returns 409 when already running (EnvAlreadyRunningError)", async () => {
+  const deps = makeDeps({
+    startProjectSessionEnv: async () => {
+      throw new EnvAlreadyRunningError("already running");
+    },
+  });
+  await withServer(deps, async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/projects/${SAMPLE_PROJECT.id}/sessions/feature-x/env`, {
+      method: "POST",
+      headers: authHeaders(),
+    });
+    assert.equal(res.status, 409);
+  });
+});
+
+test("POST /api/projects/:id/sessions/:name/env returns 404 for an unknown project", async () => {
+  await withServer(makeDeps(), async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/projects/unknown-id/sessions/feature-x/env`, {
+      method: "POST",
+      headers: authHeaders(),
+    });
+    assert.equal(res.status, 404);
+  });
+});
+
+test("DELETE /api/projects/:id/sessions/:name/env without a token returns 401", async () => {
+  await withServer(makeDeps(), async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/projects/${SAMPLE_PROJECT.id}/sessions/feature-x/env`, {
+      method: "DELETE",
+    });
+    assert.equal(res.status, 401);
+  });
+});
+
+test("DELETE /api/projects/:id/sessions/:name/env stops the environment and returns 204", async () => {
+  const calls: Array<{ slug: string }> = [];
+  const deps = makeDeps({
+    stopProjectSessionEnv: async (_project: Project, slug: string) => {
+      calls.push({ slug });
+    },
+  });
+  await withServer(deps, async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/projects/${SAMPLE_PROJECT.id}/sessions/feature-x/env`, {
+      method: "DELETE",
+      headers: authHeaders(),
+    });
+    assert.equal(res.status, 204);
+    assert.deepEqual(calls, [{ slug: "feature-x" }]);
+  });
+});
+
+test("DELETE /api/projects/:id/sessions/:name/env returns 409 when nothing is running (EnvNotRunningError)", async () => {
+  const deps = makeDeps({
+    stopProjectSessionEnv: async () => {
+      throw new EnvNotRunningError("not running");
+    },
+  });
+  await withServer(deps, async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/projects/${SAMPLE_PROJECT.id}/sessions/feature-x/env`, {
+      method: "DELETE",
+      headers: authHeaders(),
+    });
+    assert.equal(res.status, 409);
+  });
+});
+
+test("DELETE /api/projects/:id/sessions/:name/env returns 404 for an unknown project", async () => {
+  await withServer(makeDeps(), async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/projects/unknown-id/sessions/feature-x/env`, {
+      method: "DELETE",
+      headers: authHeaders(),
+    });
     assert.equal(res.status, 404);
   });
 });
