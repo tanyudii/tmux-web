@@ -57,11 +57,21 @@ export async function listSessions(exec: ExecFn = defaultExec): Promise<TmuxSess
   }
 }
 
-export async function createSession(name: string, exec: ExecFn = defaultExec): Promise<void> {
+export interface CreateSessionOptions {
+  cwd?: string;
+}
+
+export async function createSession(
+  name: string,
+  options: CreateSessionOptions = {},
+  exec: ExecFn = defaultExec,
+): Promise<void> {
   if (!isValidSessionName(name)) {
     throw new ValidationError(`Invalid session name: ${name}`);
   }
-  await exec("tmux", ["new-session", "-d", "-s", name]);
+  const args = ["new-session", "-d", "-s", name];
+  if (options.cwd) args.push("-c", options.cwd);
+  await exec("tmux", args);
 }
 
 export async function killSession(name: string, exec: ExecFn = defaultExec): Promise<void> {
