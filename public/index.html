@@ -142,6 +142,11 @@
         color: #999;
         margin: 0.25rem 0;
       }
+      .sidebar-top-row {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+      }
       #back-to-projects {
         background: transparent;
         border: none;
@@ -151,6 +156,17 @@
         padding: 0.25rem 0;
       }
       #back-to-projects:hover {
+        color: var(--accent);
+      }
+      #toggle-notify {
+        background: transparent;
+        border: none;
+        color: var(--text);
+        cursor: pointer;
+        font-size: 1rem;
+        padding: 0.25rem 0.4rem;
+      }
+      #toggle-notify:hover {
         color: var(--accent);
       }
       .session-item {
@@ -355,7 +371,10 @@
 
       <div id="project-detail-view">
         <div class="sidebar">
-          <button id="back-to-projects">&larr; Projects</button>
+          <div class="sidebar-top-row">
+            <button id="back-to-projects">&larr; Projects</button>
+            <button id="toggle-notify" title="Toggle bell notifications">&#128276;</button>
+          </div>
           <h1 id="project-detail-title"></h1>
           <div id="session-list"></div>
           <button id="new-session">+ New session</button>
@@ -376,6 +395,6 @@
 
     <script src="/vendor/xterm.js"></script>
     <script src="/vendor/addon-fit.js"></script>
-    <script src="/app.js"></script>
+    <script type="module" src="/app.js"></script>
   </body>
 </html>
