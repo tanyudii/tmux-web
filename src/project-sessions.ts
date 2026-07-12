@@ -4,6 +4,7 @@ import { resolveWorktreePath } from "./worktree.ts";
 import { slugifyBranchName } from "./slug.ts";
 import { ValidationError, type TmuxSession, type CreateSessionOptions } from "./tmux.ts";
 import type { RemoveWorktreeOptions } from "./worktree.ts";
+import type { GroupedChanges, FileDiff, DiffMode } from "./git-status.ts";
 
 export interface ProjectSession {
   name: string;
@@ -18,6 +19,8 @@ export interface ProjectSessionsDeps {
   killSession: (name: string) => Promise<void>;
   addWorktree: (repoPath: string, worktreePath: string, branchName: string) => Promise<void>;
   removeWorktree: (repoPath: string, worktreePath: string, options?: RemoveWorktreeOptions) => Promise<void>;
+  getChangedFiles: (worktreePath: string) => Promise<GroupedChanges>;
+  getFileDiff: (worktreePath: string, filePath: string, mode: DiffMode) => Promise<FileDiff>;
   worktreesRoot?: string;
 }
 
@@ -101,4 +104,24 @@ export async function killProjectSession(
 
   const worktreePath = resolveWorktreePath(project.id, sessionSlug, deps.worktreesRoot);
   await deps.removeWorktree(project.repoPath, worktreePath, options);
+}
+
+export async function getProjectSessionChanges(
+  project: Project,
+  sessionSlug: string,
+  deps: ProjectSessionsDeps,
+): Promise<GroupedChanges> {
+  const worktreePath = resolveWorktreePath(project.id, sessionSlug, deps.worktreesRoot);
+  return deps.getChangedFiles(worktreePath);
+}
+
+export async function getProjectSessionDiff(
+  project: Project,
+  sessionSlug: string,
+  filePath: string,
+  mode: DiffMode,
+  deps: ProjectSessionsDeps,
+): Promise<FileDiff> {
+  const worktreePath = resolveWorktreePath(project.id, sessionSlug, deps.worktreesRoot);
+  return deps.getFileDiff(worktreePath, filePath, mode);
 }
