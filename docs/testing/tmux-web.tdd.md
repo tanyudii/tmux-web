@@ -29,6 +29,21 @@ dependency count minimal for auditability). Coverage via
    traversal outside the public directory.
 7. As the server owner, I want the process to refuse to start with a missing
    or too-short token, so I can't accidentally deploy it wide open.
+8. As the server owner, I want to register a project (a git repo path) once
+   and reopen it later, so I don't retype the path every time.
+9. As the server owner, I want every new session inside a project to get its
+   own git worktree on its own branch, so parallel sessions never collide on
+   the same working directory or uncommitted changes.
+10. As the server owner, I want killing a session to remove its worktree but
+    **keep the branch**, so I never lose committed work by clicking a kill
+    button, and I want removal *refused* (not silently forced) if the
+    worktree still has uncommitted changes.
+11. As the server owner, I want session names and branch names built from
+    untrusted input to be safe — no shell injection, no path traversal out
+    of the managed worktrees directory, no collision with tmux's own name
+    syntax.
+12. As the server owner, I want removing a project's registration to warn me
+    if it still has active sessions, rather than silently orphaning them.
 
 ## Task report
 
@@ -40,14 +55,46 @@ dependency count minimal for auditability). Coverage via
 | 3, 4, 5 | PTY↔WebSocket bridge: forwards output, applies input/resize messages, kills PTY (detach) on socket close, closes socket on PTY exit | `node --experimental-strip-types --test src/pty-bridge.test.ts` | RED (1 fail) → GREEN (16 pass, incl. 1 real-tmux integration test) |
 | 7 | Env config validation (token length, port range, defaults) | `node --experimental-strip-types --test src/config.test.ts` | RED (1 fail) → GREEN (7 pass) |
 | 6 | Static file serving from `publicDir`, path-traversal guard, 500 propagation for non-validation errors | `node --experimental-strip-types --test src/server.test.ts` (backfilled after initial coverage run) | GREEN (6 new tests, all pass; no RED phase — characterizes already-correct, manually smoke-tested behavior found via coverage gap) |
-| all | End-to-end wiring (`main.ts`) | Manual smoke test: `curl`/`node -e` script against a live server + real tmux session (see commit `feat: wire server, tmux ops and pty-bridge into main entrypoint`) | PASS — 401 without token, session create/list/delete over real HTTP, live WS round-trip of `echo` through a real tmux session, static assets served, path traversal blocked (404, not file contents) |
+| all (v1) | End-to-end wiring (`main.ts`) | Manual smoke test: `curl`/`node -e` script against a live server + real tmux session (see commit `feat: wire server, tmux ops and pty-bridge into main entrypoint`) | PASS — 401 without token, session create/list/delete over real HTTP, live WS round-trip of `echo` through a real tmux session, static assets served, path traversal blocked (404, not file contents) |
+| 11 | Branch-name slugification: lowercase, whitespace→dash, strip everything outside `a-z0-9.-` (deliberately excludes `_`, reserved as the session-name separator), collapse/trim dashes and dots, truncate | `node --experimental-strip-types --test src/slug.test.ts` | RED (1 fail) → GREEN (11 pass) |
+| 11 | Composite `<projectId>__<slug>` session-name build/parse, incl. tmux's 64-char limit and ambiguous-separator rejection | `node --experimental-strip-types --test src/session-naming.test.ts` | RED (1 fail) → GREEN (12 pass) |
+| 9, 10, 11 | `git worktree add/remove` via `execFile` (no shell), path-traversal-guarded path resolution, dirty-worktree vs. branch-conflict error mapping | `node --experimental-strip-types --test src/worktree.test.ts` | RED (1 fail) → GREEN (10 pass, incl. 1 real-git integration test: init a temp repo, add a worktree, confirm remove is refused when dirty and succeeds with `--force`) |
+| 8, 12 | Project registry: JSON persistence (atomic write), absolute-path + real-git-repo validation before registering | `node --experimental-strip-types --test src/projects.test.ts` | RED (1 fail) → GREEN (12 pass, incl. 1 real-git integration test) |
+| 9, 10 | Orchestration layer (slugify → build name → create worktree → create tmux session with `cwd`; rollback worktree if the tmux side fails; kill session → remove worktree) | `node --experimental-strip-types --test src/project-sessions.test.ts` | RED (1 fail) → GREEN (11 pass) |
+| 8, 9, 10, 12 | Project + project-session HTTP routes replace the old flat `/api/sessions` routes entirely; error-type → HTTP-status mapping (`ValidationError`/`ProjectValidationError`→400, `WorktreeConflictError`/`DirtyWorktreeError`→409) | `node --experimental-strip-types --test src/server.test.ts` | RED (15 fail) → GREEN (23 pass), then backfilled to 29 pass after a coverage pass found untested malformed-JSON/500 branches |
+| 9, 10 | `main.ts` rewired to compose `projects.ts` + `worktree.ts` + `project-sessions.ts`; new `TMUX_WEB_DATA_DIR` config (default `~/.tmux-web`) | `node --experimental-strip-types --test src/config.test.ts` (config) + manual E2E smoke test (wiring) | RED (2 fail) → GREEN (8 pass); manual: registered a real project, created a session, confirmed the worktree+branch existed on disk *and* the WebSocket terminal's `pwd` was the worktree, killed the session, confirmed worktree gone and branch kept |
 
 `main.ts` (the composition root) is deliberately **not** unit-tested — it is
-~50 lines of pure wiring (env → deps → `createServer`/`attachPtyToSocket`)
-with no branching logic of its own; all of its logic branches live in the
-modules it wires together, which are unit-tested. It was instead verified
-by running the real process and driving it with real HTTP/WebSocket
-clients against a real tmux session (see task report above).
+pure wiring (env → deps → `createServer`/`attachPtyToSocket`) with no
+branching logic of its own; all of its logic branches live in the modules
+it wires together, which are unit-tested. It was instead verified by
+running the real process and driving it with real HTTP/WebSocket clients
+against a real tmux session and a real git repo (see task report above).
+
+## Bug found via manual smoke testing (not caught by unit tests)
+
+The force-retry flow (kill a session with a dirty worktree → 409 → user
+confirms force-delete → retry) 500'd instead of succeeding, **only** when
+the session being killed was the *last* tmux session on the box. Unit
+tests for `killProjectSession`'s idempotent-retry logic used a fake
+`killSession` that rejected with `"can't find session: <name>"` — the
+message tmux gives when its server is still running but that particular
+session is gone. But when a session's death is also the *server's* last
+session, tmux's server process exits entirely, and a follow-up
+`tmux kill-session` instead fails with `"no server running on ..."` — a
+completely different string my regex didn't match.
+
+This was only found by actually running the flow end-to-end (create a
+session, dirty its worktree, kill without force → 409, kill with force →
+expected 204, got 500) — the unit tests were internally consistent but
+tested the wrong assumption about tmux's error message. Fixed by widening
+`SESSION_ALREADY_GONE_PATTERN` to also match `no server running`, with a
+regression test added first (RED → GREEN) that reproduces the exact
+message tmux emits in that situation.
+This is the reason the manual E2E smoke test step is not optional for this
+project, even with 98%+ line coverage: coverage measures whether a branch
+ran, not whether the fake inputs to that branch matched what the real
+dependency actually says.
 
 ## Test specification
 
@@ -65,6 +112,15 @@ clients against a real tmux session (see task report above).
 | 10 | Closing the socket kills the PTY client (tmux detach semantics), not the session | `src/pty-bridge.test.ts:kills the pty when the socket closes` | unit | PASS |
 | 11 | A real `tmux attach-session` PTY actually streams real session output end to end | `src/pty-bridge.test.ts:real tmux integration...` | integration (real tmux binary; skipped if absent) | PASS |
 | 12 | Startup refuses a missing/short token or an out-of-range port | `src/config.test.ts` | unit | PASS |
+| 13 | Slugification strips shell/path metacharacters (incl. `../../etc`-style traversal attempts) down to a safe `a-z0-9.-` charset | `src/slug.test.ts` | unit | PASS |
+| 14 | A worktree path can never resolve outside its project's worktree root, even if given a crafted branch name or project id | `src/worktree.test.ts:resolveWorktreePath rejects...` (×2) | unit | PASS |
+| 15 | `git worktree add` is preceded by `git worktree prune`; branch-already-exists is a distinct, catchable error type (`WorktreeConflictError`) | `src/worktree.test.ts` | unit | PASS |
+| 16 | Removing a worktree with uncommitted changes is refused (`DirtyWorktreeError`) unless `--force` is passed | `src/worktree.test.ts` + real-git integration test | unit + integration | PASS |
+| 17 | Registering a project rejects a non-absolute path and a path that isn't a real git repo, before ever writing to the registry | `src/projects.test.ts` | unit + real-git integration | PASS |
+| 18 | Creating a project session rolls back the worktree (force-removed) if the tmux side fails, so a partial failure never leaves an orphaned worktree | `src/project-sessions.test.ts:rolls back the worktree if creating the tmux session fails` | unit | PASS |
+| 19 | A force-retry kill tolerates the session already being gone, including the "no server running" case (see bug report below) | `src/project-sessions.test.ts` (×2) | unit | PASS |
+| 20 | Every project-scoped route (`/api/projects*`) enforces the token before touching any dependency | `src/server.test.ts:project routes without a token return 401...` | integration | PASS |
+| 21 | Deleting a project with active sessions is refused (409) unless `force=true` | `src/server.test.ts` (×2) | integration | PASS |
 
 ## Coverage
 
@@ -73,38 +129,49 @@ npm run test:coverage
 ```
 
 ```
-all files           |  98.24 |    95.51 |   95.93 |
-auth.ts             |  92.86 |    94.12 |  100.00 | (16-17 uncovered)
-config.ts           | 100.00 |   100.00 |  100.00 |
+all files            |  98.22 |    95.08 |   95.37 |
+auth.ts              |  92.86 |    94.12 |  100.00 | (16-17 uncovered)
+config.ts            | 100.00 |   100.00 |  100.00 |
+project-sessions.ts  |  98.08 |    83.33 |   80.00 | (33-34 uncovered)
+projects.ts          |  97.67 |    90.00 |  100.00 | (33-34 uncovered)
 pty-bridge.ts        |  91.49 |    92.00 |   85.71 | (45-52 uncovered)
-server.ts           | 100.00 |    87.76 |  100.00 |
-tmux.ts             | 100.00 |   100.00 |  100.00 |
+server.ts            |  99.01 |    89.16 |  100.00 | (163-164 uncovered)
+session-naming.ts    | 100.00 |   100.00 |  100.00 |
+slug.ts              | 100.00 |   100.00 |  100.00 |
+tmux.ts              | 100.00 |   100.00 |  100.00 |
+worktree.ts          |  94.59 |    78.26 |   88.89 | (19-20, 84-85, 109-110 uncovered)
 ```
 
-71 tests total, 0 failures, 0 skipped (the real-tmux integration test ran —
-tmux 3.6 was present on the build machine; it self-skips via
-`{ skip: !isTmuxAvailable() }` when tmux isn't installed).
+142 tests total, 0 failures, 0 skipped (the real-tmux and real-git
+integration tests both ran — tmux 3.6 and git were present on the build
+machine; each self-skips via an availability check when its binary is
+absent).
 
 ### Known, intentional gaps
 
-- **`pty-bridge.ts` lines 45-52 (`defaultSpawnPty`)**: the function that
-  wires `node-pty` to a real `tmux attach-session` call. Unit tests inject
-  a fake `spawnPty` (to test the bridge's wiring logic in isolation); the
-  integration test calls `pty.spawn` directly rather than through
-  `defaultSpawnPty`. The function *is* exercised — by the manual end-to-end
-  smoke test against `main.ts` (real WebSocket client → real tmux session,
-  documented in the task report above) — just not by the automated
-  coverage-instrumented suite. Acceptable: it's two lines of pure argument
-  forwarding into `pty.spawn`.
-- **`auth.ts` lines 16-17**: the catch branch in `extractQueryToken` for a
-  URL the `URL` constructor cannot parse at all. Node's `URL` constructor
-  is very permissive (it accepts almost any string when given a base), so
-  this branch is defensive code that's hard to trigger without a base URL
-  swap; low risk, low value to chase further.
-- **`main.ts`**: not unit-tested by design (pure composition root, no
-  branching logic of its own) — see task report above for how it was
-  verified instead.
+- **`pty-bridge.ts` lines 45-52 (`defaultSpawnPty`)**, **`auth.ts` lines
+  16-17** (an unparsable-URL catch branch), **`main.ts`** (pure composition
+  root): unchanged from before this feature — see the original notes below.
+- **`worktree.ts` lines 19-20 / 84-85 / 109-110**: the "resolved path
+  escapes the worktrees root" guards, and the generic (non-conflict,
+  non-dirty) `WorktreeError` catch-all branches. Not directly hit because
+  `resolveWorktreePath` is always called with an already-`slugifyBranchName`-cleaned
+  string in practice, which by construction can't contain `..` — the guard
+  is defense-in-depth against a future caller that skips slugification, not
+  a path this codebase's own routes can currently reach. Verified logically
+  rather than by test; low value to force with a synthetic caller.
+- **`projects.ts` / `project-sessions.ts` lines 33-34 (both files)**: the
+  `else` branch of an `error instanceof Error ? error.message : String(error)`
+  fallback, for the case something throws a non-`Error` value. Not naturally
+  reachable through this codebase's own error paths (everything thrown here
+  is an `Error` subclass); kept as defensive code, not worth a synthetic
+  `throw "string"` test.
+- **`server.ts` lines 163-164**: `POST /api/projects/:id/sessions` with a
+  JSON body whose `name` field is present but not a string (e.g. `{"name":5}`).
+  Same validation shape as the already-tested "missing name" case one line
+  up; low marginal value.
 
-Both gaps are below the file level, not the journey level — every user
-journey above has at least one PASS-ing automated test, and the two
-uncovered code paths were additionally exercised manually.
+None of these gaps are at the journey level — every user journey above has
+at least one PASS-ing automated test, and the two most safety-relevant
+"gaps" (`pty-bridge.ts`'s spawn wiring, `main.ts`'s composition) were both
+additionally exercised through real, live manual smoke tests end to end.
