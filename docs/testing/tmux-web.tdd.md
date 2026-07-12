@@ -44,6 +44,14 @@ dependency count minimal for auditability). Coverage via
     syntax.
 12. As the server owner, I want removing a project's registration to warn me
     if it still has active sessions, rather than silently orphaning them.
+13. As the server owner, I want a right-hand sidebar showing what's changed
+    (staged/unstaged/untracked) in the attached session's worktree, so I can
+    review before committing without leaving the browser.
+14. As the server owner, I want to click a changed file and see its diff,
+    so I don't have to run `git diff` by hand in the terminal.
+15. As the server owner, I want the diff/changes endpoints to be as safe as
+    every other endpoint — path-traversal-guarded, 404 on a worktree that no
+    longer exists, no crash on binary files.
 
 ## Task report
 
@@ -63,6 +71,10 @@ dependency count minimal for auditability). Coverage via
 | 9, 10 | Orchestration layer (slugify → build name → create worktree → create tmux session with `cwd`; rollback worktree if the tmux side fails; kill session → remove worktree) | `node --experimental-strip-types --test src/project-sessions.test.ts` | RED (1 fail) → GREEN (11 pass) |
 | 8, 9, 10, 12 | Project + project-session HTTP routes replace the old flat `/api/sessions` routes entirely; error-type → HTTP-status mapping (`ValidationError`/`ProjectValidationError`→400, `WorktreeConflictError`/`DirtyWorktreeError`→409) | `node --experimental-strip-types --test src/server.test.ts` | RED (15 fail) → GREEN (23 pass), then backfilled to 29 pass after a coverage pass found untested malformed-JSON/500 branches |
 | 9, 10 | `main.ts` rewired to compose `projects.ts` + `worktree.ts` + `project-sessions.ts`; new `TMUX_WEB_DATA_DIR` config (default `~/.tmux-web`) | `node --experimental-strip-types --test src/config.test.ts` (config) + manual E2E smoke test (wiring) | RED (2 fail) → GREEN (8 pass); manual: registered a real project, created a session, confirmed the worktree+branch existed on disk *and* the WebSocket terminal's `pwd` was the worktree, killed the session, confirmed worktree gone and branch kept |
+| 13, 14, 15 | `git status --porcelain=v1 -z` parsing (staged/unstaged/untracked, `MM`-style combos, renames without misaligning the NUL stream, unmerged fallback), `git diff`/`git diff --cached` pass-through, untracked-file raw read with NUL-byte binary sniffing, path-traversal guard | `node --experimental-strip-types --test src/git-status.test.ts` | RED (1 fail) → GREEN (20 pass, incl. 1 real-git integration test covering staged+unstaged+untracked+binary in one repo) |
+| 13, 14 | `getProjectSessionChanges`/`getProjectSessionDiff` resolve `(project, sessionSlug)` → worktree path → delegate to `git-status.ts` | `node --experimental-strip-types --test src/project-sessions.test.ts` | RED (1 fail, compile-time — new exports didn't exist) → GREEN (13 pass) |
+| 13, 14, 15 | `GET .../sessions/:name/changes` and `GET .../diff?path=&mode=` routes; `mode` validated against an allowlist; error mapping extended (`WorktreeNotFoundError`→404, `GitStatusError`→400) | `node --experimental-strip-types --test src/server.test.ts` | RED (7 fail) → GREEN (39 pass) |
+| 13, 14, 15 | End-to-end changes/diff flow against a live server + real git worktree | Manual smoke test: created staged/unstaged/untracked/binary files in a real worktree, fetched `/changes` and `/diff` over real HTTP, confirmed a `../../../../etc/passwd` `path` param is rejected 400 | PASS — see task report detail below |
 
 `main.ts` (the composition root) is deliberately **not** unit-tested — it is
 pure wiring (env → deps → `createServer`/`attachPtyToSocket`) with no
@@ -121,6 +133,15 @@ dependency actually says.
 | 19 | A force-retry kill tolerates the session already being gone, including the "no server running" case (see bug report below) | `src/project-sessions.test.ts` (×2) | unit | PASS |
 | 20 | Every project-scoped route (`/api/projects*`) enforces the token before touching any dependency | `src/server.test.ts:project routes without a token return 401...` | integration | PASS |
 | 21 | Deleting a project with active sessions is refused (409) unless `force=true` | `src/server.test.ts` (×2) | integration | PASS |
+| 22 | A file staged AND further modified (`MM`) appears once in `staged` and once in `unstaged` | `src/git-status.test.ts:emits two entries for a file staged AND further modified` | unit | PASS |
+| 23 | A rename entry's extra NUL-separated old-path field is consumed correctly, so parsing doesn't misread the next file in the stream | `src/git-status.test.ts:stays aligned for entries after a rename` | unit | PASS |
+| 24 | A binary diff (`Binary files ... differ`) never has its raw (garbled) bytes returned to the client | `src/git-status.test.ts:detects a binary diff...` + real-git integration | unit + integration | PASS |
+| 25 | An untracked binary file is detected via a NUL byte in its first 8KB, without ever passing raw bytes as if they were diff text | `src/git-status.test.ts:detects an untracked binary file...` | unit + real-fs | PASS |
+| 26 | `getChangedFiles`/`getFileDiff` reject a `filePath` that resolves outside the worktree | `src/git-status.test.ts:getFileDiff rejects a path that escapes...` | unit | PASS |
+| 27 | `getChangedFiles` returns 404-mappable `WorktreeNotFoundError` for a worktree directory that doesn't exist (e.g. a killed session) | `src/git-status.test.ts:throws WorktreeNotFoundError...` | unit | PASS |
+| 28 | The `/diff` route rejects a missing `path` or an invalid `mode` before calling any dependency | `src/server.test.ts:returns 400 when path is missing` / `...when mode is invalid` | integration | PASS |
+
+The changes-sidebar **frontend** (`public/app.js`'s tree-building, accordion-diff-toggle, and 5s polling) is not unit-tested — same rationale as the rest of the frontend in this project (no browser test framework, no build step). Verified via: JS syntax check (`node --check`), a full DOM-id cross-reference against `index.html`, and the API/WS layers it calls being independently verified end-to-end (see task report). No GUI browser is installed on the deployment server this was built on, so the actual click/render behavior was not driven through a real browser session — flagged explicitly rather than overclaiming.
 
 ## Coverage
 
@@ -129,20 +150,21 @@ npm run test:coverage
 ```
 
 ```
-all files            |  98.22 |    95.08 |   95.37 |
+all files            |  98.27 |    95.38 |   95.31 |
 auth.ts              |  92.86 |    94.12 |  100.00 | (16-17 uncovered)
 config.ts            | 100.00 |   100.00 |  100.00 |
-project-sessions.ts  |  98.08 |    83.33 |   80.00 | (33-34 uncovered)
+git-status.ts         |  97.60 |    95.92 |  100.00 | (152-155 uncovered)
+project-sessions.ts  |  98.43 |    85.00 |   85.71 | (36-37 uncovered)
 projects.ts          |  97.67 |    90.00 |  100.00 | (33-34 uncovered)
 pty-bridge.ts        |  91.49 |    92.00 |   85.71 | (45-52 uncovered)
-server.ts            |  99.01 |    89.16 |  100.00 | (163-164 uncovered)
+server.ts            |  97.73 |    89.91 |  100.00 | (182-183, 226-227, 251-252 uncovered)
 session-naming.ts    | 100.00 |   100.00 |  100.00 |
 slug.ts              | 100.00 |   100.00 |  100.00 |
 tmux.ts              | 100.00 |   100.00 |  100.00 |
 worktree.ts          |  94.59 |    78.26 |   88.89 | (19-20, 84-85, 109-110 uncovered)
 ```
 
-142 tests total, 0 failures, 0 skipped (the real-tmux and real-git
+174 tests total, 0 failures, 0 skipped (the real-tmux and real-git
 integration tests both ran — tmux 3.6 and git were present on the build
 machine; each self-skips via an availability check when its binary is
 absent).
@@ -160,16 +182,22 @@ absent).
   is defense-in-depth against a future caller that skips slugification, not
   a path this codebase's own routes can currently reach. Verified logically
   rather than by test; low value to force with a synthetic caller.
-- **`projects.ts` / `project-sessions.ts` lines 33-34 (both files)**: the
+- **`projects.ts` line 33-34 / `project-sessions.ts` line 36-37**: the
   `else` branch of an `error instanceof Error ? error.message : String(error)`
   fallback, for the case something throws a non-`Error` value. Not naturally
   reachable through this codebase's own error paths (everything thrown here
   is an `Error` subclass); kept as defensive code, not worth a synthetic
   `throw "string"` test.
-- **`server.ts` lines 163-164**: `POST /api/projects/:id/sessions` with a
-  JSON body whose `name` field is present but not a string (e.g. `{"name":5}`).
-  Same validation shape as the already-tested "missing name" case one line
-  up; low marginal value.
+- **`server.ts` lines 182-183 / 226-227 / 251-252**: three more instances of
+  the "field present but wrong type" validation shape (already covered once
+  for `POST /api/projects/:id/sessions`'s `name`), now repeated for the
+  changes/diff routes' equivalents. Same low-marginal-value reasoning.
+- **`git-status.ts` lines 152-155**: the `getFileDiff` catch branch for a
+  `readFile` failure on an untracked file that passed the path-traversal
+  guard but still can't be read (e.g. a permissions error, or a symlink to
+  a deleted target). Requires a filesystem-level failure mode that's
+  awkward to construct portably in a test; the branch exists so such a
+  failure surfaces as a clear 400 instead of an unhandled rejection.
 
 None of these gaps are at the journey level — every user journey above has
 at least one PASS-ing automated test, and the two most safety-relevant
