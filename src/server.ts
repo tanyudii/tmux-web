@@ -2,14 +2,27 @@ import { createServer as createHttpServer, type IncomingMessage, type ServerResp
 import { readFile } from "node:fs/promises";
 import { join, normalize } from "node:path";
 import { extractBearerToken, verifyToken } from "./auth.ts";
-import { ValidationError, type TmuxSession } from "./tmux.ts";
+import { ValidationError } from "./tmux.ts";
+import { ProjectValidationError, type Project } from "./projects.ts";
+import { WorktreeConflictError, DirtyWorktreeError } from "./worktree.ts";
+import type { ProjectSession } from "./project-sessions.ts";
 
 export interface ServerDeps {
   token: string;
-  listSessions: () => Promise<TmuxSession[]>;
-  createSession: (name: string) => Promise<void>;
-  killSession: (name: string) => Promise<void>;
   publicDir?: string;
+
+  listProjects: () => Promise<Project[]>;
+  registerProject: (name: string, repoPath: string) => Promise<Project>;
+  getProject: (id: string) => Promise<Project | undefined>;
+  removeProject: (id: string) => Promise<void>;
+
+  listProjectSessions: (project: Project) => Promise<ProjectSession[]>;
+  createProjectSession: (project: Project, name: string) => Promise<ProjectSession>;
+  killProjectSession: (
+    project: Project,
+    sessionSlug: string,
+    options: { force?: boolean },
+  ) => Promise<void>;
 }
 
 const MIME_TYPES: Record<string, string> = {
@@ -41,6 +54,21 @@ function isAuthorized(req: IncomingMessage, token: string): boolean {
   return verifyToken(extractBearerToken(req.headers.authorization), token);
 }
 
+// Maps errors from the project/session/worktree layers onto HTTP status
+// codes. Anything not recognized here falls through to the outer 500
+// handler in createServer.
+function sendMappedError(res: ServerResponse, error: unknown): boolean {
+  if (error instanceof ProjectValidationError || error instanceof ValidationError) {
+    sendJson(res, 400, { error: error.message });
+    return true;
+  }
+  if (error instanceof WorktreeConflictError || error instanceof DirtyWorktreeError) {
+    sendJson(res, 409, { error: error.message });
+    return true;
+  }
+  return false;
+}
+
 async function serveStatic(publicDir: string, urlPath: string, res: ServerResponse): Promise<boolean> {
   const relativePath = urlPath === "/" ? "/index.html" : urlPath;
   // Strip any leading ../ segments so a crafted path can't escape publicDir.
@@ -64,13 +92,14 @@ export function createServer(deps: ServerDeps): Server {
     try {
       const url = new URL(req.url ?? "/", "http://localhost");
       const path = url.pathname;
+      const isTruthy = (value: string | null) => value === "true" || value === "1";
 
-      if (path === "/api/sessions" && req.method === "GET") {
+      if (path === "/api/projects" && req.method === "GET") {
         if (!isAuthorized(req, deps.token)) return sendEmpty(res, 401);
-        return sendJson(res, 200, { sessions: await deps.listSessions() });
+        return sendJson(res, 200, { projects: await deps.listProjects() });
       }
 
-      if (path === "/api/sessions" && req.method === "POST") {
+      if (path === "/api/projects" && req.method === "POST") {
         if (!isAuthorized(req, deps.token)) return sendEmpty(res, 401);
 
         let body: unknown;
@@ -79,29 +108,84 @@ export function createServer(deps: ServerDeps): Server {
         } catch {
           return sendJson(res, 400, { error: "Malformed JSON body" });
         }
+        const { name, repoPath } = body as { name?: unknown; repoPath?: unknown };
+        if (typeof name !== "string" || typeof repoPath !== "string") {
+          return sendJson(res, 400, { error: "Missing name or repoPath" });
+        }
 
+        try {
+          const project = await deps.registerProject(name, repoPath);
+          return sendJson(res, 201, project);
+        } catch (error) {
+          if (sendMappedError(res, error)) return;
+          throw error;
+        }
+      }
+
+      const projectIdMatch = path.match(/^\/api\/projects\/([^/]+)$/);
+      if (projectIdMatch && req.method === "DELETE") {
+        if (!isAuthorized(req, deps.token)) return sendEmpty(res, 401);
+
+        const project = await deps.getProject(decodeURIComponent(projectIdMatch[1]));
+        if (!project) return sendJson(res, 404, { error: "Project not found" });
+
+        const force = isTruthy(url.searchParams.get("force"));
+        if (!force) {
+          const sessions = await deps.listProjectSessions(project);
+          if (sessions.length > 0) {
+            return sendJson(res, 409, { error: "Project has active sessions", sessionCount: sessions.length });
+          }
+        }
+
+        await deps.removeProject(project.id);
+        return sendEmpty(res, 204);
+      }
+
+      const sessionsMatch = path.match(/^\/api\/projects\/([^/]+)\/sessions$/);
+      if (sessionsMatch && (req.method === "GET" || req.method === "POST")) {
+        if (!isAuthorized(req, deps.token)) return sendEmpty(res, 401);
+
+        const project = await deps.getProject(decodeURIComponent(sessionsMatch[1]));
+        if (!project) return sendJson(res, 404, { error: "Project not found" });
+
+        if (req.method === "GET") {
+          return sendJson(res, 200, { sessions: await deps.listProjectSessions(project) });
+        }
+
+        let body: unknown;
+        try {
+          body = await readJsonBody(req);
+        } catch {
+          return sendJson(res, 400, { error: "Malformed JSON body" });
+        }
         const name = (body as { name?: unknown })?.name;
         if (typeof name !== "string") {
           return sendJson(res, 400, { error: "Missing session name" });
         }
 
         try {
-          await deps.createSession(name);
+          const session = await deps.createProjectSession(project, name);
+          return sendJson(res, 201, session);
         } catch (error) {
-          if (error instanceof ValidationError) return sendJson(res, 400, { error: error.message });
+          if (sendMappedError(res, error)) return;
           throw error;
         }
-        return sendJson(res, 201, { name });
       }
 
-      const deleteMatch = path.match(/^\/api\/sessions\/([^/]+)$/);
-      if (deleteMatch && req.method === "DELETE") {
+      const sessionDeleteMatch = path.match(/^\/api\/projects\/([^/]+)\/sessions\/([^/]+)$/);
+      if (sessionDeleteMatch && req.method === "DELETE") {
         if (!isAuthorized(req, deps.token)) return sendEmpty(res, 401);
 
+        const project = await deps.getProject(decodeURIComponent(sessionDeleteMatch[1]));
+        if (!project) return sendJson(res, 404, { error: "Project not found" });
+
+        const sessionSlug = decodeURIComponent(sessionDeleteMatch[2]);
+        const force = isTruthy(url.searchParams.get("force"));
+
         try {
-          await deps.killSession(decodeURIComponent(deleteMatch[1]));
+          await deps.killProjectSession(project, sessionSlug, { force });
         } catch (error) {
-          if (error instanceof ValidationError) return sendJson(res, 400, { error: error.message });
+          if (sendMappedError(res, error)) return;
           throw error;
         }
         return sendEmpty(res, 204);
