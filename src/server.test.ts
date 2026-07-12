@@ -10,6 +10,7 @@ import { ProjectValidationError, type Project } from "./projects.ts";
 import { WorktreeConflictError, DirtyWorktreeError } from "./worktree.ts";
 import { WorktreeNotFoundError, GitStatusError, type GroupedChanges } from "./git-status.ts";
 import { EnvUnavailableError, EnvAlreadyRunningError, EnvNotRunningError, type EnvStatus } from "./session-env.ts";
+import { EnvConfigError } from "./env-config.ts";
 
 const TOKEN = "test-token-123";
 
@@ -558,6 +559,20 @@ test("GET /api/projects/:id/sessions/:name/env returns 404 for an unknown projec
   });
 });
 
+test("GET /api/projects/:id/sessions/:name/env returns 400 for a malformed env.json (EnvConfigError)", async () => {
+  const deps = makeDeps({
+    getProjectSessionEnvStatus: async () => {
+      throw new EnvConfigError("Malformed env.json: Unexpected token");
+    },
+  });
+  await withServer(deps, async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/projects/${SAMPLE_PROJECT.id}/sessions/feature-x/env`, {
+      headers: authHeaders(),
+    });
+    assert.equal(res.status, 400);
+  });
+});
+
 test("POST /api/projects/:id/sessions/:name/env without a token returns 401", async () => {
   await withServer(makeDeps(), async (baseUrl) => {
     const res = await fetch(`${baseUrl}/api/projects/${SAMPLE_PROJECT.id}/sessions/feature-x/env`, {
@@ -611,6 +626,21 @@ test("POST /api/projects/:id/sessions/:name/env returns 409 when already running
       headers: authHeaders(),
     });
     assert.equal(res.status, 409);
+  });
+});
+
+test("POST /api/projects/:id/sessions/:name/env returns 400 for a malformed env.json (EnvConfigError)", async () => {
+  const deps = makeDeps({
+    startProjectSessionEnv: async () => {
+      throw new EnvConfigError("Malformed env.json: Unexpected token");
+    },
+  });
+  await withServer(deps, async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/projects/${SAMPLE_PROJECT.id}/sessions/feature-x/env`, {
+      method: "POST",
+      headers: authHeaders(),
+    });
+    assert.equal(res.status, 400);
   });
 });
 
