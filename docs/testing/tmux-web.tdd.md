@@ -52,6 +52,29 @@ dependency count minimal for auditability). Coverage via
 15. As the server owner, I want the diff/changes endpoints to be as safe as
     every other endpoint — path-traversal-guarded, 404 on a worktree that no
     longer exists, no crash on binary files.
+16. As the server owner, I want a one-click way to spin up a scoped
+    database + infrastructure sandbox for whatever branch a session is on,
+    so I can test my changes against a real running stack without manually
+    wiring up docker myself every time.
+17. As the server owner, I want each session's environment fully isolated
+    from every other session's (its own containers, network, and volumes),
+    so two people/branches testing in parallel never corrupt each other's
+    data or fight over the same container names.
+18. As the server owner, I want the environment setup to run my project's
+    own pre-run and post-run scripts (e.g. migrations, seed data), so the
+    "one click" produces a working app, not just empty containers.
+19. As the server owner, I want to be handed a clickable link to the
+    running app once setup finishes, so I don't have to go find which host
+    port docker picked myself.
+20. As the server owner, I want the environment feature to be entirely
+    invisible for projects that haven't opted in, so it doesn't clutter or
+    risk anything for repos that don't use it.
+21. As the server owner, I want killing a session to always tear down its
+    environment too, so I never accumulate orphaned containers/volumes
+    just from using this tool normally.
+22. As the server owner, I want environment status to always reflect
+    docker's actual state, not a stale cache, so the UI never lies to me
+    about whether something is really running.
 
 ## Task report
 
@@ -75,6 +98,14 @@ dependency count minimal for auditability). Coverage via
 | 13, 14 | `getProjectSessionChanges`/`getProjectSessionDiff` resolve `(project, sessionSlug)` → worktree path → delegate to `git-status.ts` | `node --experimental-strip-types --test src/project-sessions.test.ts` | RED (1 fail, compile-time — new exports didn't exist) → GREEN (13 pass) |
 | 13, 14, 15 | `GET .../sessions/:name/changes` and `GET .../diff?path=&mode=` routes; `mode` validated against an allowlist; error mapping extended (`WorktreeNotFoundError`→404, `GitStatusError`→400) | `node --experimental-strip-types --test src/server.test.ts` | RED (7 fail) → GREEN (39 pass) |
 | 13, 14, 15 | End-to-end changes/diff flow against a live server + real git worktree | Manual smoke test: created staged/unstaged/untracked/binary files in a real worktree, fetched `/changes` and `/diff` over real HTTP, confirmed a `../../../../etc/passwd` `path` param is rejected 400 | PASS — see task report detail below |
+| 16, 20 | `.tmux-web-env/` convention reader: `null` (feature unavailable) when `docker-compose.yml` is absent, resolves optional `pre-run.sh`/`post-run.sh`, parses optional `env.json` for `openService`/`openPort` | `node --experimental-strip-types --test src/env-config.test.ts` | RED (1 fail, module missing) → GREEN (7 pass) |
+| 17 | `docker compose` exec wrapper (`up -d --build` / `down -v` / `ps --format json` / `port`), every call scoped by `-p <projectName>`, JSON-per-line parsing, failures mapped to `DockerComposeError` | `node --experimental-strip-types --test src/docker-compose.test.ts` | RED (1 fail) → GREEN (9 pass) |
+| 18 | `pre-run.sh`/`post-run.sh` executed via `execFile("/bin/sh", [scriptPath], { cwd })` (works without `chmod +x`); failures mapped to `ScriptError`, preferring stderr over the generic error message | `node --experimental-strip-types --test src/run-script.test.ts` | RED (1 fail) → GREEN (3 pass) |
+| 16, 17, 18, 19, 22 | Core orchestration (`session-env.ts`): idle/running always re-derived live from `composePs` (never trusted from cache); `start()`/`stop()` eligibility guards (`EnvUnavailableError`, `EnvAlreadyRunningError` for both an in-flight start and already-running containers, `EnvNotRunningError`); pre-run → up → post-run happy path; abort-before-up on pre-run failure; error reported when compose up itself fails; error-with-services-and-openUrl-still-visible when only post-run fails; falls back to `idle` when `composePs` itself throws (e.g. docker daemon unreachable); `stopping` phase observable via a status poll while teardown is still in flight | `node --experimental-strip-types --test src/session-env.test.ts` | RED (1 fail, compile-time) → GREEN (13 pass), then backfilled to 15 pass after a coverage pass found the composePs-failure and mid-teardown gaps |
+| 21 | `killProjectSession` calls an optional `stopSessionEnv` dep between `killSession` and `removeWorktree`, best-effort (swallows the dep's own failures so a session with no environment, or a gone docker daemon, still kills cleanly) | `node --experimental-strip-types --test src/project-sessions.test.ts` | RED (1 fail) → GREEN (17 pass) |
+| 16, 17, 18, 19, 20, 21, 22 | `GET/POST/DELETE /api/projects/:id/sessions/:slug/env` routes; `POST` awaits only the fast eligibility checks (not the full docker-compose setup), returning 202 so a multi-minute build/pull never blocks the HTTP response — progress is observed by polling `GET`; error mapping extended (`EnvUnavailableError`→404, `EnvAlreadyRunningError`/`EnvNotRunningError`→409) | `node --experimental-strip-types --test src/server.test.ts` | RED (8 fail) → GREEN (51 pass) |
+| all (env) | `main.ts` wires a single process-lifetime `SessionEnvDeps`+`SessionEnvStore` (mirroring the existing single `WebSocketServer` instance) into both `ServerDeps` and `ProjectSessionsDeps.stopSessionEnv` | `npm run typecheck` + full suite | GREEN — pure composition wiring (same no-unit-test rationale as the rest of `main.ts`, see below); full 220-test suite passed unchanged immediately after wiring |
+| 16, 17, 18, 19, 20, 21 | End-to-end environment lifecycle against a live server + a real Docker daemon | Manual smoke test: created a scratch git repo with `.tmux-web-env/docker-compose.yml` (`nginx:alpine` serving a static page via an ephemeral `127.0.0.1::80` port), `env.json` (`openService`/`openPort`), and `pre-run.sh`/`post-run.sh`; registered it as a project and drove the exact HTTP endpoints `app.js` calls | PASS — see detail below |
 
 `main.ts` (the composition root) is deliberately **not** unit-tested — it is
 pure wiring (env → deps → `createServer`/`attachPtyToSocket`) with no
@@ -108,6 +139,70 @@ project, even with 98%+ line coverage: coverage measures whether a branch
 ran, not whether the fake inputs to that branch matched what the real
 dependency actually says.
 
+## Manual smoke test: per-session environments
+
+Every `docker`/`docker compose` call in `session-env.ts` is unit-tested
+against a fake `exec`, same as `tmux.ts`/`worktree.ts`/`git-status.ts`
+elsewhere in this project — which proves the *argv construction and
+control flow* are correct, but not that a real Docker daemon actually
+behaves the way the fakes assume. So this feature was additionally driven
+end-to-end against a live server (`node --experimental-strip-types
+src/main.ts`) and a real Docker daemon already running on the build
+machine (shared with unrelated containers — the isolation the feature
+promises was itself part of what got verified):
+
+1. Created a scratch git repo with `.tmux-web-env/docker-compose.yml`
+   (`nginx:alpine` serving a static `www/index.html`, published as
+   `127.0.0.1::80` — the ephemeral-port convention this README
+   recommends), `env.json` (`{"openService":"web","openPort":80}`), and
+   `pre-run.sh`/`post-run.sh` that just echo to stderr.
+2. Registered it as a project and created a session over real HTTP
+   (`POST /api/projects`, `POST /api/projects/:id/sessions`) — the exact
+   calls `app.js` makes.
+3. `GET .../env` on the fresh session → `{"phase":"idle"}`, confirming the
+   convention folder is detected.
+4. `POST .../env` → `202`; an immediate follow-up `GET` → `{"phase":
+   "starting"}`, confirming the HTTP layer returns before the docker-compose
+   setup finishes.
+5. Polled `GET .../env` every second; after 4 polls (~4s, including image
+   pull/start) → `{"phase":"running","openUrl":"http://localhost:32768",
+   "services":[{"service":"web","state":"running"}]}`.
+6. `curl`'d the resolved `openUrl` directly → got back the exact demo
+   page content, confirming the ephemeral port resolution
+   (`docker compose port`) points at the right container.
+7. `docker ps --filter label=com.docker.compose.project=<projectId>__<slug>`
+   showed exactly one container, named `<projectId>__<slug>-web-1` —
+   confirming the compose-project-name scoping actually isolates this
+   session's stack the way the design intends.
+8. `DELETE .../env` → `204`; a follow-up `GET` → back to `{"phase":
+   "idle"}`; `docker ps -a` for that compose project → empty (containers
+   *and* volumes gone, not just stopped).
+9. Started the environment again, then killed the **session** directly
+   (`DELETE /api/projects/:id/sessions/:slug?force=true`) *without*
+   stopping the environment first — confirmed via `docker ps -a` that the
+   container was torn down anyway (the `killProjectSession` auto-teardown
+   wiring), with no orphaned container left behind.
+10. Registered a second project with **no** `.tmux-web-env/` folder at
+    all → `GET .../env` on its session returned `{"phase":"unavailable"}`,
+    confirming the feature stays fully invisible for repos that haven't
+    opted in.
+
+All ten steps passed on the first run — no defects found. Test resources
+(scratch repos, the verification server, and every container it created)
+were fully cleaned up afterward; `docker ps -a` and `tmux list-sessions`
+were confirmed to show none of this session's test artifacts, and the
+pre-existing, unrelated containers already running on the shared build
+machine were left untouched throughout.
+
+**Frontend caveat**: no Chrome (or any other) browser binary is installed
+in this build environment, so the actual env-bar DOM — the status badge,
+button visibility per phase, and the Open link — was **not** driven
+through a real rendered page or clicked through, the same limitation this
+report already discloses for the changes-sidebar frontend below. `app.js`
+was syntax-checked (`node --check`) and its `fetch` calls target the exact
+endpoints exercised in steps 3-10 above, but the DOM rendering itself is
+unverified. Flagged explicitly rather than overclaiming.
+
 ## Test specification
 
 | # | What is guaranteed | Test file | Type | Result |
@@ -140,8 +235,16 @@ dependency actually says.
 | 26 | `getChangedFiles`/`getFileDiff` reject a `filePath` that resolves outside the worktree | `src/git-status.test.ts:getFileDiff rejects a path that escapes...` | unit | PASS |
 | 27 | `getChangedFiles` returns 404-mappable `WorktreeNotFoundError` for a worktree directory that doesn't exist (e.g. a killed session) | `src/git-status.test.ts:throws WorktreeNotFoundError...` | unit | PASS |
 | 28 | The `/diff` route rejects a missing `path` or an invalid `mode` before calling any dependency | `src/server.test.ts:returns 400 when path is missing` / `...when mode is invalid` | integration | PASS |
+| 29 | `loadEnvConfig` returns `null` (feature unavailable) when `.tmux-web-env/docker-compose.yml` is absent, and rejects a malformed `env.json` or wrong-typed `openService`/`openPort` before ever returning a config | `src/env-config.test.ts` | unit + real-fs | PASS |
+| 30 | Every `docker compose` invocation (`up`/`down`/`ps`/`port`) is scoped by `-p <projectName>`, never built via shell string concatenation | `src/docker-compose.test.ts` | unit | PASS |
+| 31 | `composePort` returns `null` (not an error) when a service simply doesn't publish the requested port, distinct from a real docker failure | `src/docker-compose.test.ts:composePort returns null when the service publishes no port` | unit | PASS |
+| 32 | `startSessionEnv` refuses to start when the environment is already starting *or* already has live containers, before touching pre-run/compose at all | `src/session-env.test.ts:startSessionEnv throws EnvAlreadyRunningError...` (×2) | unit | PASS |
+| 33 | A pre-run script failure aborts before `docker compose up` is ever called | `src/session-env.test.ts:startSessionEnv aborts before compose up when pre-run fails` | unit | PASS |
+| 34 | Environment status is always re-derived from a live `composePs` call rather than trusted from the in-memory store, so a container stopped outside tmux-web is reflected on the next poll | `src/session-env.test.ts:getSessionEnvStatus derives 'running'...without needing a prior start()` | unit | PASS |
+| 35 | `killProjectSession` still removes the worktree even when tearing down its environment fails | `src/project-sessions.test.ts:killProjectSession tolerates stopSessionEnv failing...` | unit | PASS |
+| 36 | The full environment lifecycle (opt-in detection, isolated scoping, ephemeral port resolution, teardown, auto-teardown on kill, opt-out invisibility) behaves correctly against a real Docker daemon, not just fakes | manual smoke test (see above) | integration (real Docker + real HTTP) | PASS |
 
-The changes-sidebar **frontend** (`public/app.js`'s tree-building, accordion-diff-toggle, and 5s polling) is not unit-tested — same rationale as the rest of the frontend in this project (no browser test framework, no build step). Verified via: JS syntax check (`node --check`), a full DOM-id cross-reference against `index.html`, and the API/WS layers it calls being independently verified end-to-end (see task report). No GUI browser is installed on the deployment server this was built on, so the actual click/render behavior was not driven through a real browser session — flagged explicitly rather than overclaiming.
+The changes-sidebar **frontend** (`public/app.js`'s tree-building, accordion-diff-toggle, and 5s polling) is not unit-tested — same rationale as the rest of the frontend in this project (no browser test framework, no build step). Verified via: JS syntax check (`node --check`), a full DOM-id cross-reference against `index.html`, and the API/WS layers it calls being independently verified end-to-end (see task report). No GUI browser is installed on the deployment server this was built on, so the actual click/render behavior was not driven through a real browser session — flagged explicitly rather than overclaiming. The environment-bar frontend added in this feature (status badge, Setup/Stop/Open) carries the exact same caveat — see "Frontend caveat" above.
 
 ## Coverage
 
@@ -150,24 +253,32 @@ npm run test:coverage
 ```
 
 ```
-all files            |  98.27 |    95.38 |   95.31 |
+all files            |  98.41 |    94.89 |   94.89 |
 auth.ts              |  92.86 |    94.12 |  100.00 | (16-17 uncovered)
 config.ts            | 100.00 |   100.00 |  100.00 |
+docker-compose.ts    |  97.35 |    84.00 |   90.00 | (8-10 uncovered)
+env-config.ts        | 100.00 |    85.19 |  100.00 |
 git-status.ts         |  97.60 |    95.92 |  100.00 | (152-155 uncovered)
-project-sessions.ts  |  98.43 |    85.00 |   85.71 | (36-37 uncovered)
+project-sessions.ts  |  98.52 |    86.96 |   87.50 | (40-41 uncovered)
 projects.ts          |  97.67 |    90.00 |  100.00 | (33-34 uncovered)
 pty-bridge.ts        |  91.49 |    92.00 |   85.71 | (45-52 uncovered)
-server.ts            |  97.73 |    89.91 |  100.00 | (182-183, 226-227, 251-252 uncovered)
+run-script.ts        |  83.33 |    83.33 |   50.00 | (12-18 uncovered)
+server.ts            |  96.82 |    90.23 |  100.00 | (196-197, 240-241, 265-266, 291-292, 300-301 uncovered)
+session-env.ts       | 100.00 |    93.33 |  100.00 |
 session-naming.ts    | 100.00 |   100.00 |  100.00 |
 slug.ts              | 100.00 |   100.00 |  100.00 |
 tmux.ts              | 100.00 |   100.00 |  100.00 |
 worktree.ts          |  94.59 |    78.26 |   88.89 | (19-20, 84-85, 109-110 uncovered)
 ```
 
-174 tests total, 0 failures, 0 skipped (the real-tmux and real-git
+222 tests total, 0 failures, 0 skipped (the real-tmux and real-git
 integration tests both ran — tmux 3.6 and git were present on the build
 machine; each self-skips via an availability check when its binary is
-absent).
+absent). There is no automated real-Docker integration test analogous to
+those — Docker availability varies more than tmux/git across deployment
+targets, so the real-Docker path was instead verified once, thoroughly,
+via the manual smoke test above rather than gated into the default
+`npm test` run.
 
 ### Known, intentional gaps
 
@@ -198,8 +309,30 @@ absent).
   a deleted target). Requires a filesystem-level failure mode that's
   awkward to construct portably in a test; the branch exists so such a
   failure surfaces as a clear 400 instead of an unhandled rejection.
+- **`docker-compose.ts` lines 8-10 / `run-script.ts` lines 12-18**: each
+  module's `defaultExec` (the real `execFileAsync` wrapper used when no
+  fake is injected). Same shape as `tmux.ts`/`worktree.ts`/`git-status.ts`'s
+  own `defaultExec` gaps elsewhere in this project — every unit test
+  injects a fake `exec`, and the real wrapper is instead exercised by the
+  manual smoke test above (a real server, calling real `docker`/`sh`).
+- **`server.ts` lines 291-292 / 300-301**: the env routes' `throw error`
+  fallback for an error `sendMappedError` doesn't recognize (surfacing as
+  a generic 500). Same "unmapped error falls through to 500" shape already
+  left uncovered for the changes/diff routes (lines 240-241/265-266,
+  themselves unchanged from before this feature) — this project already
+  has one dedicated test proving that shape works (`propagates unexpected
+  (non-validation) errors as 500` on the original session routes); adding
+  five more copies for every subsequent route was judged low marginal
+  value.
+- **`env-config.ts`** (85.19% branch, 100% lines): every line executes,
+  but not every optional-field combination in `env.json` (e.g. an object
+  with neither `openService` nor `openPort` present, vs. the manifest file
+  missing outright) is exercised by a distinct test. Both outcomes are
+  covered logically by existing tests; not chased further given the low
+  complexity of the code involved.
 
 None of these gaps are at the journey level — every user journey above has
-at least one PASS-ing automated test, and the two most safety-relevant
-"gaps" (`pty-bridge.ts`'s spawn wiring, `main.ts`'s composition) were both
-additionally exercised through real, live manual smoke tests end to end.
+at least one PASS-ing automated test, and the safety-relevant "gaps"
+(`pty-bridge.ts`'s spawn wiring, `main.ts`'s composition, and this
+feature's real-`docker`/real-`sh` execution paths) were all additionally
+exercised through real, live manual smoke tests end to end.
