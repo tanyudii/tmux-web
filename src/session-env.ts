@@ -121,16 +121,21 @@ export async function startSessionEnv(
 ): Promise<void> {
   const { fullName, worktreePath, config } = await requireConfig(project, sessionSlug, deps);
 
-  if (store.get(fullName)?.phase === "starting") {
+  if (store.has(fullName)) {
     throw new EnvAlreadyRunningError(`Environment for "${sessionSlug}" is already starting`);
   }
+  // Claim the slot synchronously -- no `await` between this check and the
+  // set -- so a second, truly concurrent start() call for the same
+  // session can never slip through the gap and run a duplicate
+  // pre-run/compose-up/post-run (a TOCTOU race the previous version had,
+  // since it only claimed the slot after awaiting composePs below).
+  store.set(fullName, { phase: "starting" });
 
   const ctx = contextFor(fullName, worktreePath, config);
   if ((await safeComposePs(deps, ctx)).length > 0) {
+    store.delete(fullName);
     throw new EnvAlreadyRunningError(`Environment for "${sessionSlug}" is already running`);
   }
-
-  store.set(fullName, { phase: "starting" });
 
   // Deliberately not awaited: pre-run/compose up/post-run can take minutes
   // (image pulls, builds, migrations). The HTTP layer returns as soon as
