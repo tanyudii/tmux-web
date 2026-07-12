@@ -9,9 +9,11 @@ Superset, minus the account/relay: **open a project → it can hold many
 sessions → every session is an isolated git worktree** on its own branch,
 so parallel sessions never collide on the same working directory.
 
-Built to be read in one sitting: the entire core (`src/`) is around 1100
-lines across 11 files, with 4 runtime dependencies (`node-pty`, `ws`,
-`@xterm/xterm`, `@xterm/addon-fit`).
+Built to be read in one sitting: the entire core (`src/`) is around 1700
+lines across 16 files, with 4 runtime dependencies (`node-pty`, `ws`,
+`@xterm/xterm`, `@xterm/addon-fit`) — the per-session environment feature
+below shells out to the `docker`/`docker compose` CLIs already on your
+system rather than adding a client library.
 
 ## How it works
 
@@ -45,6 +47,16 @@ lines across 11 files, with 4 runtime dependencies (`node-pty`, `ws`,
   file to see its diff inline. The diff text is whatever `git diff` prints;
   this tool doesn't compute diffs itself, it just colors the `+`/`-` lines
   git already produced. Polls every 5s while a session is attached.
+- **One-click, per-session environments.** If a project's worktree has a
+  `.tmux-web-env/docker-compose.yml`, an "Environment" bar appears above
+  the terminal with a **Setup Environment** button. Clicking it runs an
+  optional `pre-run.sh`, then `docker compose up -d --build` scoped to
+  *that session alone* (its own containers, network, and volumes — a
+  second session never shares them), then an optional `post-run.sh`. Once
+  containers are up, tmux-web resolves the ephemeral host port docker
+  published for a configured service and shows an **Open ↗** link. See
+  [Per-session environments](#per-session-environments-docker-compose)
+  below.
 
 ## Security model — read this before deploying
 
@@ -68,6 +80,21 @@ accordingly:
    invocation this tool makes, including the diff-endpoint's path-traversal
    guard), and `src/main.ts` (how they're wired together with the WebSocket
    upgrade).
+5. **The per-session environment feature extends this trust to Docker.**
+   `docker compose up` runs *whatever* `docker-compose.yml` (plus
+   `pre-run.sh`/`post-run.sh`) is checked into the worktree at the time —
+   by design, so the environment reflects the branch you're actually
+   working on (see [Per-session
+   environments](#per-session-environments-docker-compose)). This is not a
+   new privilege boundary: anyone who can push to a branch you'll open a
+   session on already gets a real shell in that worktree via this tool.
+   But note that on most default installs, membership in the `docker`
+   group is root-equivalent — so enabling this feature is equivalent to
+   the account running tmux-web already having root, whether or not it's
+   used. If that's not an acceptable tradeoff for your deployment, simply
+   don't add a `.tmux-web-env/` folder to any project you register — the
+   feature stays entirely invisible (and inert) for repos that don't opt
+   in.
 
 ## Requirements on the host machine
 
@@ -78,6 +105,9 @@ accordingly:
   created from them
 - Build tools for `node-pty`'s native addon on first install:
   `apt install build-essential python3` (Debian/Ubuntu)
+- **Optional**: `docker` + the `docker compose` v2 plugin, only needed if
+  you use the per-session environment feature on any registered project.
+  Everything else works fine without Docker installed at all.
 
 ## Setup
 
@@ -118,6 +148,56 @@ Nothing here is a database — `projects.json` is a plain JSON array
 just what `git worktree add` produced. You can `cat`, back up, or hand-edit
 either with tools you already trust.
 
+## Per-session environments (docker-compose)
+
+Opt in per project by adding a `.tmux-web-env/` folder to the repo (so it's
+versioned like everything else, and can differ per branch):
+
+```
+.tmux-web-env/
+  docker-compose.yml   required -- its presence is what makes the
+                        "Setup Environment" button appear at all
+  env.json              optional -- { "openService": "web", "openPort": 3000 }
+  pre-run.sh             optional -- runs before `docker compose up`
+  post-run.sh             optional -- runs after `docker compose up`
+```
+
+Clicking **Setup Environment** on a session:
+
+1. Runs `pre-run.sh` (if present) with the worktree as its working
+   directory -- e.g. to write a `.env` file, seed fixtures, or install
+   dependencies the compose file's `build:` step expects.
+2. Runs `docker compose up -d --build`, scoped with
+   `-p <projectId>__<sessionSlug>` -- the exact same composite name this
+   tool already uses for the session's tmux session (`session-naming.ts`),
+   so every session's containers, network, and volumes are namespaced
+   apart from every other session's, including other sessions of the same
+   project.
+3. Runs `post-run.sh` (if present) -- e.g. to run migrations or seed data
+   once the database container is reachable.
+4. If `env.json` names an `openService`/`openPort`, resolves the ephemeral
+   host port docker published for it (`docker compose port <service>
+   <port>`) and shows an **Open ↗** link to `http://<host>:<port>`.
+
+Status (`idle` / `starting` / `running` / `error` / `stopping`) is polled
+every 3s and is always re-derived from a live `docker compose ps` rather
+than trusted from a cache -- consistent with how this tool already treats
+`tmux list-sessions` and `git status` as the source of truth instead of
+keeping its own database. Only the fact that a setup is *in progress*
+(pre-run/up/post-run can take minutes) lives in an in-memory map for the
+life of the Node process; a restart mid-setup just means the next status
+poll re-derives `idle` or `running` from docker directly.
+
+**Compose file tip**: publish ports as `"127.0.0.1::<container-port>"`
+(no fixed host port) so two sessions of the same project never fight over
+the same port -- tmux-web resolves whatever host port docker actually
+picked.
+
+**Teardown**: the **Stop** button (or killing the session, which always
+tears its environment down first, best-effort) runs `docker compose down
+-v` -- containers *and* volumes for that session are gone. There's no
+"pause" state.
+
 ## Running as a service (survives reboots and crashes)
 
 ```bash
@@ -147,13 +227,18 @@ src/
   git-status.ts           shells out to `git status`/`git diff` for the changes sidebar
   projects.ts             project registry (JSON file, atomic writes)
   project-sessions.ts      orchestrates projects+worktree+tmux per session
+  env-config.ts            reads the opt-in .tmux-web-env/ folder from a worktree
+  docker-compose.ts        shells out to `docker compose` (up/down/ps/port)
+  run-script.ts            runs pre-run.sh/post-run.sh via /bin/sh
+  session-env.ts           orchestrates pre-run -> compose up -> post-run per session
   server.ts               HTTP API + auth middleware (testable via injected deps)
   pty-bridge.ts            node-pty <-> WebSocket bridge, resize handling
   config.ts               env var parsing/validation
   main.ts                 composition root: wires the above into a real server
 public/
   index.html, app.js   vanilla JS frontend: project list -> project detail
-                        (session sidebar, xterm.js, right-hand changes/diff sidebar)
+                        (session sidebar, xterm.js, right-hand changes/diff
+                        sidebar, environment setup bar above the terminal)
   vendor/              generated by `npm install` (postinstall), gitignored
 deploy/
   tmux-web.service     systemd --user unit
@@ -185,3 +270,16 @@ docs/testing/
 - Binary-file detection is a heuristic (a NUL byte in the first 8KB, or
   git's own "Binary files ... differ" line) — good enough to avoid dumping
   garbled bytes into the browser, not a rigorous content-type check.
+- No environment config editor in the UI — `docker-compose.yml`,
+  `pre-run.sh`, and `post-run.sh` are real files in the repo; edit them
+  with the terminal right next to the Environment bar, same as any other
+  file in the worktree.
+- No enforcement that a project's `docker-compose.yml` avoids fixed host
+  ports — tmux-web scopes the compose *project name* per session, but two
+  sessions of the same project publishing the same hardcoded host port
+  will still collide. Use ephemeral publish syntax (see [Per-session
+  environments](#per-session-environments-docker-compose)) to avoid this.
+- No cancel button mid-setup — if `pre-run.sh`/`docker compose up`/
+  `post-run.sh` is taking a while, Stop will still tear down whatever's
+  running once it gets there, but there's no way to interrupt a script or
+  build already in flight short of stopping tmux-web itself.
