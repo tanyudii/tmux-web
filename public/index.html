@@ -183,6 +183,13 @@
         min-width: 0;
         padding: 0.5rem;
         display: flex;
+        flex-direction: column;
+        gap: 0.5rem;
+      }
+      .terminal-row {
+        flex: 1;
+        min-height: 0;
+        display: flex;
       }
       #terminal {
         flex: 1;
@@ -191,6 +198,75 @@
       #empty-state {
         margin: auto;
         color: #777;
+      }
+
+      /* --- Environment bar (docker-compose setup, above the terminal) --- */
+      .env-bar {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        padding: 0.4rem 0.6rem;
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        font-size: 0.85rem;
+        flex-shrink: 0;
+      }
+      .env-info {
+        flex: 1;
+        min-width: 0;
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        overflow: hidden;
+      }
+      .env-status-badge {
+        font-size: 0.7rem;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        padding: 0.15rem 0.5rem;
+        border-radius: 999px;
+        background: #3c3c3c;
+        color: #ccc;
+        flex-shrink: 0;
+      }
+      .env-status-badge.phase-starting,
+      .env-status-badge.phase-stopping {
+        background: #5a4a1a;
+        color: #f0c96a;
+      }
+      .env-status-badge.phase-running {
+        background: #1f4a2c;
+        color: #8fd694;
+      }
+      .env-status-badge.phase-error {
+        background: var(--danger);
+        color: white;
+      }
+      #env-message {
+        color: #999;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .env-actions {
+        display: flex;
+        gap: 0.4rem;
+        flex-shrink: 0;
+      }
+      .env-action {
+        padding: 0.3rem 0.6rem;
+        background: var(--accent);
+        border: none;
+        color: white;
+        border-radius: 4px;
+        cursor: pointer;
+        font-size: 0.8rem;
+        text-decoration: none;
+        white-space: nowrap;
+      }
+      .env-action-danger {
+        background: var(--danger);
       }
 
       /* --- Changes sidebar (right) --- */
@@ -361,8 +437,21 @@
           <button id="new-session">+ New session</button>
         </div>
         <div id="terminal-container">
-          <div id="terminal"></div>
-          <div id="empty-state">Select or create a session to attach.</div>
+          <div id="env-bar" class="env-bar" style="display: none">
+            <div class="env-info">
+              <span id="env-status-badge" class="env-status-badge"></span>
+              <span id="env-message"></span>
+            </div>
+            <div class="env-actions">
+              <button id="env-setup-btn" class="env-action" style="display: none">Setup Environment</button>
+              <button id="env-stop-btn" class="env-action env-action-danger" style="display: none">Stop</button>
+              <a id="env-open-link" class="env-action" href="#" target="_blank" rel="noopener" style="display: none">Open &#8599;</a>
+            </div>
+          </div>
+          <div class="terminal-row">
+            <div id="terminal"></div>
+            <div id="empty-state">Select or create a session to attach.</div>
+          </div>
         </div>
         <div id="changes-sidebar">
           <div class="changes-header">
