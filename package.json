@@ -1,0 +1,29 @@
+{
+  "name": "tmux-web",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Self-hosted browser GUI for switching between tmux sessions, no cloud account required.",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/server.js",
+    "dev": "node --experimental-strip-types src/server.ts",
+    "test": "node --experimental-strip-types --test src/*.test.ts",
+    "test:coverage": "node --experimental-strip-types --test --experimental-test-coverage src/*.test.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@xterm/addon-fit": "0.10.0",
+    "@xterm/xterm": "5.5.0",
+    "node-pty": "1.0.0",
+    "ws": "8.21.0"
+  },
+  "devDependencies": {
+    "@types/node": "22.10.5",
+    "@types/ws": "8.5.13",
+    "typescript": "5.7.2"
+  }
+}
