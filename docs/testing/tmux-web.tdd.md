@@ -243,6 +243,44 @@ unverified. Flagged explicitly rather than overclaiming.
 | 34 | Environment status is always re-derived from a live `composePs` call rather than trusted from the in-memory store, so a container stopped outside tmux-web is reflected on the next poll | `src/session-env.test.ts:getSessionEnvStatus derives 'running'...without needing a prior start()` | unit | PASS |
 | 35 | `killProjectSession` still removes the worktree even when tearing down its environment fails | `src/project-sessions.test.ts:killProjectSession tolerates stopSessionEnv failing...` | unit | PASS |
 | 36 | The full environment lifecycle (opt-in detection, isolated scoping, ephemeral port resolution, teardown, auto-teardown on kill, opt-out invisibility) behaves correctly against a real Docker daemon, not just fakes | manual smoke test (see above) | integration (real Docker + real HTTP) | PASS |
+| 37 | Two genuinely concurrent `startSessionEnv` calls for the same session can never both proceed — exactly one is rejected `EnvAlreadyRunningError`, and `docker compose up` runs at most once | `src/session-env.test.ts:startSessionEnv rejects a second truly concurrent start()...` | unit (`Promise.allSettled` on two un-awaited calls) | PASS |
+| 38 | A malformed `env.json` surfaces as 400 (`EnvConfigError`) on every verb of the env route, including `GET`, instead of falling through to a generic 500 | `src/server.test.ts:...returns 400 for a malformed env.json (EnvConfigError)` (×2, GET+POST) | integration | PASS |
+
+## Security review
+
+A `security-reviewer` agent pass (mandatory per this project's review
+standards for code touching file-system operations, external process
+execution, and network-facing endpoints) was run against the full diff
+after the feature was otherwise complete. It found no CRITICAL/HIGH
+issues — command injection, path traversal, per-route auth, the
+frontend's `Open` link construction, and compose-project-name collision
+safety all came back clean, each confirmed by reading the relevant code
+alongside this project's own existing patterns (`execFile` array args,
+`resolveWorktreePath`'s containment check, `buildSessionName`'s
+separator-collision guard). Two lower-severity findings were fixed,
+each via its own RED → GREEN cycle:
+
+- **MEDIUM — TOCTOU race in `startSessionEnv`** (`src/session-env.ts`):
+  the store slot was claimed *after* an `await safeComposePs(...)`, not
+  before, so two concurrent start requests for the same session could
+  both pass the "already starting" guard and both run pre-run/compose
+  up/post-run. Reproduced first with two genuinely concurrent calls via
+  `Promise.allSettled` (RED: both fulfilled, `composeUp` called twice),
+  fixed by claiming the slot synchronously immediately after the guard
+  check, before any further `await` (GREEN, test 37 above). See commits
+  `test: reproduce TOCTOU race in startSessionEnv (RED)` /
+  `fix: close TOCTOU race in startSessionEnv (GREEN)`.
+- **LOW — `EnvConfigError` unmapped, `GET .../env` missing a try/catch**
+  (`src/server.ts`): a malformed `env.json` fell through to a generic 500
+  instead of the 400 every other validation-style error on this route
+  gets, and the `GET` handler in particular had no try/catch at all
+  around its dependency call, unlike its `POST`/`DELETE` siblings.
+  Reproduced first (RED: both surfaced as 500), fixed by adding
+  `EnvConfigError` to `sendMappedError` and wrapping the `GET` handler's
+  call the same way as `POST`/`DELETE` (GREEN, test 38 above). See
+  commits `test: reproduce EnvConfigError falling through to 500 (RED)` /
+  `fix: map EnvConfigError to 400 and guard GET .../env consistently
+  (GREEN)`.
 
 The changes-sidebar **frontend** (`public/app.js`'s tree-building, accordion-diff-toggle, and 5s polling) is not unit-tested — same rationale as the rest of the frontend in this project (no browser test framework, no build step). Verified via: JS syntax check (`node --check`), a full DOM-id cross-reference against `index.html`, and the API/WS layers it calls being independently verified end-to-end (see task report). No GUI browser is installed on the deployment server this was built on, so the actual click/render behavior was not driven through a real browser session — flagged explicitly rather than overclaiming. The environment-bar frontend added in this feature (status badge, Setup/Stop/Open) carries the exact same caveat — see "Frontend caveat" above.
 
@@ -253,7 +291,7 @@ npm run test:coverage
 ```
 
 ```
-all files            |  98.41 |    94.89 |   94.89 |
+all files            |  98.39 |    94.86 |   94.97 |
 auth.ts              |  92.86 |    94.12 |  100.00 | (16-17 uncovered)
 config.ts            | 100.00 |   100.00 |  100.00 |
 docker-compose.ts    |  97.35 |    84.00 |   90.00 | (8-10 uncovered)
@@ -263,15 +301,15 @@ project-sessions.ts  |  98.52 |    86.96 |   87.50 | (40-41 uncovered)
 projects.ts          |  97.67 |    90.00 |  100.00 | (33-34 uncovered)
 pty-bridge.ts        |  91.49 |    92.00 |   85.71 | (45-52 uncovered)
 run-script.ts        |  83.33 |    83.33 |   50.00 | (12-18 uncovered)
-server.ts            |  96.82 |    90.23 |  100.00 | (196-197, 240-241, 265-266, 291-292, 300-301 uncovered)
-session-env.ts       | 100.00 |    93.33 |  100.00 |
+server.ts            |  96.30 |    89.78 |  100.00 | (201-202, 245-246, 270-271, 289-290, 301-302, 310-311 uncovered)
+session-env.ts       | 100.00 |    93.18 |  100.00 |
 session-naming.ts    | 100.00 |   100.00 |  100.00 |
 slug.ts              | 100.00 |   100.00 |  100.00 |
 tmux.ts              | 100.00 |   100.00 |  100.00 |
 worktree.ts          |  94.59 |    78.26 |   88.89 | (19-20, 84-85, 109-110 uncovered)
 ```
 
-222 tests total, 0 failures, 0 skipped (the real-tmux and real-git
+225 tests total, 0 failures, 0 skipped (the real-tmux and real-git
 integration tests both ran — tmux 3.6 and git were present on the build
 machine; each self-skips via an availability check when its binary is
 absent). There is no automated real-Docker integration test analogous to
@@ -315,15 +353,17 @@ via the manual smoke test above rather than gated into the default
   own `defaultExec` gaps elsewhere in this project — every unit test
   injects a fake `exec`, and the real wrapper is instead exercised by the
   manual smoke test above (a real server, calling real `docker`/`sh`).
-- **`server.ts` lines 291-292 / 300-301**: the env routes' `throw error`
-  fallback for an error `sendMappedError` doesn't recognize (surfacing as
-  a generic 500). Same "unmapped error falls through to 500" shape already
-  left uncovered for the changes/diff routes (lines 240-241/265-266,
-  themselves unchanged from before this feature) — this project already
-  has one dedicated test proving that shape works (`propagates unexpected
-  (non-validation) errors as 500` on the original session routes); adding
-  five more copies for every subsequent route was judged low marginal
-  value.
+- **`server.ts` lines 289-290 / 301-302 / 310-311**: the env routes'
+  (GET/POST/DELETE) `throw error` fallback for an error `sendMappedError`
+  doesn't recognize (surfacing as a generic 500). Same "unmapped error
+  falls through to 500" shape already left uncovered for the changes/diff
+  routes (lines 245-246/270-271, themselves unchanged from before this
+  feature) — this project already has one dedicated test proving that
+  shape works (`propagates unexpected (non-validation) errors as 500` on
+  the original session routes); adding a copy for every subsequent route
+  was judged low marginal value. (`EnvConfigError` specifically *is* now
+  covered — see test 38 above — this gap is only the truly-unmapped,
+  truly-unexpected-error case.)
 - **`env-config.ts`** (85.19% branch, 100% lines): every line executes,
   but not every optional-field combination in `env.json` (e.g. an object
   with neither `openService` nor `openPort` present, vs. the manifest file
