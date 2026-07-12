@@ -1,23 +1,43 @@
 # tmux-web
 
-A small, self-hosted browser GUI for switching between tmux sessions. No
-cloud account, no relay, no external dependency of any kind — just your
-server, tmux, and a browser.
+A small, self-hosted browser GUI for working across projects and tmux
+sessions. No cloud account, no relay, no external dependency of any kind —
+just your server, git, tmux, and a browser.
 
-Built to be read in one sitting: the entire core (`src/`) is ~450 lines
-across 6 files, with 4 runtime dependencies (`node-pty`, `ws`,
+The flow mirrors what you'd get from a hosted dev-environment product like
+Superset, minus the account/relay: **open a project → it can hold many
+sessions → every session is an isolated git worktree** on its own branch,
+so parallel sessions never collide on the same working directory.
+
+Built to be read in one sitting: the entire core (`src/`) is under 900
+lines across 10 files, with 4 runtime dependencies (`node-pty`, `ws`,
 `@xterm/xterm`, `@xterm/addon-fit`).
 
 ## How it works
 
-- Every "session" in the sidebar is a real `tmux` session. This tool never
-  reimplements session persistence — it just runs `tmux attach-session`
+- **Projects** are just a name + an absolute path to a git repo on the
+  server, registered once via the UI and persisted to
+  `~/.tmux-web/projects.json`.
+- **Sessions belong to a project.** Creating one slugifies the name into a
+  branch name, runs `git worktree add -b <branch> ~/.tmux-web/worktrees/<projectId>/<branch>`,
+  then starts a real `tmux` session with its working directory set to that
+  worktree (`tmux new-session -c <worktree>`). Killing a session kills the
+  tmux session, then removes the worktree — but **not** the branch, so your
+  commits survive even after the session is gone.
+- Every "session" in the sidebar is a real `tmux` session — this tool never
+  reimplements session persistence. It just runs `tmux attach-session`
   inside a PTY (via `node-pty`) and streams the bytes over a WebSocket to
-  an `xterm.js` terminal in the browser.
+  an `xterm.js` terminal in the browser. There's no separate database
+  tracking which sessions exist: `tmux list-sessions`, filtered by a
+  `<projectId>__<slug>` naming convention, *is* the source of truth.
 - Because tmux itself owns the session state, closing a browser tab is
   exactly like a tmux detach (`Ctrl-b d`): nothing inside the session
   dies. Restarting this Node process doesn't touch tmux either — reopen
   the browser and reattach.
+- **Uncommitted changes are protected.** If a worktree has uncommitted
+  changes, killing its session is refused (409) until you explicitly
+  confirm force-delete in the UI — this tool never silently discards
+  work, unlike some worktree-removal defaults elsewhere.
 - A single shared token (`TMUX_WEB_TOKEN`) gates every API and WebSocket
   request, compared with a constant-time check (`crypto.timingSafeEqual`).
 
@@ -38,14 +58,18 @@ accordingly:
    ```
 4. **Audit it yourself.** This is a young, low-adoption project (it's
    yours). Before trusting it with real access, read at minimum:
-   `src/auth.ts` (token check), `src/server.ts` (route handling), and
-   `src/main.ts` (how they're wired together with the WebSocket upgrade).
+   `src/auth.ts` (token check), `src/server.ts` (route handling and error
+   mapping), `src/worktree.ts` (every `git` invocation this tool makes),
+   and `src/main.ts` (how they're wired together with the WebSocket
+   upgrade).
 
 ## Requirements on the host machine
 
 - Node.js >= 22 (uses `--experimental-strip-types` to run TypeScript
   directly — no build step, no `dist/` to keep in sync with source)
 - `tmux` installed (`apt install tmux` / `brew install tmux`)
+- `git` installed — projects must already be git repos; worktrees are
+  created from them
 - Build tools for `node-pty`'s native addon on first install:
   `apt install build-essential python3` (Debian/Ubuntu)
 
@@ -58,14 +82,35 @@ npm install                 # also copies xterm.js into public/vendor/
 cp .env.example .env
 # edit .env: set TMUX_WEB_TOKEN (see command above), TMUX_WEB_BIND_HOST
 
-npm test                    # 65 tests, includes a real-tmux integration test
+npm test                    # includes real-tmux and real-git integration tests
 npm run typecheck
 
 npm start                   # foreground, for a first manual check
 ```
 
-Open `http://<bind-host>:5309` (or whatever `TMUX_WEB_PORT` you set),
-paste the token, create a session, and confirm you see a real shell.
+Open `http://<bind-host>:5309` (or whatever `TMUX_WEB_PORT` you set), paste
+the token, click **+ Add project** and point it at an absolute path to a
+git repo already on this server, open the project, then **+ New session**
+and confirm you land in a real shell whose `pwd` is a freshly created
+worktree.
+
+### Data directory
+
+Everything this tool persists lives under `TMUX_WEB_DATA_DIR` (default
+`~/.tmux-web`):
+
+```
+~/.tmux-web/
+  projects.json          registered projects (name, id, repo path)
+  worktrees/
+    <projectId>/
+      <branch-slug>/      one git worktree per active session
+```
+
+Nothing here is a database — `projects.json` is a plain JSON array
+(atomic write via temp-file + rename), and the worktree directories are
+just what `git worktree add` produced. You can `cat`, back up, or hand-edit
+either with tools you already trust.
 
 ## Running as a service (survives reboots and crashes)
 
@@ -88,14 +133,20 @@ already independent of this Node process), restarting or crash-looping
 
 ```
 src/
-  auth.ts          token extraction + constant-time verification
-  tmux.ts          shells out to `tmux` (list/create/kill sessions)
-  server.ts        HTTP API + auth middleware (testable via injected deps)
-  pty-bridge.ts     node-pty <-> WebSocket bridge, resize handling
-  config.ts        env var parsing/validation
-  main.ts          composition root: wires the above into a real server
+  auth.ts               token extraction + constant-time verification
+  slug.ts                branch-name slugification (pure)
+  session-naming.ts       <projectId>__<slug> composite tmux session names
+  tmux.ts                shells out to `tmux` (list/create/kill sessions)
+  worktree.ts             shells out to `git worktree` (add/remove/prune)
+  projects.ts             project registry (JSON file, atomic writes)
+  project-sessions.ts      orchestrates projects+worktree+tmux per session
+  server.ts               HTTP API + auth middleware (testable via injected deps)
+  pty-bridge.ts            node-pty <-> WebSocket bridge, resize handling
+  config.ts               env var parsing/validation
+  main.ts                 composition root: wires the above into a real server
 public/
-  index.html, app.js   vanilla JS frontend (xterm.js, sidebar switcher)
+  index.html, app.js   vanilla JS frontend: project list -> project detail
+                        (session sidebar, xterm.js)
   vendor/              generated by `npm install` (postinstall), gitignored
 deploy/
   tmux-web.service     systemd --user unit
@@ -106,8 +157,14 @@ docs/testing/
 ## What's intentionally NOT here
 
 - No build step / bundler — Node runs the `.ts` sources directly.
-- No database, no user accounts — one shared token, one server.
+- No real database — one JSON file for the project registry, tmux/git
+  themselves are the source of truth for everything else.
+- No user accounts — one shared token, one server.
 - No auto-reconnect on the frontend — closing/reopening a session tab is
   just clicking it again in the sidebar (tmux already kept it alive).
 - No TLS termination built in — terminate TLS at your VPN/reverse proxy,
   not here.
+- No automatic branch deletion — killing a session always keeps the git
+  branch (only the worktree checkout is removed), so you don't lose commits
+  by accident. Delete branches yourself with plain `git branch -d` when
+  you're done with them.

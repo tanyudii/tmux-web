@@ -113,6 +113,44 @@ test("POST /api/projects returns 400 when registration is rejected (ProjectValid
   });
 });
 
+test("POST /api/projects with malformed JSON returns 400", async () => {
+  await withServer(makeDeps(), async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/projects`, {
+      method: "POST",
+      headers: authHeaders({ "Content-Type": "application/json" }),
+      body: "{not json",
+    });
+    assert.equal(res.status, 400);
+  });
+});
+
+test("POST /api/projects with a missing name or repoPath returns 400", async () => {
+  await withServer(makeDeps(), async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/projects`, {
+      method: "POST",
+      headers: authHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify({ name: "Only Name" }),
+    });
+    assert.equal(res.status, 400);
+  });
+});
+
+test("POST /api/projects propagates an unexpected registerProject error as 500", async () => {
+  const deps = makeDeps({
+    registerProject: async () => {
+      throw new Error("disk full");
+    },
+  });
+  await withServer(deps, async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/projects`, {
+      method: "POST",
+      headers: authHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify({ name: "New Project", repoPath: "/abs/repo" }),
+    });
+    assert.equal(res.status, 500);
+  });
+});
+
 test("DELETE /api/projects/:id removes the project when it has no active sessions", async () => {
   const calls: string[] = [];
   const deps = makeDeps({ removeProject: async (id: string) => { calls.push(id); } });
@@ -238,6 +276,33 @@ test("POST /api/projects/:id/sessions returns 409 for a WorktreeConflictError", 
   });
 });
 
+test("POST /api/projects/:id/sessions with malformed JSON returns 400", async () => {
+  await withServer(makeDeps(), async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/projects/${SAMPLE_PROJECT.id}/sessions`, {
+      method: "POST",
+      headers: authHeaders({ "Content-Type": "application/json" }),
+      body: "{not json",
+    });
+    assert.equal(res.status, 400);
+  });
+});
+
+test("POST /api/projects/:id/sessions propagates an unexpected error as 500", async () => {
+  const deps = makeDeps({
+    createProjectSession: async () => {
+      throw new Error("git binary not found");
+    },
+  });
+  await withServer(deps, async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/projects/${SAMPLE_PROJECT.id}/sessions`, {
+      method: "POST",
+      headers: authHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify({ name: "feature-x" }),
+    });
+    assert.equal(res.status, 500);
+  });
+});
+
 test("POST /api/projects/:id/sessions returns 404 for an unknown project", async () => {
   await withServer(makeDeps(), async (baseUrl) => {
     const res = await fetch(`${baseUrl}/api/projects/unknown-id/sessions`, {
@@ -295,6 +360,21 @@ test("DELETE /api/projects/:id/sessions/:name returns 409 for a DirtyWorktreeErr
       headers: authHeaders(),
     });
     assert.equal(res.status, 409);
+  });
+});
+
+test("DELETE /api/projects/:id/sessions/:name propagates an unexpected error as 500", async () => {
+  const deps = makeDeps({
+    killProjectSession: async () => {
+      throw new Error("permission denied");
+    },
+  });
+  await withServer(deps, async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/projects/${SAMPLE_PROJECT.id}/sessions/feature-x`, {
+      method: "DELETE",
+      headers: authHeaders(),
+    });
+    assert.equal(res.status, 500);
   });
 });
 
