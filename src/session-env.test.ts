@@ -69,6 +69,43 @@ test("getSessionEnvStatus returns 'idle' when no containers are up", async () =>
   assert.equal(status.phase, "idle");
 });
 
+test("getSessionEnvStatus falls back to 'idle' when composePs itself fails (e.g. docker daemon unavailable)", async () => {
+  const deps = makeDeps({
+    composePs: async () => {
+      throw new Error("Cannot connect to the Docker daemon");
+    },
+  });
+  const store = createSessionEnvStore();
+
+  const status = await getSessionEnvStatus(PROJECT, "feature-x", deps, store);
+
+  assert.equal(status.phase, "idle");
+});
+
+test("getSessionEnvStatus reports 'stopping' while teardown is still in flight", async () => {
+  let releaseComposeDown = () => {};
+  const composeDownStarted = new Promise<void>((resolve) => {
+    releaseComposeDown = resolve;
+  });
+  const deps = makeDeps({
+    composePs: async () => [{ service: "web", state: "running" }],
+    composeDown: () =>
+      new Promise((resolve) => {
+        releaseComposeDown();
+        setImmediate(resolve);
+      }),
+  });
+  const store = createSessionEnvStore();
+
+  const stopPromise = stopSessionEnv(PROJECT, "feature-x", deps, store);
+  await composeDownStarted;
+
+  const status = await getSessionEnvStatus(PROJECT, "feature-x", deps, store);
+  assert.equal(status.phase, "stopping");
+
+  await stopPromise;
+});
+
 test("getSessionEnvStatus derives 'running' + openUrl live from docker, without needing a prior start()", async () => {
   const services: ComposeServiceStatus[] = [{ service: "web", state: "running" }];
   const deps = makeDeps({
