@@ -1,7 +1,15 @@
 // Vanilla JS, no build step. Keep this file small enough to read in one
 // sitting -- that's the whole point of a self-audited tool.
+//
+// Loaded as an ES module (see index.html) purely so it can import the
+// DOM-free decision logic in notify.js -- still zero bundler, zero
+// transpile step, just a native <script type="module">.
+
+import { parseMuted, buildBellTitle, shouldPlayBellAlert } from "./notify.js";
 
 const TOKEN_KEY = "tmux-web-token";
+const NOTIFY_MUTE_KEY = "tmux-web-notify-muted";
+const BELL_COOLDOWN_MS = 1500;
 
 const loginForm = document.getElementById("login");
 const tokenInput = document.getElementById("token");
@@ -24,6 +32,7 @@ const emptyStateEl = document.getElementById("empty-state");
 const changesSidebar = document.getElementById("changes-sidebar");
 const changesBodyEl = document.getElementById("changes-body");
 const toggleChangesBtn = document.getElementById("toggle-changes");
+const toggleNotifyBtn = document.getElementById("toggle-notify");
 
 let token = sessionStorage.getItem(TOKEN_KEY) || "";
 let currentProject = null; // { id, name, repoPath, createdAt }
@@ -34,6 +43,108 @@ let fitAddon = null;
 let sessionPollTimer = null;
 let changesPollTimer = null;
 let expandedDiffKey = null; // "mode:path" of the single currently-open inline diff, or null
+
+// --- Bell notifications (sound + title flash when this tab isn't the one
+// the developer is looking at) --------------------------------------------
+// Claude Code rings the terminal BEL character for its Notification (needs
+// permission/asks a question) and Stop (task done) events when configured
+// with `preferredNotifChannel: terminal_bell` -- see README. xterm.js
+// already parses BEL out of the raw PTY stream (pty-bridge.ts forwards
+// bytes unmodified) and exposes it as term.onBell(), so this is the one
+// generic hook that covers "question", "confirm", "done", and anything
+// else in the session that rings the bell.
+let notifyMuted = parseMuted(localStorage.getItem(NOTIFY_MUTE_KEY));
+let lastBellAlertAt = null;
+let audioCtx = null;
+let titleFlashed = false;
+const baseTitle = document.title;
+
+function updateNotifyButton() {
+  toggleNotifyBtn.textContent = notifyMuted ? "\u{1F515}" : "\u{1F514}";
+  toggleNotifyBtn.title = notifyMuted
+    ? "Bell notifications muted -- click to enable"
+    : "Bell notifications enabled -- click to mute";
+}
+
+toggleNotifyBtn.addEventListener("click", () => {
+  notifyMuted = !notifyMuted;
+  localStorage.setItem(NOTIFY_MUTE_KEY, String(notifyMuted));
+  updateNotifyButton();
+  if (!notifyMuted && typeof Notification !== "undefined" && Notification.permission === "default") {
+    Notification.requestPermission();
+  }
+});
+updateNotifyButton();
+
+// AudioContext (and some browsers' Notification permission) requires a
+// prior user gesture -- unlock it on the first click anywhere in the app,
+// well before any bell could plausibly fire.
+document.addEventListener(
+  "click",
+  () => {
+    const AudioCtx = window.AudioContext || window.webkitAudioContext;
+    if (!AudioCtx) return;
+    if (!audioCtx) audioCtx = new AudioCtx();
+    else if (audioCtx.state === "suspended") audioCtx.resume();
+  },
+  { once: true },
+);
+
+function playBellBeep() {
+  if (!audioCtx) return;
+  const oscillator = audioCtx.createOscillator();
+  const gain = audioCtx.createGain();
+  oscillator.type = "sine";
+  oscillator.frequency.value = 880;
+  gain.gain.setValueAtTime(0.15, audioCtx.currentTime);
+  gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.3);
+  oscillator.connect(gain);
+  gain.connect(audioCtx.destination);
+  oscillator.start();
+  oscillator.stop(audioCtx.currentTime + 0.3);
+}
+
+function restoreTitle() {
+  if (!titleFlashed) return;
+  document.title = baseTitle;
+  titleFlashed = false;
+}
+
+window.addEventListener("focus", restoreTitle);
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden) restoreTitle();
+});
+
+function handleBell() {
+  if (notifyMuted) return;
+
+  document.title = buildBellTitle(activeSessionName);
+  titleFlashed = true;
+
+  const now = Date.now();
+  const shouldAlert = shouldPlayBellAlert({
+    muted: notifyMuted,
+    hasFocus: document.hasFocus(),
+    hidden: document.hidden,
+    lastAlertAt: lastBellAlertAt,
+    now,
+    cooldownMs: BELL_COOLDOWN_MS,
+  });
+  if (!shouldAlert) return;
+
+  lastBellAlertAt = now;
+  playBellBeep();
+
+  if (typeof Notification !== "undefined" && Notification.permission === "granted") {
+    const notification = new Notification("tmux-web", {
+      body: (activeSessionName || "A session") + " needs your attention",
+    });
+    notification.onclick = () => {
+      window.focus();
+      notification.close();
+    };
+  }
+}
 
 function apiFetch(path, options) {
   const headers = Object.assign({}, (options && options.headers) || {}, {
@@ -266,11 +377,12 @@ function attachToSession(session) {
   activeSessionName = session.name;
   emptyStateEl.style.display = "none";
 
-  term = new Terminal({ cursorBlink: true, fontSize: 14 });
+  term = new Terminal({ cursorBlink: true, fontSize: 14, bellStyle: "none" });
   fitAddon = new FitAddon.FitAddon();
   term.loadAddon(fitAddon);
   term.open(terminalEl);
   fitAddon.fit();
+  term.onBell(() => handleBell());
 
   const wsProtocol = location.protocol === "https:" ? "wss:" : "ws:";
   const url =
@@ -328,6 +440,7 @@ function detachTerminal() {
   activeSessionName = null;
   emptyStateEl.style.display = "block";
   highlightActiveSession();
+  restoreTitle();
 
   stopChangesPolling();
   expandedDiffKey = null;
