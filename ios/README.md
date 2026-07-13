@@ -2,8 +2,8 @@
 
 A native SwiftUI client for [tmux-web](../README.md) — same project → session →
 terminal flow as the browser UI, but native on iPhone. It talks to the
-**existing** tmux-web server (`../src/`) over its REST API and `/ws`
-WebSocket; no server changes are required.
+**existing** tmux-web server (`../src/`) over its REST API and its `/ws` and
+`/ws/logs` WebSockets; no server changes are required.
 
 **This app only makes sense reachable over your VPN** (WireGuard, Tailscale,
 etc.) — see the main [README's security model](../README.md#security-model--read-this-before-deploying).
@@ -92,25 +92,41 @@ TmuxWebClient/
   App/            app entry point, root navigation
   Models/         Codable types mirroring ../src/*.ts response shapes
   Networking/      APIClient (REST), TerminalSocket (WebSocket <-> SwiftTerm),
+                   LogsSocket (read-only WebSocket for docker compose logs),
                    ClientMessage (input/resize wire protocol)
   Storage/        KeychainStore (token), ConnectionSettingsStore (host/port)
   Views/
     Settings/      first-run server URL + token entry
     Projects/       project list, new-project sheet
     Sessions/       session list per project, new-session sheet, force-delete
-    Terminal/       SwiftTerm-backed terminal screen + custom keyboard bar
-    Changes/        git changes/diff sidebar (parity feature, secondary)
+    Terminal/       SwiftTerm-backed terminal screen, custom keyboard bar,
+                    per-session environment bar (Setup/Stop/Open/Logs)
+    Changes/        git changes/diff viewer -- grouped by folder, pushes to
+                    a colored diff screen per file
 TmuxWebClientTests/  Swift Testing: wire-protocol codec, APIClient, KeychainStore
 ```
+
+## Ported from the web UI
+
+- **Per-session environments** (see the main [README's
+  section](../README.md#per-session-environments-docker-compose)): the
+  environment bar above the terminal polls status every 3s and offers
+  Setup/Stop, same as the web UI. **Open** launches the resolved URL in the
+  device's default browser (`UIApplication.shared.open`) rather than
+  forcing Chrome specifically -- it respects whatever browser the user has
+  set as default on their iPhone. **Logs** streams `docker compose logs -f`
+  over `/ws/logs` into a read-only terminal, presented as a sheet instead
+  of the web's modal overlay.
+- **Git changes/diff**: unlike the web UI's permanent sidebar with an
+  inline single-expand diff panel, tapping a file here pushes a dedicated
+  diff screen -- a permanent side panel doesn't fit an iPhone's width, and
+  push navigation gives "one diff open at a time" without extra state.
 
 ## What's deliberately NOT here (yet)
 
 - No App Store distribution — this is a personal shell client tied to your
   own server and token; see the main plan discussion for why TestFlight
   internal / device-only install is the recommended path instead.
-- No environment (docker-compose) tab — the web UI's "Setup Environment"
-  feature isn't ported; use the browser UI or the terminal itself for that
-  for now.
 - No background execution — iOS suspends the WebSocket when the app is
   backgrounded. The app reconnects (re-attaches, same as `tmux attach`)
   when it returns to the foreground; tmux itself keeps the session alive
