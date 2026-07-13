@@ -42,7 +42,7 @@ export interface ServerDeps {
     mode: DiffMode,
   ) => Promise<FileDiff>;
 
-  getProjectSessionEnvStatus: (project: Project, sessionSlug: string) => Promise<EnvStatus>;
+  getProjectSessionEnvStatus: (project: Project, sessionSlug: string, requestHost?: string) => Promise<EnvStatus>;
   startProjectSessionEnv: (project: Project, sessionSlug: string) => Promise<void>;
   stopProjectSessionEnv: (project: Project, sessionSlug: string) => Promise<void>;
 }
@@ -74,6 +74,23 @@ async function readJsonBody(req: IncomingMessage): Promise<unknown> {
 
 function isAuthorized(req: IncomingMessage, token: string): boolean {
   return verifyToken(extractBearerToken(req.headers.authorization), token);
+}
+
+// Derives the "Open" URL's host from whatever address the browser is
+// CURRENTLY using to reach tmux-web itself (127.0.0.1, a LAN IP, a VPN IP,
+// ...), read straight off the request's Host header -- so the generated
+// session URL always matches, instead of a hardcoded "localhost" that only
+// works when tmux-web and the browser are on the very same machine. Wrapped
+// in a URL parse (not a manual split) so IPv6 literals like "[::1]:5309"
+// aren't mangled by naively splitting on ":".
+function extractRequestHost(req: IncomingMessage): string | undefined {
+  const hostHeader = req.headers.host;
+  if (!hostHeader) return undefined;
+  try {
+    return new URL(`http://${hostHeader}`).hostname;
+  } catch {
+    return undefined;
+  }
 }
 
 // Maps errors from the project/session/worktree layers onto HTTP status
@@ -282,7 +299,7 @@ export function createServer(deps: ServerDeps): Server {
 
         if (req.method === "GET") {
           try {
-            const status = await deps.getProjectSessionEnvStatus(project, sessionSlug);
+            const status = await deps.getProjectSessionEnvStatus(project, sessionSlug, extractRequestHost(req));
             return sendJson(res, 200, status);
           } catch (error) {
             if (sendMappedError(res, error)) return;

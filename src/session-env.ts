@@ -60,11 +60,19 @@ async function resolveOpenUrl(
   deps: SessionEnvDeps,
   ctx: ComposeContext,
   config: EnvConfig,
+  requestHost?: string,
 ): Promise<string | undefined> {
   if (!config.openService || config.openPort == null) return undefined;
   const hostPort = await deps.composePort(ctx, config.openService, config.openPort);
   if (hostPort == null) return undefined;
-  return `http://${deps.openHost ?? "localhost"}:${hostPort}`;
+  // requestHost (the Host header of whatever request asked for this status --
+  // see server.ts) wins: it's whatever address the browser is CURRENTLY using
+  // to reach tmux-web itself (127.0.0.1, a LAN IP, a VPN IP, ...), so the
+  // "Open" link keeps working no matter which of those the user is on right
+  // now. deps.openHost is a static fallback for callers that don't have a
+  // request (e.g. tests, or a future non-HTTP caller); "localhost" is the
+  // last resort when neither is available.
+  return `http://${requestHost ?? deps.openHost ?? "localhost"}:${hostPort}`;
 }
 
 export async function requireConfig(
@@ -100,6 +108,7 @@ export async function getSessionEnvStatus(
   sessionSlug: string,
   deps: SessionEnvDeps,
   store: SessionEnvStore,
+  requestHost?: string,
 ): Promise<EnvStatus> {
   const fullName = buildSessionName(project.id, sessionSlug);
   const worktreePath = resolveWorktreePath(project.id, sessionSlug, deps.worktreesRoot);
@@ -115,13 +124,13 @@ export async function getSessionEnvStatus(
   const services = await safeComposePs(deps, ctx);
 
   if (transient?.phase === "error") {
-    const openUrl = services.length ? await resolveOpenUrl(deps, ctx, config) : undefined;
+    const openUrl = services.length ? await resolveOpenUrl(deps, ctx, config, requestHost) : undefined;
     return { phase: "error", message: transient.message, services: services.length ? services : undefined, openUrl };
   }
 
   if (services.length === 0) return { phase: "idle" };
 
-  const openUrl = await resolveOpenUrl(deps, ctx, config);
+  const openUrl = await resolveOpenUrl(deps, ctx, config, requestHost);
   return { phase: "running", openUrl, services };
 }
 

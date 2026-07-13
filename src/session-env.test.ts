@@ -122,6 +122,33 @@ test("getSessionEnvStatus derives 'running' + openUrl live from docker, without 
   assert.deepEqual(status.services, services);
 });
 
+test("getSessionEnvStatus builds openUrl from the given requestHost instead of hardcoded localhost", async () => {
+  const services: ComposeServiceStatus[] = [{ service: "web", state: "running" }];
+  const deps = makeDeps({
+    composePs: async () => services,
+    composePort: async (_ctx, service, port) => (service === "web" && port === 3000 ? 54321 : null),
+  });
+  const store = createSessionEnvStore();
+
+  const status = await getSessionEnvStatus(PROJECT, "feature-x", deps, store, "10.8.0.2");
+
+  assert.equal(status.openUrl, "http://10.8.0.2:54321");
+});
+
+test("getSessionEnvStatus falls back to deps.openHost, then localhost, when no requestHost is given", async () => {
+  const services: ComposeServiceStatus[] = [{ service: "web", state: "running" }];
+  const deps = makeDeps({
+    composePs: async () => services,
+    composePort: async () => 54321,
+    openHost: "192.168.1.50",
+  });
+  const store = createSessionEnvStore();
+
+  const status = await getSessionEnvStatus(PROJECT, "feature-x", deps, store);
+
+  assert.equal(status.openUrl, "http://192.168.1.50:54321");
+});
+
 test("startSessionEnv throws EnvUnavailableError when the project hasn't opted in", async () => {
   const deps = makeDeps({ loadEnvConfig: async () => null });
   const store = createSessionEnvStore();
