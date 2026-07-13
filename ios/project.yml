@@ -21,18 +21,28 @@ targets:
     info:
       path: TmuxWebClient/Resources/Info.plist
       properties:
+        CFBundleDisplayName: tmux-web
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: false
+        NSFaceIDUsageDescription: Used to protect access to your tmux-web server token.
         UILaunchScreen: {}
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
           - UIInterfaceOrientationLandscapeLeft
           - UIInterfaceOrientationLandscapeRight
+        NSAppTransportSecurity:
+          NSExceptionDomains:
+            10.8.0.2:
+              NSExceptionAllowsInsecureHTTPLoads: true
+              NSExceptionRequiresForwardSecrecy: false
+              NSIncludesSubdomains: false
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.tanyudii.tmuxwebclient
         SWIFT_VERSION: "5.0"
         MARKETING_VERSION: "0.1.0"
         CURRENT_PROJECT_VERSION: "1"
-        TARGETED_DEVICE_FAMILY: "1"
+        TARGETED_DEVICE_FAMILY: "1,2"
         DEVELOPMENT_TEAM: ""
         CODE_SIGN_STYLE: Automatic
 
@@ -46,6 +56,7 @@ targets:
     settings:
       base:
         SWIFT_VERSION: "5.0"
+        GENERATE_INFOPLIST_FILE: YES
 
 schemes:
   TmuxWebClient:
