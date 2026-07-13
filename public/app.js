@@ -27,6 +27,9 @@ const backToProjectsBtn = document.getElementById("back-to-projects");
 const projectDetailTitle = document.getElementById("project-detail-title");
 const sessionListEl = document.getElementById("session-list");
 const newSessionBtn = document.getElementById("new-session");
+const newSessionSpinner = document.getElementById("new-session-spinner");
+const newSessionLabel = document.getElementById("new-session-label");
+const newSessionHint = document.getElementById("new-session-hint");
 const terminalEl = document.getElementById("terminal");
 const emptyStateEl = document.getElementById("empty-state");
 
@@ -51,6 +54,7 @@ let fitAddon = null;
 let sessionPollTimer = null;
 let changesPollTimer = null;
 let envPollTimer = null;
+let isCreatingSession = false;
 let expandedDiffKey = null; // "mode:path" of the single currently-open inline diff, or null
 
 // --- Bell notifications (sound + title flash when this tab isn't the one
@@ -343,22 +347,42 @@ function renderSessionList(sessions) {
   }
 }
 
+// Creating a session runs `git fetch origin` + `git worktree add` on the
+// server before it responds (see worktree.ts) -- on a large repo or slow
+// connection that can take several seconds, so this button needs its own
+// pending state or it just looks stuck for a while.
+function setNewSessionPending(pending) {
+  newSessionBtn.disabled = pending;
+  newSessionSpinner.hidden = !pending;
+  newSessionLabel.textContent = pending ? "Creating…" : "+ New session";
+  newSessionHint.hidden = !pending;
+}
+
 newSessionBtn.addEventListener("click", async () => {
+  if (isCreatingSession) return;
   const name = window.prompt("New session name (becomes a git branch + worktree):");
   if (!name) return;
-  const res = await apiFetch(projectSessionsUrl(""), {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name }),
-  });
-  if (!res.ok) {
-    const body = await res.json().catch(() => ({}));
-    window.alert("Could not create session: " + (body.error || res.status));
-    return;
+
+  isCreatingSession = true;
+  setNewSessionPending(true);
+  try {
+    const res = await apiFetch(projectSessionsUrl(""), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name }),
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      window.alert("Could not create session: " + (body.error || res.status));
+      return;
+    }
+    const session = await res.json();
+    await refreshSessions();
+    attachToSession(session);
+  } finally {
+    isCreatingSession = false;
+    setNewSessionPending(false);
   }
-  const session = await res.json();
-  await refreshSessions();
-  attachToSession(session);
 });
 
 async function killSession(name) {
