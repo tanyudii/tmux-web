@@ -21,10 +21,16 @@ system rather than adding a client library.
   server, registered once via the UI and persisted to
   `~/.tmux-web/projects.json`.
 - **Sessions belong to a project.** Creating one slugifies the name into a
-  branch name, runs `git worktree add -b <branch> ~/.tmux-web/worktrees/<projectId>/<branch>`,
-  then starts a real `tmux` session with its working directory set to that
-  worktree (`tmux new-session -c <worktree>`). Killing a session kills the
-  tmux session, then removes the worktree — but **not** the branch, so your
+  branch name, resolves the project's `origin` remote default branch
+  (`git ls-remote --symref origin HEAD` — works for `main`, `master`, or
+  any other name, not hardcoded), fetches it, then runs
+  `git worktree add -b <branch> ~/.tmux-web/worktrees/<projectId>/<branch> origin/<default-branch>`.
+  New sessions always start from the latest pushed `origin` state, not
+  whatever happens to be checked out locally (or uncommitted/unpushed
+  local work) in the project's repo. It then starts a real `tmux` session
+  with its working directory set to that worktree
+  (`tmux new-session -c <worktree>`). Killing a session kills the tmux
+  session, then removes the worktree — but **not** the branch, so your
   commits survive even after the session is gone.
 - Every "session" in the sidebar is a real `tmux` session — this tool never
   reimplements session persistence. It just runs `tmux attach-session`
