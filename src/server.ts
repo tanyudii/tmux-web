@@ -7,6 +7,13 @@ import { ProjectValidationError, type Project } from "./projects.ts";
 import { WorktreeConflictError, DirtyWorktreeError } from "./worktree.ts";
 import { WorktreeNotFoundError, GitStatusError, type GroupedChanges, type FileDiff, type DiffMode } from "./git-status.ts";
 import type { ProjectSession } from "./project-sessions.ts";
+import {
+  EnvUnavailableError,
+  EnvAlreadyRunningError,
+  EnvNotRunningError,
+  type EnvStatus,
+} from "./session-env.ts";
+import { EnvConfigError } from "./env-config.ts";
 
 const DIFF_MODES: readonly DiffMode[] = ["staged", "unstaged", "untracked"];
 
@@ -34,6 +41,10 @@ export interface ServerDeps {
     filePath: string,
     mode: DiffMode,
   ) => Promise<FileDiff>;
+
+  getProjectSessionEnvStatus: (project: Project, sessionSlug: string) => Promise<EnvStatus>;
+  startProjectSessionEnv: (project: Project, sessionSlug: string) => Promise<void>;
+  stopProjectSessionEnv: (project: Project, sessionSlug: string) => Promise<void>;
 }
 
 const MIME_TYPES: Record<string, string> = {
@@ -81,8 +92,16 @@ function sendMappedError(res: ServerResponse, error: unknown): boolean {
     sendJson(res, 400, { error: error.message });
     return true;
   }
-  if (error instanceof WorktreeNotFoundError) {
+  if (error instanceof WorktreeNotFoundError || error instanceof EnvUnavailableError) {
     sendJson(res, 404, { error: error.message });
+    return true;
+  }
+  if (error instanceof EnvAlreadyRunningError || error instanceof EnvNotRunningError) {
+    sendJson(res, 409, { error: error.message });
+    return true;
+  }
+  if (error instanceof EnvConfigError) {
+    sendJson(res, 400, { error: error.message });
     return true;
   }
   return false;
@@ -250,6 +269,47 @@ export function createServer(deps: ServerDeps): Server {
           if (sendMappedError(res, error)) return;
           throw error;
         }
+      }
+
+      const envMatch = path.match(/^\/api\/projects\/([^/]+)\/sessions\/([^/]+)\/env$/);
+      if (envMatch && (req.method === "GET" || req.method === "POST" || req.method === "DELETE")) {
+        if (!isAuthorized(req, deps.token)) return sendEmpty(res, 401);
+
+        const project = await deps.getProject(decodeURIComponent(envMatch[1]));
+        if (!project) return sendJson(res, 404, { error: "Project not found" });
+
+        const sessionSlug = decodeURIComponent(envMatch[2]);
+
+        if (req.method === "GET") {
+          try {
+            const status = await deps.getProjectSessionEnvStatus(project, sessionSlug);
+            return sendJson(res, 200, status);
+          } catch (error) {
+            if (sendMappedError(res, error)) return;
+            throw error;
+          }
+        }
+
+        if (req.method === "POST") {
+          try {
+            // startProjectSessionEnv only awaits the fast eligibility
+            // checks -- the actual docker-compose setup keeps running in
+            // the background, observed by polling GET .../env.
+            await deps.startProjectSessionEnv(project, sessionSlug);
+          } catch (error) {
+            if (sendMappedError(res, error)) return;
+            throw error;
+          }
+          return sendEmpty(res, 202);
+        }
+
+        try {
+          await deps.stopProjectSessionEnv(project, sessionSlug);
+        } catch (error) {
+          if (sendMappedError(res, error)) return;
+          throw error;
+        }
+        return sendEmpty(res, 204);
       }
 
       if (deps.publicDir && req.method === "GET") {

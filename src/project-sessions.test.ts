@@ -181,6 +181,41 @@ test("killProjectSession rethrows unexpected killSession errors", async () => {
   await assert.rejects(() => killProjectSession(PROJECT, "feature-x", deps), /permission denied/);
 });
 
+test("killProjectSession tears down the session's docker-compose environment before removing the worktree", async () => {
+  const calls: string[] = [];
+  const deps = makeDeps({
+    killSession: async () => {
+      calls.push("kill");
+    },
+    stopSessionEnv: async (project, sessionSlug) => {
+      calls.push(`stopEnv:${project.id}:${sessionSlug}`);
+    },
+    removeWorktree: async () => {
+      calls.push("remove");
+    },
+  });
+
+  await killProjectSession(PROJECT, "feature-x", deps);
+
+  assert.deepEqual(calls, ["kill", "stopEnv:proj1-ab12cd:feature-x", "remove"]);
+});
+
+test("killProjectSession tolerates stopSessionEnv failing (best-effort teardown)", async () => {
+  const removeCalls: string[] = [];
+  const deps = makeDeps({
+    stopSessionEnv: async () => {
+      throw new Error("no environment for this session");
+    },
+    removeWorktree: async (_repoPath, worktreePath) => {
+      removeCalls.push(worktreePath);
+    },
+  });
+
+  await killProjectSession(PROJECT, "feature-x", deps);
+
+  assert.deepEqual(removeCalls, ["/data/worktrees/proj1-ab12cd/feature-x"]);
+});
+
 test("getProjectSessionChanges resolves the worktree path and delegates to getChangedFiles", async () => {
   const calls: string[] = [];
   const grouped = { staged: [], unstaged: [], untracked: [] };
