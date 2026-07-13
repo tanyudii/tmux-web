@@ -11,6 +11,7 @@
     "postinstall": "node scripts/copy-vendor.mjs",
     "start": "node --experimental-strip-types src/main.ts",
     "dev": "node --experimental-strip-types --watch src/main.ts",
+    "install-service": "node scripts/install-service.mjs",
     "test": "node --experimental-strip-types --test src/*.test.ts public/*.test.js",
     "test:coverage": "node --experimental-strip-types --test --experimental-test-coverage src/*.test.ts public/*.test.js",
     "typecheck": "tsc --noEmit"
