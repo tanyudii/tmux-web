@@ -630,3 +630,114 @@ theme (same `--panel`/`--border`/`--accent`/`--danger` tokens as
   remaining gap: the user (or a future debugging session) can now tell
   which case occurred just by looking at the screen, without needing
   DevTools.
+
+## Feature addendum: force local text selection when tmux mouse mode is on
+
+**Source plan**: no `*.plan.md` file — produced inline via `/ecc:plan` +
+follow-up debugging after the toast/fallback-box feedback (previous
+addendum above) surfaced the real signal: the user reported tmux's own
+status message ("copied to tmux buffer, paste with prefix + ]") instead
+of this app's toast, meaning the browser-level copy handler never ran at
+all.
+
+### Root cause
+
+Read xterm.js's actual source
+(`node_modules/@xterm/xterm/src/browser/services/SelectionService.ts`)
+rather than assuming: when the foreground shell program enables mouse
+reporting (`set -g mouse on` in `tmux.conf`), xterm.js's own
+`SelectionService.disable()` is called (`Terminal.ts`), and every
+click-drag is forwarded to the PTY instead of being handled as a local
+browser selection. tmux then intercepts the drag itself, running its own
+copy-mode and stashing the result in tmux's internal buffer (not the
+browser/OS clipboard) — which is exactly the "copied to tmux buffer"
+message the user saw. Because xterm.js never registered a local
+selection, `activeTerm.hasSelection()` was always `false`, so this app's
+Cmd+C handler correctly did nothing (by design) — there was nothing
+browser-side to copy.
+
+xterm.js has a built-in override for this (`shouldForceSelection` in the
+same file), but it is **platform-dependent**:
+
+```ts
+public shouldForceSelection(event: MouseEvent): boolean {
+  if (Browser.isMac) {
+    return event.altKey && this._optionsService.rawOptions.macOptionClickForcesSelection;
+  }
+  return event.shiftKey;
+}
+```
+
+On Windows/Linux, Shift+drag forces local selection with no config
+needed. On macOS, it's **Option+drag** — and only if
+`macOptionClickForcesSelection` is explicitly turned on
+(`common/services/OptionsService.ts` defaults it to `false` upstream).
+`public/app.js` never set this option, so on macOS specifically there was
+**no key combination at all** that could force local selection while
+tmux's mouse mode was active. (An earlier reply in this debugging session
+incorrectly suggested Shift+drag on Mac before this was checked against
+the actual xterm.js source — corrected once the source was read.)
+
+### User journey
+
+28. As a macOS user with `mouse` enabled in `tmux.conf`, I want a way to
+    select terminal text locally in the browser (for this app's Cmd+C
+    handling to pick up), matching the Option+drag convention native
+    macOS terminal apps (iTerm2, Terminal.app) already use for the same
+    situation.
+
+### Task report
+
+| Journey | Summary | Validation command | Result |
+|---|---|---|---|
+| 28 | `public/app.js`: `Terminal` constructor now sets `macOptionClickForcesSelection: true` | manual browser verification (below) | PASS |
+| 28 | `README.md` and a `title` tooltip on `#terminal` document the Option(Mac)/Shift(other) override, so this isn't only discoverable by reading source | manual read-through | PASS |
+| — | Full suite unaffected | `npm test` | GREEN (250 pass, 0 fail) |
+| — | Typecheck unaffected | `npm run typecheck` | PASS (clean) |
+
+### Manual verification (real browser, real tmux mouse mode, macOS platform simulated)
+
+Server bound to this host's real WireGuard IP (as in the prior addendum),
+driven by a real headless Chromium via `playwright-core`, with
+`navigator.platform` overridden to `"MacIntel"` (via `addInitScript`, set
+before any page script runs) so xterm.js's `Browser.isMac` check takes
+the same branch a real Mac user would hit. Inside the attached session,
+ran `tmux set -g mouse on` to reproduce the reported environment, then:
+
+1. **Plain drag, no modifier**: selected a line of real command output
+   with an ordinary mouse drag, then pressed Cmd+C. Result: the Cmd+C
+   `keydown` event's `defaultPrevented` was `false` (confirmed via an
+   injected `keydown` listener) and the copy toast never appeared —
+   i.e. this app's handler correctly did nothing, matching the
+   now-understood root cause (tmux owns the drag, not the browser).
+2. **Option+drag** (the fix): same flow, but held `Alt`
+   (Playwright's modifier name for the physical Option key on macOS)
+   during the drag. Result: `defaultPrevented` was `true` on the
+   resulting Cmd+C, and the `"Copied"` toast appeared — confirmed via
+   screenshot that no tmux status-line copy message appeared in the pane
+   (the event never reached tmux, since `SelectionService` calls
+   `event.stopPropagation()` when force-selecting while disabled).
+
+### Test specification
+
+| # | What is guaranteed | Test file | Type | Result |
+|---|--------------------|-----------|------|--------|
+| — | With tmux mouse mode on, an unmodified drag-select does not trigger this app's copy handler (`defaultPrevented` stays `false`, no toast) | manual (Playwright-driven Chromium, `navigator.platform` spoofed to macOS, real `tmux set -g mouse on`) | e2e | PASS |
+| — | With tmux mouse mode on, Option+drag (macOS) forces local selection and this app's existing Cmd+C handling completes successfully (`"Copied"` toast) | manual (same setup) | e2e | PASS |
+
+### Known, intentional gap
+
+- Not covered by an automated test, same reasoning as the prior
+  addendum (no browser test runner in this project). This scenario is
+  also inherently harder to unit-test than the pure `terminal-clipboard.js`
+  functions, since it depends on xterm.js's internal `SelectionService`
+  and a real PTY running `tmux` with mouse mode on — an integration test
+  for it would need a fuller browser-test harness than this project
+  currently has.
+- This fix does not change behavior when mouse mode is on and no
+  modifier is held — that drag still goes to tmux, by design (mouse mode
+  is usually enabled on purpose, e.g. for pane resize/click-to-switch/
+  scroll-to-scrollback, and this app has no way to distinguish "user
+  wants to select text" from "user wants a mouse-mode interaction" other
+  than the modifier key convention every other terminal app already
+  uses).
