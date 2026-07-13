@@ -34,6 +34,13 @@ const changesBodyEl = document.getElementById("changes-body");
 const toggleChangesBtn = document.getElementById("toggle-changes");
 const toggleNotifyBtn = document.getElementById("toggle-notify");
 
+const envBar = document.getElementById("env-bar");
+const envStatusBadge = document.getElementById("env-status-badge");
+const envMessageEl = document.getElementById("env-message");
+const envSetupBtn = document.getElementById("env-setup-btn");
+const envStopBtn = document.getElementById("env-stop-btn");
+const envOpenLink = document.getElementById("env-open-link");
+
 let token = sessionStorage.getItem(TOKEN_KEY) || "";
 let currentProject = null; // { id, name, repoPath, createdAt }
 let activeSessionName = null; // display name (slug), not the full tmux name
@@ -42,6 +49,7 @@ let term = null;
 let fitAddon = null;
 let sessionPollTimer = null;
 let changesPollTimer = null;
+let envPollTimer = null;
 let expandedDiffKey = null; // "mode:path" of the single currently-open inline diff, or null
 
 // --- Bell notifications (sound + title flash when this tab isn't the one
@@ -413,6 +421,9 @@ function attachToSession(session) {
   expandedDiffKey = null;
   refreshChanges();
   changesPollTimer = setInterval(refreshChanges, 5000);
+
+  refreshEnvStatus();
+  envPollTimer = setInterval(refreshEnvStatus, 3000);
 }
 
 function sendResize() {
@@ -445,6 +456,9 @@ function detachTerminal() {
   stopChangesPolling();
   expandedDiffKey = null;
   changesBodyEl.textContent = "";
+
+  stopEnvPolling();
+  envBar.style.display = "none";
 }
 
 // --- Changes sidebar (right) ---
@@ -638,6 +652,86 @@ function renderDiffLines(diffText) {
   }
   return container;
 }
+
+// --- Environment setup (docker-compose, one-click per session) ---
+
+const ENV_PHASE_LABELS = {
+  idle: "Idle",
+  starting: "Starting…",
+  running: "Running",
+  error: "Error",
+  stopping: "Stopping…",
+};
+
+function envSessionUrl() {
+  return projectSessionsUrl("/" + encodeURIComponent(activeSessionName) + "/env");
+}
+
+function stopEnvPolling() {
+  if (envPollTimer) clearInterval(envPollTimer);
+  envPollTimer = null;
+}
+
+async function refreshEnvStatus() {
+  if (!currentProject || !activeSessionName) return;
+  const res = await apiFetch(envSessionUrl());
+  if (res.status === 401) {
+    sessionStorage.removeItem(TOKEN_KEY);
+    location.reload();
+    return;
+  }
+  if (!res.ok) return; // e.g. 404 if the worktree just got removed elsewhere
+  renderEnvBar(await res.json());
+}
+
+function renderEnvBar(status) {
+  if (status.phase === "unavailable") {
+    envBar.style.display = "none";
+    return;
+  }
+
+  envBar.style.display = "flex";
+  envStatusBadge.textContent = ENV_PHASE_LABELS[status.phase] || status.phase;
+  envStatusBadge.className = "env-status-badge phase-" + status.phase;
+  envMessageEl.textContent = status.message || "";
+
+  envSetupBtn.style.display = status.phase === "idle" ? "inline-block" : "none";
+  envStopBtn.style.display = status.phase === "running" || status.phase === "error" ? "inline-block" : "none";
+
+  if (status.openUrl) {
+    envOpenLink.href = status.openUrl;
+    envOpenLink.style.display = "inline-block";
+  } else {
+    envOpenLink.style.display = "none";
+  }
+}
+
+envSetupBtn.addEventListener("click", async () => {
+  envSetupBtn.disabled = true;
+  const res = await apiFetch(envSessionUrl(), { method: "POST" });
+  envSetupBtn.disabled = false;
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    window.alert("Could not start environment: " + (body.error || res.status));
+    return;
+  }
+  await refreshEnvStatus();
+});
+
+envStopBtn.addEventListener("click", async () => {
+  if (!window.confirm("Stop this session's environment? This runs `docker compose down -v`, removing its containers and volumes.")) {
+    return;
+  }
+  envStopBtn.disabled = true;
+  const res = await apiFetch(envSessionUrl(), { method: "DELETE" });
+  envStopBtn.disabled = false;
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    window.alert("Could not stop environment: " + (body.error || res.status));
+    return;
+  }
+  await refreshEnvStatus();
+});
 
 if (token) {
   tryLogin(token).then((ok) => {

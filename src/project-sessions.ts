@@ -21,6 +21,10 @@ export interface ProjectSessionsDeps {
   removeWorktree: (repoPath: string, worktreePath: string, options?: RemoveWorktreeOptions) => Promise<void>;
   getChangedFiles: (worktreePath: string) => Promise<GroupedChanges>;
   getFileDiff: (worktreePath: string, filePath: string, mode: DiffMode) => Promise<FileDiff>;
+  // Optional: tears down the session's docker-compose environment (see
+  // session-env.ts). Best-effort -- a session with no environment, or a
+  // docker daemon that's gone away, must not block killing the session.
+  stopSessionEnv?: (project: Project, sessionSlug: string) => Promise<void>;
   worktreesRoot?: string;
 }
 
@@ -100,6 +104,10 @@ export async function killProjectSession(
     // after an earlier attempt killed the session but failed to remove a
     // dirty worktree.
     if (!SESSION_ALREADY_GONE_PATTERN.test(message)) throw error;
+  }
+
+  if (deps.stopSessionEnv) {
+    await deps.stopSessionEnv(project, sessionSlug).catch(() => {});
   }
 
   const worktreePath = resolveWorktreePath(project.id, sessionSlug, deps.worktreesRoot);
