@@ -63,6 +63,28 @@ function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+// Matches the `ref: refs/heads/<branch>\tHEAD` line `git ls-remote --symref`
+// prints for the remote's default branch (e.g. "main", "master", "trunk").
+const ORIGIN_HEAD_SYMREF_PATTERN = /^ref:\s+refs\/heads\/(\S+)\s+HEAD/m;
+
+export async function resolveOriginDefaultBranch(
+  repoPath: string,
+  exec: ExecFn = defaultExec,
+): Promise<string> {
+  let stdout: string;
+  try {
+    ({ stdout } = await exec("git", ["-C", repoPath, "ls-remote", "--symref", "origin", "HEAD"]));
+  } catch (error) {
+    throw new WorktreeError(`Failed to resolve default branch from origin: ${messageOf(error)}`);
+  }
+
+  const match = stdout.match(ORIGIN_HEAD_SYMREF_PATTERN);
+  if (!match) {
+    throw new WorktreeError(`Could not determine origin's default branch from ls-remote output: ${stdout.trim()}`);
+  }
+  return match[1];
+}
+
 export async function addWorktree(
   repoPath: string,
   worktreePath: string,
@@ -71,10 +93,21 @@ export async function addWorktree(
 ): Promise<void> {
   await pruneWorktrees(repoPath, exec);
 
+  const baseBranch = await resolveOriginDefaultBranch(repoPath, exec);
+
   try {
     await exec("git", [
       "-C", repoPath,
-      "worktree", "add", "--no-track", "-b", branchName, worktreePath, "HEAD",
+      "fetch", "origin", `${baseBranch}:refs/remotes/origin/${baseBranch}`,
+    ]);
+  } catch (error) {
+    throw new WorktreeError(`Failed to fetch origin/${baseBranch}: ${messageOf(error)}`);
+  }
+
+  try {
+    await exec("git", [
+      "-C", repoPath,
+      "worktree", "add", "--no-track", "-b", branchName, worktreePath, `origin/${baseBranch}`,
     ]);
   } catch (error) {
     const stderr = stderrOf(error);
