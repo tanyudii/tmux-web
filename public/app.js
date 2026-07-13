@@ -6,11 +6,12 @@
 // transpile step, just a native <script type="module">.
 
 import { parseMuted, buildBellTitle, shouldPlayBellAlert } from "./notify.js";
-import { isCopyShortcut } from "./terminal-clipboard.js";
+import { isCopyShortcut, copyResultMessage } from "./terminal-clipboard.js";
 
 const TOKEN_KEY = "tmux-web-token";
 const NOTIFY_MUTE_KEY = "tmux-web-notify-muted";
 const BELL_COOLDOWN_MS = 1500;
+const COPY_TOAST_DURATION_MS = 1800;
 
 const loginForm = document.getElementById("login");
 const tokenInput = document.getElementById("token");
@@ -29,6 +30,10 @@ const sessionListEl = document.getElementById("session-list");
 const newSessionBtn = document.getElementById("new-session");
 const terminalEl = document.getElementById("terminal");
 const emptyStateEl = document.getElementById("empty-state");
+const copyToastEl = document.getElementById("copy-toast");
+const copyFallbackEl = document.getElementById("copy-fallback");
+const copyFallbackInputEl = document.getElementById("copy-fallback-input");
+const copyFallbackCloseBtn = document.getElementById("copy-fallback-close");
 
 const changesSidebar = document.getElementById("changes-sidebar");
 const changesBodyEl = document.getElementById("changes-body");
@@ -451,14 +456,21 @@ function handleTerminalKeyEvent(activeTerm, event) {
 
 function copyToClipboard(activeTerm, text) {
   if (navigator.clipboard?.writeText) {
-    navigator.clipboard.writeText(text).catch(() => copyToClipboardFallback(activeTerm, text));
+    navigator.clipboard.writeText(text).then(
+      () => showCopyToast(true),
+      () => copyToClipboardFallback(activeTerm, text),
+    );
   } else {
     copyToClipboardFallback(activeTerm, text);
   }
 }
 
-// navigator.clipboard.writeText needs a secure context (HTTPS/localhost).
-// Fall back to the legacy execCommand path for plain-HTTP deployments.
+// navigator.clipboard.writeText needs a secure context (HTTPS/localhost),
+// which this app's own README steers deployments away from (recommending a
+// plain-HTTP WireGuard/Tailscale tunnel instead). Fall back to the legacy
+// execCommand path -- and if even that fails, hand the user a normal,
+// focused, pre-selected text box: the browser's native Cmd+C handling for
+// editable elements isn't gated by any of the above.
 function copyToClipboardFallback(activeTerm, text) {
   const scratch = document.createElement("textarea");
   scratch.value = text;
@@ -476,8 +488,50 @@ function copyToClipboardFallback(activeTerm, text) {
   // execCommand("copy") moves focus onto the scratch textarea; move it back
   // to the terminal's own input so keystrokes keep reaching the shell.
   activeTerm.focus();
-  if (!copied) console.warn("tmux-web: copy to clipboard failed");
+
+  if (copied) {
+    showCopyToast(true);
+  } else {
+    console.warn("tmux-web: copy to clipboard failed");
+    showCopyFallbackBox(text);
+  }
 }
+
+let copyToastTimer = null;
+
+function showCopyToast(success) {
+  if (success) hideCopyFallbackBox();
+  copyToastEl.textContent = copyResultMessage(success);
+  copyToastEl.classList.toggle("copy-toast-error", !success);
+  copyToastEl.style.display = "block";
+  clearTimeout(copyToastTimer);
+  // A failed copy stays up alongside the fallback box below until the user
+  // dismisses it or a later copy succeeds -- only auto-dismiss on success.
+  if (success) {
+    copyToastTimer = setTimeout(() => {
+      copyToastEl.style.display = "none";
+    }, COPY_TOAST_DURATION_MS);
+  }
+}
+
+function showCopyFallbackBox(text) {
+  showCopyToast(false);
+  copyFallbackInputEl.value = text;
+  copyFallbackEl.style.display = "flex";
+  copyFallbackInputEl.focus();
+  copyFallbackInputEl.select();
+}
+
+function hideCopyFallbackBox() {
+  copyFallbackEl.style.display = "none";
+  copyFallbackInputEl.value = "";
+  copyToastEl.style.display = "none";
+}
+
+copyFallbackCloseBtn.addEventListener("click", () => {
+  hideCopyFallbackBox();
+  if (term) term.focus();
+});
 
 function sendResize() {
   if (!fitAddon || !socket || socket.readyState !== WebSocket.OPEN) return;
@@ -505,6 +559,9 @@ function detachTerminal() {
   emptyStateEl.style.display = "block";
   highlightActiveSession();
   restoreTitle();
+
+  clearTimeout(copyToastTimer);
+  hideCopyFallbackBox();
 
   stopChangesPolling();
   expandedDiffKey = null;
