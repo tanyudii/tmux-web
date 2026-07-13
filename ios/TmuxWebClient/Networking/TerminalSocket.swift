@@ -98,19 +98,21 @@ final class TmuxTerminalView: TerminalView, TerminalViewDelegate {
     private func receiveLoop(task: URLSessionWebSocketTask) {
         task.receive { [weak self] result in
             guard let self, self.webSocketTask === task else { return }
-            switch result {
-            case .failure:
-                self.onConnectionStateChange?(false)
-            case .success(let message):
-                switch message {
-                case .data(let data):
-                    self.feed(byteArray: Array(data)[...])
-                case .string(let text):
-                    self.feed(byteArray: Array(text.utf8)[...])
-                @unknown default:
-                    break
+            DispatchQueue.main.async {
+                switch result {
+                case .failure:
+                    self.onConnectionStateChange?(false)
+                case .success(let message):
+                    switch message {
+                    case .data(let data):
+                        self.feed(byteArray: Array(data)[...])
+                    case .string(let text):
+                        self.feed(byteArray: Array(text.utf8)[...])
+                    @unknown default:
+                        break
+                    }
+                    self.receiveLoop(task: task)
                 }
-                self.receiveLoop(task: task)
             }
         }
     }
