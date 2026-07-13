@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { isCopyShortcut } from "./terminal-clipboard.js";
+import { isCopyShortcut, copyResultMessage } from "./terminal-clipboard.js";
 
 test("isCopyShortcut recognizes Cmd+C on keydown", () => {
   assert.equal(isCopyShortcut({ type: "keydown", metaKey: true, key: "c" }), true);
@@ -20,4 +20,12 @@ test("isCopyShortcut leaves Ctrl+C alone so it still sends SIGINT to the shell",
 
 test("isCopyShortcut ignores unrelated Cmd shortcuts", () => {
   assert.equal(isCopyShortcut({ type: "keydown", metaKey: true, key: "v" }), false);
+});
+
+test("copyResultMessage confirms success so the user knows the copy landed", () => {
+  assert.equal(copyResultMessage(true), "Copied");
+});
+
+test("copyResultMessage points at the manual fallback on failure", () => {
+  assert.equal(copyResultMessage(false), "Auto-copy failed — press Cmd+C in the box below");
 });
