@@ -8,6 +8,7 @@ import { join } from "node:path";
 import {
   resolveWorktreePath,
   isGitRepo,
+  resolveOriginDefaultBranch,
   addWorktree,
   removeWorktree,
   WorktreeError,
@@ -44,25 +45,106 @@ test("isGitRepo returns false when the exec check fails", async () => {
   assert.equal(result, false);
 });
 
-test("addWorktree prunes stale worktrees before adding a new one", async () => {
+test("resolveOriginDefaultBranch parses the branch name from `git ls-remote --symref origin HEAD`", async () => {
+  const fakeExec = async (_file: string, args: string[]) => {
+    assert.deepEqual(args, ["-C", "/repo", "ls-remote", "--symref", "origin", "HEAD"]);
+    return { stdout: "ref: refs/heads/main\tHEAD\nabc123\tHEAD\n" };
+  };
+
+  const branch = await resolveOriginDefaultBranch("/repo", fakeExec);
+  assert.equal(branch, "main");
+});
+
+test("resolveOriginDefaultBranch is not hardcoded to 'main' -- parses other default branch names", async () => {
+  const fakeExec = async () => ({ stdout: "ref: refs/heads/trunk\tHEAD\n" });
+
+  const branch = await resolveOriginDefaultBranch("/repo", fakeExec);
+  assert.equal(branch, "trunk");
+});
+
+test("resolveOriginDefaultBranch throws WorktreeError when the symref line is missing from output", async () => {
+  const fakeExec = async () => ({ stdout: "abc123\tHEAD\n" });
+
+  await assert.rejects(() => resolveOriginDefaultBranch("/repo", fakeExec), WorktreeError);
+});
+
+test("resolveOriginDefaultBranch throws WorktreeError when ls-remote against origin fails", async () => {
+  const fakeExec = async () => {
+    throw new Error("fatal: 'origin' does not appear to be a git repository");
+  };
+
+  await assert.rejects(() => resolveOriginDefaultBranch("/repo", fakeExec), WorktreeError);
+});
+
+test("addWorktree prunes, resolves origin's default branch, fetches it, then adds a worktree based on origin/<branch>", async () => {
   const calls: string[][] = [];
-  const fakeExec = async (file: string, args: string[]) => {
+  const fakeExec = async (_file: string, args: string[]) => {
     calls.push(args);
+    if (args.includes("ls-remote")) {
+      return { stdout: "ref: refs/heads/main\tHEAD\nabc123\tHEAD\n" };
+    }
     return { stdout: "" };
   };
 
   await addWorktree("/repo", "/repo-worktrees/proj1/feature-x", "feature-x", fakeExec);
 
   assert.deepEqual(calls[0], ["-C", "/repo", "worktree", "prune"]);
-  assert.deepEqual(calls[1], [
+  assert.deepEqual(calls[1], ["-C", "/repo", "ls-remote", "--symref", "origin", "HEAD"]);
+  assert.deepEqual(calls[2], ["-C", "/repo", "fetch", "origin", "main:refs/remotes/origin/main"]);
+  assert.deepEqual(calls[3], [
     "-C", "/repo",
     "worktree", "add", "--no-track", "-b", "feature-x",
-    "/repo-worktrees/proj1/feature-x", "HEAD",
+    "/repo-worktrees/proj1/feature-x", "origin/main",
   ]);
+});
+
+test("addWorktree throws WorktreeError when it cannot resolve origin's default branch", async () => {
+  const fakeExec = async (_file: string, args: string[]) => {
+    if (args.includes("ls-remote")) {
+      throw new Error("fatal: 'origin' does not appear to be a git repository");
+    }
+    return { stdout: "" };
+  };
+
+  await assert.rejects(
+    () => addWorktree("/repo", "/repo-worktrees/proj1/feature-x", "feature-x", fakeExec),
+    WorktreeError,
+  );
+});
+
+test("addWorktree throws WorktreeError when fetching origin's default branch fails", async () => {
+  const fakeExec = async (_file: string, args: string[]) => {
+    if (args.includes("ls-remote")) return { stdout: "ref: refs/heads/main\tHEAD\n" };
+    if (args.includes("fetch")) throw new Error("fatal: unable to access 'origin'");
+    return { stdout: "" };
+  };
+
+  await assert.rejects(
+    () => addWorktree("/repo", "/repo-worktrees/proj1/feature-x", "feature-x", fakeExec),
+    WorktreeError,
+  );
+});
+
+test("addWorktree throws WorktreeError for a worktree-add failure that isn't a branch conflict", async () => {
+  const fakeExec = async (_file: string, args: string[]) => {
+    if (args.includes("ls-remote")) return { stdout: "ref: refs/heads/main\tHEAD\n" };
+    if (args.includes("add")) {
+      const err = new Error("Command failed") as Error & { stderr?: string };
+      err.stderr = "fatal: no space left on device\n";
+      throw err;
+    }
+    return { stdout: "" };
+  };
+
+  await assert.rejects(
+    () => addWorktree("/repo", "/repo-worktrees/proj1/feature-x", "feature-x", fakeExec),
+    (error: unknown) => error instanceof WorktreeError && !(error instanceof WorktreeConflictError),
+  );
 });
 
 test("addWorktree throws WorktreeConflictError when the branch already exists", async () => {
   const fakeExec = async (_file: string, args: string[]) => {
+    if (args.includes("ls-remote")) return { stdout: "ref: refs/heads/main\tHEAD\n" };
     if (args.includes("add")) {
       const err = new Error("Command failed") as Error & { stderr?: string };
       err.stderr = "fatal: a branch named 'feature-x' already exists\n";
@@ -115,24 +197,38 @@ function isGitAvailable(): boolean {
 }
 
 test(
-  "real git integration: add creates a working worktree, remove is blocked when dirty and succeeds with force",
+  "real git integration: add creates a worktree from origin's default branch (not local HEAD), remove is blocked when dirty and succeeds with force",
   { skip: !isGitAvailable() },
   async () => {
+    const originPath = await mkdtemp(join(tmpdir(), "worktree-test-origin-"));
     const repoPath = await mkdtemp(join(tmpdir(), "worktree-test-repo-"));
     const worktreesRoot = await mkdtemp(join(tmpdir(), "worktree-test-root-"));
     try {
-      await execFileAsync("git", ["init", "--quiet", repoPath]);
+      // "origin" uses a default branch name other than "main" to prove
+      // resolveOriginDefaultBranch isn't hardcoded to "main".
+      await execFileAsync("git", ["init", "--quiet", "--initial-branch=trunk", originPath]);
+      await execFileAsync("git", ["-C", originPath, "config", "user.email", "test@example.com"]);
+      await execFileAsync("git", ["-C", originPath, "config", "user.name", "Test"]);
+      await writeFile(join(originPath, "README.md"), "from origin\n");
+      await execFileAsync("git", ["-C", originPath, "add", "README.md"]);
+      await execFileAsync("git", ["-C", originPath, "commit", "--quiet", "-m", "origin commit"]);
+
+      await rm(repoPath, { recursive: true, force: true });
+      await execFileAsync("git", ["clone", "--quiet", "--branch", "trunk", originPath, repoPath]);
       await execFileAsync("git", ["-C", repoPath, "config", "user.email", "test@example.com"]);
       await execFileAsync("git", ["-C", repoPath, "config", "user.name", "Test"]);
-      await writeFile(join(repoPath, "README.md"), "hello\n");
+
+      // Diverge the local clone from origin/trunk with a commit that was
+      // never pushed -- the new worktree must NOT see this content.
+      await writeFile(join(repoPath, "README.md"), "local-only change\n");
       await execFileAsync("git", ["-C", repoPath, "add", "README.md"]);
-      await execFileAsync("git", ["-C", repoPath, "commit", "--quiet", "-m", "initial commit"]);
+      await execFileAsync("git", ["-C", repoPath, "commit", "--quiet", "-m", "local-only commit"]);
 
       const worktreePath = resolveWorktreePath("proj1", "feature-x", worktreesRoot);
       await addWorktree(repoPath, worktreePath, "feature-x");
 
       const content = await readFile(join(worktreePath, "README.md"), "utf-8");
-      assert.equal(content, "hello\n");
+      assert.equal(content, "from origin\n");
 
       const { stdout: listOutput } = await execFileAsync("git", ["-C", repoPath, "worktree", "list"]);
       assert.match(listOutput, /feature-x/);
@@ -143,6 +239,7 @@ test(
       await removeWorktree(repoPath, worktreePath, { force: true });
       await assert.rejects(() => stat(worktreePath));
     } finally {
+      await rm(originPath, { recursive: true, force: true });
       await rm(repoPath, { recursive: true, force: true });
       await rm(worktreesRoot, { recursive: true, force: true });
     }
