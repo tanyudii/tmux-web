@@ -40,6 +40,8 @@ struct TerminalContainerView: View {
                     .background(.orange)
             }
 
+            EnvironmentBar(client: client, projectId: project.id, sessionName: session.name)
+
             TerminalRepresentable(
                 connectionInfo: connectionInfo,
                 coordinator: coordinator,
@@ -54,6 +56,15 @@ struct TerminalContainerView: View {
         }
         .navigationTitle(title ?? session.name)
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                NavigationLink {
+                    ChangesListView(client: client, projectId: project.id, sessionName: session.name)
+                } label: {
+                    Image(systemName: "arrow.triangle.branch")
+                }
+            }
+        }
         .onChange(of: scenePhase) { _, newPhase in
             if newPhase == .active {
                 coordinator.reconnect()

@@ -94,4 +94,84 @@ struct APIClientTests {
             return message == "Missing name or repoPath"
         }
     }
+
+    // MARK: Environment (docker-compose)
+
+    @Test
+    func envStatusDecodesRunningPhase() async throws {
+        let client = makeClient()
+        StubURLProtocol.stubs["/api/projects/p1/sessions/my-branch/env"] = .init(
+            status: 200,
+            body: Data(#"{"phase":"running","openUrl":"http://localhost:1234"}"#.utf8)
+        )
+
+        let status = try await client.envStatus(projectId: "p1", sessionName: "my-branch")
+
+        #expect(status.phase == .running)
+        #expect(status.openUrl == "http://localhost:1234")
+    }
+
+    @Test
+    func startEnvSendsPostAndSucceedsOn202() async throws {
+        let client = makeClient()
+        StubURLProtocol.stubs["/api/projects/p1/sessions/my-branch/env"] = .init(status: 202, body: Data())
+
+        try await client.startEnv(projectId: "p1", sessionName: "my-branch")
+
+        #expect(StubURLProtocol.capturedRequests.first?.httpMethod == "POST")
+    }
+
+    @Test
+    func startEnvAlreadyRunningThrowsConflict() async {
+        let client = makeClient()
+        StubURLProtocol.stubs["/api/projects/p1/sessions/my-branch/env"] = .init(
+            status: 409,
+            body: Data(#"{"error":"Environment for \"my-branch\" is already running","sessionCount":null}"#.utf8)
+        )
+
+        await #expect {
+            try await client.startEnv(projectId: "p1", sessionName: "my-branch")
+        } throws: { error in
+            guard case APIError.conflict(let message, _) = error else { return false }
+            return message.contains("already running")
+        }
+    }
+
+    @Test
+    func stopEnvSendsDeleteAndSucceedsOn204() async throws {
+        let client = makeClient()
+        StubURLProtocol.stubs["/api/projects/p1/sessions/my-branch/env"] = .init(status: 204, body: Data())
+
+        try await client.stopEnv(projectId: "p1", sessionName: "my-branch")
+
+        #expect(StubURLProtocol.capturedRequests.first?.httpMethod == "DELETE")
+    }
+
+    // MARK: Changes / diff
+
+    @Test
+    func changesDecodesGroupedResponse() async throws {
+        let client = makeClient()
+        StubURLProtocol.stubs["/api/projects/p1/sessions/my-branch/changes"] = .init(
+            status: 200,
+            body: Data(#"{"staged":[],"unstaged":[{"path":"a.txt","oldPath":null,"status":"modified","staged":false}],"untracked":[]}"#.utf8)
+        )
+
+        let grouped = try await client.changes(projectId: "p1", sessionName: "my-branch")
+
+        #expect(grouped.unstaged == [ChangedFile(path: "a.txt", oldPath: nil, status: .modified, staged: false)])
+    }
+
+    @Test
+    func diffSendsPathAndModeQueryItems() async throws {
+        let client = makeClient()
+        StubURLProtocol.stubs["/api/projects/p1/sessions/my-branch/diff?path=a.txt&mode=unstaged"] = .init(
+            status: 200,
+            body: Data(#"{"diff":"@@ -1 +1 @@\n-old\n+new","isUntracked":false,"isBinary":false}"#.utf8)
+        )
+
+        let diff = try await client.diff(projectId: "p1", sessionName: "my-branch", filePath: "a.txt", mode: .unstaged)
+
+        #expect(diff.diff.contains("+new"))
+    }
 }
