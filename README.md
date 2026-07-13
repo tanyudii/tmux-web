@@ -312,6 +312,12 @@ docs/testing/
   API/a manual copy box instead of the modern Clipboard API — it still
   works, but terminating TLS in front of tmux-web makes that copy path
   more consistent across browsers.
+- If your `tmux.conf` has `set -g mouse on`, a plain click-drag is sent to
+  tmux itself (it goes into tmux's own copy-mode buffer, not your
+  clipboard). Hold **Option (⌥) on macOS** or **Shift** on Windows/Linux
+  while dragging to select locally in the browser instead — the same
+  modifier convention native terminal apps (iTerm2, Terminal.app, xterm)
+  use for the same reason.
 - No automatic branch deletion — killing a session always keeps the git
   branch (only the worktree checkout is removed), so you don't lose commits
   by accident. Delete branches yourself with plain `git branch -d` when

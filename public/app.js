@@ -432,6 +432,16 @@ function attachToSession(session) {
     // with a single-word selection on right-click -- exactly the "my
     // selection disappears" complaint this app should not reproduce.
     rightClickSelectsWord: false,
+    // A shell program that enables mouse mode (e.g. tmux with `set -g
+    // mouse on`) makes xterm.js forward every click-drag to the PTY
+    // instead of selecting locally -- the drag becomes a tmux copy-mode
+    // selection into tmux's own buffer, invisible to the browser and
+    // never reaching this app's Cmd+C handler. xterm.js's built-in
+    // override for this is Shift+drag on Windows/Linux, but on macOS it's
+    // Option+drag -- and only if this option is explicitly turned on
+    // (defaults to false upstream). Without it, macOS users had no way to
+    // select text locally at all while mouse mode was active.
+    macOptionClickForcesSelection: true,
   });
   fitAddon = new FitAddon.FitAddon();
   term.loadAddon(fitAddon);
