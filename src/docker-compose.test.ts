@@ -5,6 +5,7 @@ import {
   composeDown,
   composePs,
   composePort,
+  composeLogsArgs,
   DockerComposeError,
   type ComposeContext,
 } from "./docker-compose.ts";
@@ -123,4 +124,12 @@ test("composePort rethrows unexpected failures as DockerComposeError", async () 
   };
 
   await assert.rejects(() => composePort(ctx, "web", 3000, fakeExec), DockerComposeError);
+});
+
+test("composeLogsArgs builds a follow+tail command scoped to the session, without a service filter", () => {
+  assert.deepEqual(composeLogsArgs(ctx), [...baseArgs(), "logs", "--follow", "--tail=200"]);
+});
+
+test("composeLogsArgs appends the service name when filtering to a single service", () => {
+  assert.deepEqual(composeLogsArgs(ctx, "web"), [...baseArgs(), "logs", "--follow", "--tail=200", "web"]);
 });

@@ -285,6 +285,60 @@
         background: var(--danger);
       }
 
+      /* --- Logs modal (docker compose logs -f, all/selected services) --- */
+      .modal-overlay {
+        position: fixed;
+        inset: 0;
+        background: rgba(0, 0, 0, 0.6);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        z-index: 20;
+      }
+      .logs-modal-panel {
+        width: min(1000px, 92vw);
+        height: min(680px, 88vh);
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+      }
+      .logs-modal-header {
+        display: flex;
+        align-items: center;
+        gap: 0.6rem;
+        padding: 0.6rem 0.8rem;
+        border-bottom: 1px solid var(--border);
+      }
+      .logs-modal-header h2 {
+        margin: 0;
+        font-size: 1rem;
+        flex: 1;
+      }
+      #logs-service-select {
+        background: var(--bg);
+        color: var(--text);
+        border: 1px solid var(--border);
+        border-radius: 4px;
+        padding: 0.3rem 0.5rem;
+        font-size: 0.85rem;
+      }
+      #logs-close-btn {
+        background: transparent;
+        border: none;
+        color: var(--text);
+        font-size: 1.2rem;
+        line-height: 1;
+        padding: 0.2rem 0.5rem;
+        cursor: pointer;
+      }
+      #logs-terminal {
+        flex: 1;
+        min-height: 0;
+      }
+
       /* --- Changes sidebar (right) --- */
       #changes-sidebar {
         width: 320px;
@@ -463,6 +517,7 @@
             </div>
             <div class="env-actions">
               <button id="env-setup-btn" class="env-action" style="display: none">Setup Environment</button>
+              <button id="env-logs-btn" class="env-action" style="display: none">Logs</button>
               <button id="env-stop-btn" class="env-action env-action-danger" style="display: none">Stop</button>
               <a id="env-open-link" class="env-action" href="#" target="_blank" rel="noopener" style="display: none">Open &#8599;</a>
             </div>
@@ -479,6 +534,19 @@
           </div>
           <div id="changes-body"></div>
         </div>
+      </div>
+    </div>
+
+    <div id="logs-modal" class="modal-overlay" style="display: none">
+      <div class="logs-modal-panel" role="dialog" aria-modal="true" aria-label="Service Logs">
+        <div class="logs-modal-header">
+          <h2>Service Logs</h2>
+          <select id="logs-service-select" aria-label="Filter logs by service">
+            <option value="">All services</option>
+          </select>
+          <button id="logs-close-btn" title="Close">&times;</button>
+        </div>
+        <div id="logs-terminal"></div>
       </div>
     </div>
 

@@ -39,8 +39,14 @@ const envBar = document.getElementById("env-bar");
 const envStatusBadge = document.getElementById("env-status-badge");
 const envMessageEl = document.getElementById("env-message");
 const envSetupBtn = document.getElementById("env-setup-btn");
+const envLogsBtn = document.getElementById("env-logs-btn");
 const envStopBtn = document.getElementById("env-stop-btn");
 const envOpenLink = document.getElementById("env-open-link");
+
+const logsModal = document.getElementById("logs-modal");
+const logsServiceSelect = document.getElementById("logs-service-select");
+const logsCloseBtn = document.getElementById("logs-close-btn");
+const logsTerminalEl = document.getElementById("logs-terminal");
 
 let token = sessionStorage.getItem(TOKEN_KEY) || "";
 let currentProject = null; // { id, name, repoPath, createdAt }
@@ -52,6 +58,9 @@ let sessionPollTimer = null;
 let changesPollTimer = null;
 let envPollTimer = null;
 let expandedDiffKey = null; // "mode:path" of the single currently-open inline diff, or null
+let logsSocket = null;
+let logsTerm = null;
+let logsFitAddon = null;
 
 // --- Bell notifications (sound + title flash when this tab isn't the one
 // the developer is looking at) --------------------------------------------
@@ -512,6 +521,7 @@ function detachTerminal() {
 
   stopEnvPolling();
   envBar.style.display = "none";
+  closeLogsModal();
 }
 
 // --- Changes sidebar (right) ---
@@ -740,6 +750,7 @@ async function refreshEnvStatus() {
 function renderEnvBar(status) {
   if (status.phase === "unavailable") {
     envBar.style.display = "none";
+    closeLogsModal();
     return;
   }
 
@@ -750,6 +761,11 @@ function renderEnvBar(status) {
 
   envSetupBtn.style.display = status.phase === "idle" ? "inline-block" : "none";
   envStopBtn.style.display = status.phase === "running" || status.phase === "error" ? "inline-block" : "none";
+
+  const services = status.services || [];
+  envLogsBtn.style.display = services.length > 0 ? "inline-block" : "none";
+  renderLogsServiceOptions(services);
+  if (services.length === 0) closeLogsModal();
 
   if (status.openUrl) {
     envOpenLink.href = status.openUrl;
@@ -785,6 +801,111 @@ envStopBtn.addEventListener("click", async () => {
   }
   await refreshEnvStatus();
 });
+
+// --- Logs modal (docker compose logs -f, streamed over /ws/logs) ---
+// Reuses xterm.js (already loaded for the main terminal) purely as a
+// read-only ANSI renderer -- docker compose already colors/prefixes each
+// service's lines, so this needs no custom log-line rendering of its own.
+
+function renderLogsServiceOptions(services) {
+  const previousValue = logsServiceSelect.value;
+  logsServiceSelect.textContent = "";
+
+  const allOption = document.createElement("option");
+  allOption.value = "";
+  allOption.textContent = "All services";
+  logsServiceSelect.appendChild(allOption);
+
+  for (const svc of services) {
+    const option = document.createElement("option");
+    option.value = svc.service;
+    option.textContent = svc.service;
+    logsServiceSelect.appendChild(option);
+  }
+
+  logsServiceSelect.value = services.some((svc) => svc.service === previousValue) ? previousValue : "";
+}
+
+function fitLogsTerminal() {
+  if (logsFitAddon) logsFitAddon.fit();
+}
+
+function connectLogsSocket() {
+  if (logsSocket) {
+    logsSocket.close();
+    logsSocket = null;
+  }
+  if (logsTerm) logsTerm.clear();
+
+  const service = logsServiceSelect.value;
+  const wsProtocol = location.protocol === "https:" ? "wss:" : "ws:";
+  let url =
+    wsProtocol + "//" + location.host +
+    "/ws/logs?project=" + encodeURIComponent(currentProject.id) +
+    "&session=" + encodeURIComponent(activeSessionName) +
+    "&token=" + encodeURIComponent(token);
+  if (service) url += "&service=" + encodeURIComponent(service);
+
+  // Captured by reference (not read from the `logsSocket` variable) so a
+  // still-in-flight message/close from a socket we just replaced -- e.g.
+  // the previous service filter's connection, which close() doesn't tear
+  // down synchronously -- can never write into the terminal that's now
+  // showing a different stream.
+  const socket = new WebSocket(url);
+  logsSocket = socket;
+
+  socket.addEventListener("message", (event) => {
+    if (logsTerm && logsSocket === socket) logsTerm.write(event.data);
+  });
+
+  socket.addEventListener("close", () => {
+    if (logsTerm && logsSocket === socket) logsTerm.write("\r\n\x1b[90m[log stream closed]\x1b[0m\r\n");
+  });
+}
+
+function handleLogsModalKeydown(event) {
+  if (event.key === "Escape") closeLogsModal();
+}
+
+function openLogsModal() {
+  logsModal.style.display = "flex";
+
+  logsTerm = new Terminal({
+    fontSize: 13,
+    disableStdin: true,
+    cursorStyle: "bar",
+    cursorBlink: false,
+  });
+  logsFitAddon = new FitAddon.FitAddon();
+  logsTerm.loadAddon(logsFitAddon);
+  logsTerm.open(logsTerminalEl);
+  logsFitAddon.fit();
+  window.addEventListener("resize", fitLogsTerminal);
+  document.addEventListener("keydown", handleLogsModalKeydown);
+
+  connectLogsSocket();
+}
+
+function closeLogsModal() {
+  if (logsModal.style.display === "none") return;
+  logsModal.style.display = "none";
+  window.removeEventListener("resize", fitLogsTerminal);
+  document.removeEventListener("keydown", handleLogsModalKeydown);
+
+  if (logsSocket) {
+    logsSocket.close();
+    logsSocket = null;
+  }
+  if (logsTerm) {
+    logsTerm.dispose();
+    logsTerm = null;
+  }
+  logsFitAddon = null;
+}
+
+envLogsBtn.addEventListener("click", () => openLogsModal());
+logsCloseBtn.addEventListener("click", () => closeLogsModal());
+logsServiceSelect.addEventListener("change", () => connectLogsSocket());
 
 if (token) {
   tryLogin(token).then((ok) => {
