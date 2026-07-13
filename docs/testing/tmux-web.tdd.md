@@ -376,3 +376,78 @@ at least one PASS-ing automated test, and the safety-relevant "gaps"
 (`pty-bridge.ts`'s spawn wiring, `main.ts`'s composition, and this
 feature's real-`docker`/real-`sh` execution paths) were all additionally
 exercised through real, live manual smoke tests end to end.
+
+## Feature addendum: bell-based tab notifications
+
+**Source plan**: no `*.plan.md` file — produced inline via `/ecc:plan`
+(requirements/risk/step breakdown grounded in the existing codebase),
+implemented via `/ecc:tdd-workflow`.
+
+### User journeys
+
+16. As the developer, I want tmux-web to alert me (sound + tab title) when
+    the attached session's terminal rings the bell while I'm not looking at
+    the tab, so I notice when Claude Code has a question, needs
+    confirmation, or finished a task — without polling the tab myself.
+17. As the developer, I want to mute this per my own preference, and to
+    never be alerted twice for the same burst of bells, so it doesn't
+    become noise.
+
+### Task report
+
+| Journey | Summary | Validation command | Result |
+|---|---|---|---|
+| 16, 17 | `parseMuted`/`buildBellTitle`/`shouldPlayBellAlert` — pure, DOM-free decision logic extracted into `public/notify.js` so it can be unit-tested with `node:test` while still loading as a browser ES module (no bundler) | `node --experimental-strip-types --test public/notify.test.js` | RED (`ERR_MODULE_NOT_FOUND`, 1 fail) → GREEN (11 pass) |
+| 16, 17 | `npm test`/`npm run test:coverage` extended to include `public/*.test.js` alongside the existing `src/*.test.ts` glob | `npm test` | GREEN (185 pass, 0 fail — 174 pre-existing backend + 11 new) |
+| 16 | `public/app.js` wired to `term.onBell()` (via `bellStyle: "none"` on the xterm.js `Terminal` so its own beep doesn't double up), calls `handleBell()` which flashes `document.title`, and — only when `shouldPlayBellAlert` says the tab is away — plays a Web Audio beep and fires a `Notification` | `node --check public/app.js` + manual DOM-id cross-reference against `index.html` | PASS (syntax clean; every `getElementById` call in `app.js` has a matching `id` in `index.html`, including the new `#toggle-notify`) |
+| 17 | `#toggle-notify` button toggles a `localStorage`-persisted mute flag and requests `Notification` permission on enable (a user gesture) | same as above | PASS (syntax + DOM-id cross-reference); not driven through a real browser — see gap note below |
+
+### Test specification
+
+| # | What is guaranteed | Test file | Type | Result |
+|---|---|---|---|---|
+| 29 | No stored preference (`null`/`undefined`) defaults to **not muted** | `public/notify.test.js:parseMuted returns false when no preference has been stored yet` | unit | PASS |
+| 30 | Only the exact string `"true"` is read back as muted — no truthy-string surprises | `public/notify.test.js:parseMuted returns true only for the exact stored string "true"` / `...false for "false" or any unrecognized value` | unit | PASS |
+| 31 | The flashed tab title always names the session that rang the bell | `public/notify.test.js:buildBellTitle includes the session name...` | unit | PASS |
+| 32 | A missing/empty session name falls back to a generic label instead of an empty or malformed title | `public/notify.test.js:buildBellTitle falls back to a generic label...` | unit | PASS |
+| 33 | Muting suppresses the alert unconditionally, even when the tab is hidden | `public/notify.test.js:shouldPlayBellAlert never alerts while muted...` | unit | PASS |
+| 34 | A focused, visible tab never alerts (no point — the developer is already looking at it) | `public/notify.test.js:shouldPlayBellAlert stays quiet when the tab is focused and visible` | unit | PASS |
+| 35 | A hidden tab alerts on the first bell | `public/notify.test.js:shouldPlayBellAlert fires on the first bell when the tab is hidden` | unit | PASS |
+| 36 | A visible-but-unfocused tab (e.g. another window has focus) also alerts, not just a fully hidden one | `public/notify.test.js:shouldPlayBellAlert fires when the tab is visible but the browser window lost focus` | unit | PASS |
+| 37 | A second bell inside the cooldown window is suppressed, so a burst doesn't stack beeps | `public/notify.test.js:shouldPlayBellAlert suppresses a repeat alert inside the cooldown window` | unit | PASS |
+| 38 | A bell after the cooldown has fully elapsed (boundary: `now - lastAlertAt === cooldownMs`) alerts again | `public/notify.test.js:shouldPlayBellAlert allows a repeat alert once the cooldown has fully elapsed` | unit | PASS |
+| 39 | `pty-bridge.ts` already forwards arbitrary PTY output (any bytes, including control characters like BEL) to the socket unmodified — no new backend test needed, this is the same contract `attachPtyToSocket forwards pty output to the socket` (`src/pty-bridge.test.ts:119`) already proves generically | `src/pty-bridge.test.ts` | unit (pre-existing) | PASS |
+
+### Coverage
+
+```
+npm run test:coverage
+```
+
+```
+public/notify.js          | 100.00 | 100.00 | 100.00 |
+public/notify.test.js     | 100.00 | 100.00 | 100.00 |
+all files                 |  98.34 |  95.53 |  95.45 |
+```
+
+185 tests total (174 pre-existing + 11 new), 0 failures.
+
+### Known, intentional gap
+
+- **`public/app.js`'s bell-handling DOM wiring** (`term.onBell` registration,
+  `#toggle-notify` click handler, `Notification`/`AudioContext` calls,
+  title-flash/restore listeners) is **not unit-tested** — same rationale as
+  the rest of this project's frontend (see the changes-sidebar section
+  above): no browser test framework, no build step. It was verified via
+  `node --check`, a full DOM-id cross-reference against `index.html`, and
+  by construction delegates every actual *decision* (mute state, cooldown,
+  title text) to the fully-tested `notify.js` functions above — the
+  wiring itself only calls them and touches the DOM, mirroring why
+  `main.ts` is left untested elsewhere in this report. No GUI browser is
+  installed on the machine this was built on, so the real sound/desktop
+  notification behavior was not driven through an actual browser session;
+  flagged explicitly rather than overclaiming. **Manual verification still
+  needed**: attach to a session, switch to another tab, run `printf '\a'`
+  inside it (or let Claude Code ring it via `preferredNotifChannel:
+  terminal_bell`), and confirm the beep, title flash, and — if permission
+  was granted — the desktop notification all appear.
