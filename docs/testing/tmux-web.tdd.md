@@ -451,3 +451,77 @@ all files                 |  98.34 |  95.53 |  95.45 |
   inside it (or let Claude Code ring it via `preferredNotifChannel:
   terminal_bell`), and confirm the beep, title flash, and — if permission
   was granted — the desktop notification all appear.
+
+## Feature addendum: new session worktrees branch from origin's default branch
+
+**Source plan**: no `*.plan.md` file — produced inline via `/ecc:plan`
+(requirements/risk/step breakdown grounded in the existing codebase, plus
+two `AskUserQuestion` design decisions: always `fetch` from `origin` before
+creating a worktree, and auto-detect `origin`'s default branch instead of
+hardcoding `"main"`), implemented via `/ecc:tdd-workflow`.
+
+### User journeys
+
+23. As the server owner, I want a new session's worktree to branch off
+    `origin`'s default branch, not whatever happens to be checked out
+    locally in the project's repo, so a new session never inherits
+    uncommitted or unpushed local state by accident.
+24. As the server owner, I want this to work for repos whose default
+    branch isn't literally named `main` (e.g. `master`, `trunk`), so the
+    behavior isn't hardcoded to one naming convention.
+25. As the server owner, if `origin` can't be reached or resolved (no
+    remote, no network), I want session creation to fail with a clear
+    error instead of silently falling back to local `HEAD`.
+
+### Task report
+
+| Journey | Summary | Validation command | Result |
+|---|---|---|---|
+| 24, 25 | New `resolveOriginDefaultBranch()` in `src/worktree.ts` runs `git ls-remote --symref origin HEAD` and parses the `ref: refs/heads/<branch>\tHEAD` line to get the remote's actual default branch name (no hardcoded `"main"`); throws `WorktreeError` if `origin` is unreachable or the symref line is missing/unparsable | `node --experimental-strip-types --test src/worktree.test.ts` | RED (compile error: `resolveOriginDefaultBranch` not exported) → GREEN (17 pass) |
+| 23, 25 | `addWorktree()` now: prune → resolve origin's default branch → `git fetch origin <branch>:refs/remotes/origin/<branch>` (explicit refspec, independent of the repo's configured fetch refspec) → `git worktree add --no-track -b <branch> <path> origin/<branch>` (was: `... HEAD`). Fetch failure surfaces as `WorktreeError`; a branch-name conflict on the `add` step still surfaces as `WorktreeConflictError` as before | `node --experimental-strip-types --test src/worktree.test.ts` | GREEN (17 pass, 0 fail) |
+| 23, 24 | Real-git integration test rewritten: creates a bare-ish `origin` repo with `--initial-branch=trunk` (a non-`"main"` name, to prove auto-detection isn't hardcoded), clones it, then adds a **local-only commit never pushed to origin**, and asserts the new worktree's file content matches `origin`'s content, not the local-only commit | `node --experimental-strip-types --test src/worktree.test.ts` | GREEN — worktree content equals `"from origin\n"`, never `"local-only change\n"` |
+| 23 | `README.md` "How it works" section updated to describe the `ls-remote`/`fetch`/`origin/<branch>` flow instead of implying `HEAD` | manual read-through | PASS |
+| — | Full backend suite unaffected by this change | `npm test` | GREEN except 1 pre-existing, unrelated failure (`src/pty-bridge.test.ts` — `node-pty` native module not installed in this worktree's `node_modules`; verified present on the pre-change commit too, not a regression) |
+
+### Test specification
+
+| # | What is guaranteed | Test file | Type | Result |
+|---|--------------------|-----------|------|--------|
+| 40 | `origin`'s default branch name is parsed correctly from `git ls-remote --symref origin HEAD` output | `src/worktree.test.ts:resolveOriginDefaultBranch parses the branch name from...` | unit | PASS |
+| 41 | The parse is not hardcoded to `"main"` — a remote default branch named `"trunk"` (or anything else) resolves correctly | `src/worktree.test.ts:resolveOriginDefaultBranch is not hardcoded to 'main'...` | unit | PASS |
+| 42 | Output missing the `ref:` symref line (unparsable) throws `WorktreeError` instead of silently returning `undefined`/a bad branch name | `src/worktree.test.ts:resolveOriginDefaultBranch throws WorktreeError when the symref line is missing...` | unit | PASS |
+| 43 | `origin` unreachable (no remote, no network) throws `WorktreeError`, not an unhandled rejection | `src/worktree.test.ts:resolveOriginDefaultBranch throws WorktreeError when ls-remote against origin fails` | unit | PASS |
+| 44 | `addWorktree` prunes, resolves the default branch, fetches it with an explicit refspec, then creates the worktree from `origin/<branch>` — exact call order and arguments asserted | `src/worktree.test.ts:addWorktree prunes, resolves origin's default branch, fetches it, then adds a worktree based on origin/<branch>` | unit | PASS |
+| 45 | Failure to resolve the default branch aborts session creation with `WorktreeError` before any fetch/add is attempted | `src/worktree.test.ts:addWorktree throws WorktreeError when it cannot resolve origin's default branch` | unit | PASS |
+| 46 | Failure to fetch `origin/<branch>` aborts session creation with `WorktreeError` | `src/worktree.test.ts:addWorktree throws WorktreeError when fetching origin's default branch fails` | unit | PASS |
+| 47 | A `worktree add` failure that isn't a branch-name conflict still surfaces as a plain `WorktreeError` (not miscategorized as `WorktreeConflictError`) | `src/worktree.test.ts:addWorktree throws WorktreeError for a worktree-add failure that isn't a branch conflict` | unit | PASS |
+| 48 | An existing branch name still throws `WorktreeConflictError`, unchanged from prior behavior | `src/worktree.test.ts:addWorktree throws WorktreeConflictError when the branch already exists` | unit | PASS |
+| 49 | End-to-end with real `git`: a new worktree's content matches `origin`'s default branch (`"trunk"`, non-`"main"`), not a local-only unpushed commit; `git worktree list` shows the new branch; dirty-removal protection and `--force` removal still work | `src/worktree.test.ts:real git integration: add creates a worktree from origin's default branch (not local HEAD)...` | integration (real `git`, skipped if `git` unavailable) | PASS |
+
+### Coverage
+
+```
+node --experimental-strip-types --test --experimental-test-coverage src/worktree.test.ts
+```
+
+```
+worktree.ts       |  97.22 |    93.94 |   90.00 | 19-20 142-143
+```
+
+Remaining uncovered lines (`19-20`: `defaultWorktreesRoot`'s body; `142-143`:
+`removeWorktree`'s generic-error fallback) predate this change and are out
+of scope for it.
+
+### Known, intentional gap
+
+- **`npm run typecheck`** currently fails across the whole project (not
+  just files touched here) with `Cannot find module 'node:*'` /
+  `Cannot find name 'process'/'Buffer'` errors, because this worktree's
+  `node_modules` does not have `@types/node` installed (`node_modules`
+  has a single entry). Verified via `git stash` that this is true on the
+  pre-change commit as well — a pre-existing environment gap in this
+  checkout, not a regression introduced by this change. Likewise
+  `src/pty-bridge.test.ts` fails for the same reason (`node-pty` native
+  module absent). Neither is caused by or related to the
+  `origin`-default-branch change; both are dependency-installation issues
+  for whoever runs `npm install` in this worktree next.
