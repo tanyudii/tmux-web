@@ -28,14 +28,17 @@ xcodegen generate
 open TmuxWebClient.xcodeproj
 ```
 
-Before building, edit `TmuxWebClient/Resources/Info.plist` and replace
-`TMUX_WEB_VPN_HOST` under `NSAppTransptSecurity > NSExceptionDomains` with
-your server's actual VPN address (e.g. `100.x.x.x` for Tailscale, or your
-WireGuard interface IP). This is a narrow App Transport Security exception
-scoped to that one host — see the comment in that file for why it's safe
-(the VPN tunnel already encrypts the connection; tmux-web deliberately does
-not add its own TLS, matching the main project's "terminate TLS at your
-VPN/reverse proxy" design).
+Before building, edit the `NSAppTransportSecurity > NSExceptionDomains` host
+key in `project.yml` (under the `TmuxWebClient` target's `info.properties`)
+to your server's actual VPN address (e.g. `100.x.x.x` for Tailscale, or your
+WireGuard interface IP), then re-run `xcodegen generate`. Don't hand-edit
+`TmuxWebClient/Resources/Info.plist` directly — it's fully regenerated from
+`project.yml` every time `xcodegen generate` runs, so a direct edit there is
+silently lost on the next regenerate. This is a narrow App Transport
+Security exception scoped to that one host — safe because the VPN tunnel
+already encrypts the connection; tmux-web deliberately does not add its own
+TLS, matching the main project's "terminate TLS at your VPN/reverse proxy"
+design.
 
 ## Installing on your iPhone without TestFlight
 
