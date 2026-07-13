@@ -29,14 +29,28 @@ import {
   getSessionEnvStatus as getSessionEnvStatusImpl,
   startSessionEnv as startSessionEnvImpl,
   stopSessionEnv as stopSessionEnvImpl,
+  requireEnvContext,
   createSessionEnvStore,
+  EnvUnavailableError,
   type SessionEnvDeps,
 } from "./session-env.ts";
+import { attachLogsToSocket, type LogSocketLike } from "./log-stream.ts";
+import { sanitizeServiceName } from "./service-name.ts";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = join(__dirname, "..", "public");
 const DEFAULT_COLS = 80;
 const DEFAULT_ROWS = 24;
+
+interface DestroyableSocket {
+  write(data: string): void;
+  destroy(): void;
+}
+
+function rejectUpgrade(socket: DestroyableSocket, status: number, reason: string): void {
+  socket.write(`HTTP/1.1 ${status} ${reason}\r\n\r\n`);
+  socket.destroy();
+}
 
 function main(): void {
   let config;
@@ -108,31 +122,63 @@ function main(): void {
 
   const wss = new WebSocketServer({ noServer: true });
 
-  httpServer.on("upgrade", (req, socket, head) => {
+  httpServer.on("upgrade", async (req, socket, head) => {
     const url = new URL(req.url ?? "", "http://localhost");
-
-    if (url.pathname !== "/ws") {
-      socket.destroy();
-      return;
-    }
-
-    const sessionName = url.searchParams.get("session") ?? "";
     const token = extractQueryToken(req.url ?? "");
 
-    if (!isValidSessionName(sessionName) || !verifyToken(token, config.token)) {
-      socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
-      socket.destroy();
+    if (url.pathname === "/ws") {
+      const sessionName = url.searchParams.get("session") ?? "";
+
+      if (!isValidSessionName(sessionName) || !verifyToken(token, config.token)) {
+        rejectUpgrade(socket, 401, "Unauthorized");
+        return;
+      }
+
+      wss.handleUpgrade(req, socket, head, (ws) => {
+        attachPtyToSocket(
+          ws as unknown as WebSocket & SocketLike,
+          sessionName,
+          DEFAULT_COLS,
+          DEFAULT_ROWS,
+        );
+      });
       return;
     }
 
-    wss.handleUpgrade(req, socket, head, (ws) => {
-      attachPtyToSocket(
-        ws as unknown as WebSocket & SocketLike,
-        sessionName,
-        DEFAULT_COLS,
-        DEFAULT_ROWS,
-      );
-    });
+    if (url.pathname === "/ws/logs") {
+      if (!verifyToken(token, config.token)) {
+        rejectUpgrade(socket, 401, "Unauthorized");
+        return;
+      }
+
+      const projectId = url.searchParams.get("project") ?? "";
+      const sessionSlug = url.searchParams.get("session") ?? "";
+      const service = sanitizeServiceName(url.searchParams.get("service"));
+
+      // Resolving the ComposeContext touches the filesystem (project
+      // registry + the worktree's .tmux-web-env/), so -- unlike the /ws
+      // branch above -- this can't be validated synchronously before the
+      // upgrade.
+      try {
+        const project = await getProjectImpl(projectsFile, projectId);
+        if (!project) {
+          rejectUpgrade(socket, 404, "Not Found");
+          return;
+        }
+
+        const ctx = await requireEnvContext(project, sessionSlug, sessionEnvDeps);
+
+        wss.handleUpgrade(req, socket, head, (ws) => {
+          attachLogsToSocket(ws as unknown as LogSocketLike, ctx, service);
+        });
+      } catch (error) {
+        const status = error instanceof EnvUnavailableError ? 404 : 400;
+        rejectUpgrade(socket, status, status === 404 ? "Not Found" : "Bad Request");
+      }
+      return;
+    }
+
+    socket.destroy();
   });
 
   httpServer.listen(config.port, config.bindHost, () => {
