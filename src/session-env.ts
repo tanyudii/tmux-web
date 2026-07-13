@@ -67,7 +67,7 @@ async function resolveOpenUrl(
   return `http://${deps.openHost ?? "localhost"}:${hostPort}`;
 }
 
-async function requireConfig(
+export async function requireConfig(
   project: Project,
   sessionSlug: string,
   deps: SessionEnvDeps,
@@ -81,6 +81,18 @@ async function requireConfig(
     );
   }
   return { fullName, worktreePath, config };
+}
+
+// Shared by the /ws/logs upgrade handler in main.ts, so it resolves the
+// same project-scoped ComposeContext that startSessionEnv/stopSessionEnv
+// already use internally, without duplicating the opt-in check.
+export async function requireEnvContext(
+  project: Project,
+  sessionSlug: string,
+  deps: SessionEnvDeps,
+): Promise<ComposeContext> {
+  const { fullName, worktreePath, config } = await requireConfig(project, sessionSlug, deps);
+  return contextFor(fullName, worktreePath, config);
 }
 
 export async function getSessionEnvStatus(

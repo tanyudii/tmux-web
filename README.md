@@ -60,7 +60,10 @@ system rather than adding a client library.
   *that session alone* (its own containers, network, and volumes — a
   second session never shares them), then an optional `post-run.sh`. Once
   containers are up, tmux-web resolves the ephemeral host port docker
-  published for a configured service and shows an **Open ↗** link. See
+  published for a configured service and shows an **Open ↗** link. A
+  **Logs** button also appears, streaming `docker compose logs -f` for
+  every container in that session's environment into a single dashboard —
+  no more switching terminals to tail one container at a time. See
   [Per-session environments](#per-session-environments-docker-compose)
   below.
 - **The tab notifies you when a session needs attention.** tmux-web listens
@@ -222,6 +225,21 @@ tears its environment down first, best-effort) runs `docker compose down
 -v` -- containers *and* volumes for that session are gone. There's no
 "pause" state.
 
+**Logs dashboard**: once at least one container is up, a **Logs** button
+appears next to Stop. Clicking it opens a panel that streams `docker
+compose logs --follow --tail=200` -- merged across every service in that
+session's environment by default, docker's own interleaved/colored/
+prefixed format, rendered through a second read-only `xterm.js` instance
+(so ANSI colors just work, no custom log renderer needed). A dropdown lets
+you narrow the stream to one service instead of all of them. This is a
+live tail only -- there's no history kept once the panel is closed beyond
+whatever `docker compose logs` itself would still show you from a
+terminal. The underlying `docker compose logs -f` process is spawned only
+while the panel is open and killed (`SIGTERM`, then `SIGKILL` after a 3s
+grace period) the moment it's closed or the WebSocket drops, so it never
+lingers as a background process the way the session's own tmux server
+intentionally does.
+
 ## Running as a service (survives reboots and crashes)
 
 ```bash
@@ -252,7 +270,11 @@ src/
   projects.ts             project registry (JSON file, atomic writes)
   project-sessions.ts      orchestrates projects+worktree+tmux per session
   env-config.ts            reads the opt-in .tmux-web-env/ folder from a worktree
-  docker-compose.ts        shells out to `docker compose` (up/down/ps/port)
+  docker-compose.ts        shells out to `docker compose` (up/down/ps/port/logs)
+  log-stream.ts             streams `docker compose logs -f` to a WebSocket,
+                            killing the process when the socket closes
+  service-name.ts            validates the optional ?service= filter on
+                            /ws/logs against docker compose's naming rules
   run-script.ts            runs pre-run.sh/post-run.sh via /bin/sh
   session-env.ts           orchestrates pre-run -> compose up -> post-run per session
   server.ts               HTTP API + auth middleware (testable via injected deps)
@@ -262,7 +284,8 @@ src/
 public/
   index.html, app.js   vanilla JS frontend: project list -> project detail
                         (session sidebar, xterm.js, right-hand changes/diff
-                        sidebar, environment setup bar above the terminal)
+                        sidebar, environment setup bar above the terminal,
+                        Logs modal with a second read-only xterm.js instance)
   notify.js             pure bell-alert decision logic (mute state, cooldown,
                         title text) -- DOM-free so it's unit-tested directly
                         with node:test while still loading as a browser

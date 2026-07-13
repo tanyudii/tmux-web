@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
+  requireEnvContext,
   getSessionEnvStatus,
   startSessionEnv,
   stopSessionEnv,
@@ -297,4 +298,22 @@ test("stopSessionEnv tears down running containers and clears store state", asyn
   assert.equal(calls.length, 1);
   assert.equal(calls[0].projectName, FULL_NAME);
   assert.equal(store.get(FULL_NAME), undefined);
+});
+
+test("requireEnvContext resolves a ComposeContext scoped to the session", async () => {
+  const deps = makeDeps();
+
+  const ctx = await requireEnvContext(PROJECT, "feature-x", deps);
+
+  assert.deepEqual(ctx, {
+    projectName: FULL_NAME,
+    composeFile: AVAILABLE_CONFIG.composeFile,
+    worktreePath: WORKTREE_PATH,
+  });
+});
+
+test("requireEnvContext throws EnvUnavailableError when the project hasn't opted in", async () => {
+  const deps = makeDeps({ loadEnvConfig: async () => null });
+
+  await assert.rejects(() => requireEnvContext(PROJECT, "feature-x", deps), EnvUnavailableError);
 });

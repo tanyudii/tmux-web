@@ -88,6 +88,17 @@ export async function composePs(
     });
 }
 
+const LOG_TAIL_LINES = 200;
+
+// Args for `docker compose logs --follow` -- used by log-stream.ts, which
+// spawns this directly (not via ExecFn) since it needs a live stream rather
+// than a single resolved stdout string.
+export function composeLogsArgs(ctx: ComposeContext, service?: string): string[] {
+  const args = [...baseArgs(ctx), "logs", "--follow", `--tail=${LOG_TAIL_LINES}`];
+  if (service) args.push(service);
+  return args;
+}
+
 const NO_PORT_PATTERN = /no port|not found/i;
 
 // Resolves the host port docker published for <service>:<containerPort> in
