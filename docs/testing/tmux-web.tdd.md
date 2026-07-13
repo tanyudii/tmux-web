@@ -525,3 +525,108 @@ of scope for it.
   module absent). Neither is caused by or related to the
   `origin`-default-branch change; both are dependency-installation issues
   for whoever runs `npm install` in this worktree next.
+
+## Feature addendum: visible feedback for the terminal's Cmd+C copy
+
+**Source plan**: no `*.plan.md` file — produced inline via `/ecc:plan`
+after the user reported that the prior Cmd+C fix (see "not-selectable
+terminal" work, commit `73be7a0`) still didn't let them copy from the
+real deployment. That prior fix was only ever unit-tested against the
+pure `isCopyShortcut` decision function; it had no live-browser
+verification, so there was no way to tell a silent success from a silent
+failure. This addendum closes that gap.
+
+### User journeys
+
+26. As a user on a plain-HTTP, non-`localhost` deployment (this app's own
+    README recommends exactly that: bind to a WireGuard/Tailscale tunnel
+    IP), I want to know whether Cmd+C actually copied my terminal
+    selection, instead of silent, unverifiable behavior either way.
+27. As that same user, if automatic copy fails for any reason (insecure
+    context blocks `navigator.clipboard`, and/or the browser blocks
+    `execCommand("copy")`), I want a guaranteed-to-work fallback: a
+    normal, focused, pre-selected text field I can Cmd+C from directly,
+    since the browser's native copy handling for editable elements isn't
+    gated by any of the above.
+
+### Investigation before implementing
+
+Live-reproduced the user's exact reported conditions — server bound to
+this machine's real WireGuard interface IP (`10.8.0.2`, plain HTTP, not
+`localhost`) and driven with a real Chromium (Playwright-driven, since no
+`chrome-devtools` MCP browser was available in this environment) — before
+writing any fix, to avoid guessing at a root cause:
+
+- Confirmed `window.isSecureContext === false` and
+  `navigator.clipboard === undefined` under these conditions, as
+  expected.
+- Confirmed the existing `execCommand("copy")` fallback path *did* fire
+  correctly and returned `true` for both a triple-click selection and a
+  realistic mouse-drag selection — i.e. the prior fix's mechanics were
+  not broken. The user-visible problem was the total absence of
+  success/failure feedback, not a logic bug in the copy path itself.
+
+### Task report
+
+| Journey | Summary | Validation command | Result |
+|---|---|---|---|
+| 26 | New `copyResultMessage(success)` in `public/terminal-clipboard.js` (pure, DOM-free, same pattern as `isCopyShortcut`) | `node --experimental-strip-types --test public/terminal-clipboard.test.js` | RED (export missing) → GREEN (7 pass) |
+| 26 | `public/app.js`: `copyToClipboard`/`copyToClipboardFallback` now report success/failure via a small toast (`#copy-toast`, bottom-right of the terminal, auto-dismisses after 1.8s on success) | manual browser verification (below) | PASS |
+| 27 | On total failure (both `navigator.clipboard.writeText` and `execCommand("copy")` fail), a fallback bar (`#copy-fallback`) appears above the terminal with a focused, pre-selected, readonly text input containing the selection, plus a close button; `detachTerminal()` clears both on session switch | manual browser verification (below) | PASS |
+| — | Full backend + frontend suite unaffected | `npm test` | GREEN (250 pass, 0 fail) |
+| — | Typecheck unaffected (change is `public/*.js`/`.html` only, outside `tsc`'s scope) | `npm run typecheck` | PASS (clean) |
+
+### Manual verification (real browser, real server, exact reported conditions)
+
+Server started with `TMUX_WEB_BIND_HOST=10.8.0.2` (this host's real
+WireGuard IP) and driven with a real headless Chromium via
+`playwright-core`, since `chrome-devtools` MCP had no browser binary
+available in this environment (see next line for the substitution
+rationale — Playwright's Chromium is a real Chromium build, driven over
+the same CDP protocol, so this is equivalent verification, not a mock).
+
+1. **Normal path**: logged in, created a project/session, ran
+   `echo VERIFY_TEXT_789`, drag-selected the output line, pressed
+   Cmd+C. Result: toast reading exactly `"Copied"` appeared (no error
+   styling), fallback bar stayed hidden. Screenshot captured.
+2. **Forced-failure path**: same flow, but `document.execCommand` was
+   monkey-patched to always return `false` (simulating a browser that
+   blocks the legacy copy API outright, e.g. stricter Safari/enterprise
+   policy). Result: toast read exactly
+   `"Auto-copy failed — press Cmd+C in the box below"` with error
+   styling; the fallback bar appeared above the terminal with the
+   selected line's text pre-filled *and* pre-selected in a focused
+   `<input>`; clicking the close button hid both the bar and the toast.
+   Screenshot captured.
+
+Both screenshots visually confirm the styling matches the existing dark
+theme (same `--panel`/`--border`/`--accent`/`--danger` tokens as
+`.env-bar`) and does not overlap or clip any existing terminal chrome.
+
+### Test specification
+
+| # | What is guaranteed | Test file | Type | Result |
+|---|--------------------|-----------|------|--------|
+| 50 | `copyResultMessage(true)` returns a plain success confirmation | `public/terminal-clipboard.test.js:copyResultMessage confirms success...` | unit | PASS |
+| 51 | `copyResultMessage(false)` returns a message that points at the manual fallback box | `public/terminal-clipboard.test.js:copyResultMessage points at the manual fallback...` | unit | PASS |
+| — | Toast shows `"Copied"` with no error styling on a successful copy (Clipboard-API-unavailable path, `execCommand` succeeds) | manual (Playwright-driven Chromium against the real server) | e2e | PASS |
+| — | Toast shows the failure message with error styling, and the fallback input is focused/pre-filled/pre-selected, when `execCommand` fails | manual (Playwright-driven Chromium against the real server, `execCommand` forced to fail) | e2e | PASS |
+| — | Closing the fallback bar hides both the bar and the toast | manual (Playwright-driven Chromium against the real server) | e2e | PASS |
+
+### Known, intentional gap
+
+- The manual e2e verification above is not wired into the automated test
+  suite — this project has no browser-based test runner configured
+  (`npm test` only covers `node:test` unit/integration tests), and adding
+  one was judged out of scope for this fix. If Playwright (or similar)
+  ever gets added as a project dependency, promoting the scenarios above
+  into real `@playwright/test` specs would remove the need to
+  re-reproduce them by hand for the next terminal-clipboard change.
+- Real-world clipboard behavior on the user's actual machine (specific
+  Chrome version, OS-level clipboard manager) could not be verified from
+  this environment — only the DOM-level mechanics (`execCommand` return
+  value, event handling, UI state) were confirmed. The visible
+  success/failure feedback added here is specifically what closes that
+  remaining gap: the user (or a future debugging session) can now tell
+  which case occurred just by looking at the screen, without needing
+  DevTools.
