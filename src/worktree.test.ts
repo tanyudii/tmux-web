@@ -125,6 +125,23 @@ test("addWorktree throws WorktreeError when fetching origin's default branch fai
   );
 });
 
+test("addWorktree throws WorktreeError for a worktree-add failure that isn't a branch conflict", async () => {
+  const fakeExec = async (_file: string, args: string[]) => {
+    if (args.includes("ls-remote")) return { stdout: "ref: refs/heads/main\tHEAD\n" };
+    if (args.includes("add")) {
+      const err = new Error("Command failed") as Error & { stderr?: string };
+      err.stderr = "fatal: no space left on device\n";
+      throw err;
+    }
+    return { stdout: "" };
+  };
+
+  await assert.rejects(
+    () => addWorktree("/repo", "/repo-worktrees/proj1/feature-x", "feature-x", fakeExec),
+    (error: unknown) => error instanceof WorktreeError && !(error instanceof WorktreeConflictError),
+  );
+});
+
 test("addWorktree throws WorktreeConflictError when the branch already exists", async () => {
   const fakeExec = async (_file: string, args: string[]) => {
     if (args.includes("ls-remote")) return { stdout: "ref: refs/heads/main\tHEAD\n" };
