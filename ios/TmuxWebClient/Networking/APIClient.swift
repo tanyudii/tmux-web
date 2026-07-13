@@ -95,6 +95,35 @@ final class APIClient {
         )
     }
 
+    // MARK: Environment (docker-compose)
+
+    func envStatus(projectId: String, sessionName: String) async throws -> EnvStatus {
+        try await request(
+            path: "/api/projects/\(pathEscape(projectId))/sessions/\(pathEscape(sessionName))/env",
+            method: "GET"
+        )
+    }
+
+    /// Only awaits the fast eligibility check server-side -- the actual
+    /// pre-run/compose-up/post-run lifecycle keeps running in the
+    /// background (202 Accepted). Progress is observed by polling
+    /// `envStatus`, matching how ../../public/app.js's Setup button works.
+    func startEnv(projectId: String, sessionName: String) async throws {
+        try await requestNoContent(
+            path: "/api/projects/\(pathEscape(projectId))/sessions/\(pathEscape(sessionName))/env",
+            method: "POST"
+        )
+    }
+
+    /// Runs `docker compose down -v` server-side -- containers *and*
+    /// volumes for this session's environment are removed.
+    func stopEnv(projectId: String, sessionName: String) async throws {
+        try await requestNoContent(
+            path: "/api/projects/\(pathEscape(projectId))/sessions/\(pathEscape(sessionName))/env",
+            method: "DELETE"
+        )
+    }
+
     // MARK: Core request plumbing
 
     private func pathEscape(_ value: String) -> String {
