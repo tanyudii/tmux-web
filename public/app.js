@@ -6,6 +6,7 @@
 // transpile step, just a native <script type="module">.
 
 import { parseMuted, buildBellTitle, shouldPlayBellAlert } from "./notify.js";
+import { isCopyShortcut } from "./terminal-clipboard.js";
 
 const TOKEN_KEY = "tmux-web-token";
 const NOTIFY_MUTE_KEY = "tmux-web-notify-muted";
@@ -385,12 +386,21 @@ function attachToSession(session) {
   activeSessionName = session.name;
   emptyStateEl.style.display = "none";
 
-  term = new Terminal({ cursorBlink: true, fontSize: 14, bellStyle: "none" });
+  term = new Terminal({
+    cursorBlink: true,
+    fontSize: 14,
+    bellStyle: "none",
+    // macOS defaults this to true, which replaces a multi-line selection
+    // with a single-word selection on right-click -- exactly the "my
+    // selection disappears" complaint this app should not reproduce.
+    rightClickSelectsWord: false,
+  });
   fitAddon = new FitAddon.FitAddon();
   term.loadAddon(fitAddon);
   term.open(terminalEl);
   fitAddon.fit();
   term.onBell(() => handleBell());
+  term.attachCustomKeyEventHandler((event) => handleTerminalKeyEvent(term, event));
 
   const wsProtocol = location.protocol === "https:" ? "wss:" : "ws:";
   const url =
@@ -424,6 +434,49 @@ function attachToSession(session) {
 
   refreshEnvStatus();
   envPollTimer = setInterval(refreshEnvStatus, 3000);
+}
+
+// Cmd+C is the Mac copy shortcut, but xterm's own hidden input textarea can
+// end up being what the browser's native copy command targets, so the
+// selected terminal text doesn't reliably reach the clipboard. Handle it
+// ourselves whenever there's an active selection. Ctrl+C is left alone --
+// it must keep sending SIGINT to the shell, matching every other terminal.
+function handleTerminalKeyEvent(activeTerm, event) {
+  if (!isCopyShortcut(event) || !activeTerm.hasSelection()) return true;
+
+  event.preventDefault();
+  copyToClipboard(activeTerm, activeTerm.getSelection());
+  return false;
+}
+
+function copyToClipboard(activeTerm, text) {
+  if (navigator.clipboard?.writeText) {
+    navigator.clipboard.writeText(text).catch(() => copyToClipboardFallback(activeTerm, text));
+  } else {
+    copyToClipboardFallback(activeTerm, text);
+  }
+}
+
+// navigator.clipboard.writeText needs a secure context (HTTPS/localhost).
+// Fall back to the legacy execCommand path for plain-HTTP deployments.
+function copyToClipboardFallback(activeTerm, text) {
+  const scratch = document.createElement("textarea");
+  scratch.value = text;
+  scratch.style.position = "fixed";
+  scratch.style.opacity = "0";
+  document.body.appendChild(scratch);
+  scratch.select();
+  let copied = false;
+  try {
+    copied = document.execCommand("copy");
+  } catch {
+    copied = false;
+  }
+  scratch.remove();
+  // execCommand("copy") moves focus onto the scratch textarea; move it back
+  // to the terminal's own input so keystrokes keep reaching the shell.
+  activeTerm.focus();
+  if (!copied) console.warn("tmux-web: copy to clipboard failed");
 }
 
 function sendResize() {
