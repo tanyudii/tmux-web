@@ -283,7 +283,12 @@ docs/testing/
 - No auto-reconnect on the frontend — closing/reopening a session tab is
   just clicking it again in the sidebar (tmux already kept it alive).
 - No TLS termination built in — terminate TLS at your VPN/reverse proxy,
-  not here.
+  not here. Note that plain HTTP on a non-`localhost` host (the
+  WireGuard/Tailscale setup above) is not a browser "secure context", so
+  the terminal's Cmd+C copy falls back to the legacy `execCommand`
+  API/a manual copy box instead of the modern Clipboard API — it still
+  works, but terminating TLS in front of tmux-web makes that copy path
+  more consistent across browsers.
 - No automatic branch deletion — killing a session always keeps the git
   branch (only the worktree checkout is removed), so you don't lose commits
   by accident. Delete branches yourself with plain `git branch -d` when
