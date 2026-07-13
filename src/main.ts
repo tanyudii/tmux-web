@@ -112,8 +112,8 @@ function main(): void {
     getProjectSessionDiff: (project, slug, filePath, mode) =>
       getProjectSessionDiffImpl(project, slug, filePath, mode, projectSessionsDeps),
 
-    getProjectSessionEnvStatus: (project, slug) =>
-      getSessionEnvStatusImpl(project, slug, sessionEnvDeps, sessionEnvStore),
+    getProjectSessionEnvStatus: (project, slug, requestHost) =>
+      getSessionEnvStatusImpl(project, slug, sessionEnvDeps, sessionEnvStore, requestHost),
     startProjectSessionEnv: (project, slug) =>
       startSessionEnvImpl(project, slug, sessionEnvDeps, sessionEnvStore),
     stopProjectSessionEnv: (project, slug) =>

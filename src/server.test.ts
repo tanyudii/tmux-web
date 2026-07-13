@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { Server } from "node:http";
+import { request as httpRequest } from "node:http";
 import { mkdtemp, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -548,6 +549,44 @@ test("GET /api/projects/:id/sessions/:name/env returns the current status", asyn
     assert.equal(res.status, 200);
     assert.deepEqual(await res.json(), status);
   });
+});
+
+test("GET /api/projects/:id/sessions/:name/env passes the request's own Host header through, not a hardcoded one", async () => {
+  // Regression test: previously the "Open" URL was always built from a
+  // hardcoded "localhost", which is wrong whenever the browser is reaching
+  // tmux-web via a LAN IP or a VPN IP instead. The Host header of the
+  // incoming request is the one signal that tells us which address the
+  // browser is CURRENTLY using, so it must be threaded through untouched.
+  let capturedHost: string | undefined;
+  const status: EnvStatus = { phase: "running", openUrl: "http://10.8.0.2:54321" };
+  const deps = makeDeps({
+    getProjectSessionEnvStatus: async (_project: Project, _slug: string, requestHost?: string) => {
+      capturedHost = requestHost;
+      return status;
+    },
+  });
+
+  await withServer(deps, async (baseUrl) => {
+    const { port } = new URL(baseUrl);
+    await new Promise<void>((resolve, reject) => {
+      const req = httpRequest(
+        {
+          host: "127.0.0.1",
+          port: Number(port),
+          path: `/api/projects/${SAMPLE_PROJECT.id}/sessions/feature-x/env`,
+          headers: authHeaders({ Host: "10.8.0.2:5309" }),
+        },
+        (res) => {
+          res.resume();
+          res.on("end", () => resolve());
+        },
+      );
+      req.on("error", reject);
+      req.end();
+    });
+  });
+
+  assert.equal(capturedHost, "10.8.0.2");
 });
 
 test("GET /api/projects/:id/sessions/:name/env returns 404 for an unknown project", async () => {
