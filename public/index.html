@@ -528,31 +528,82 @@
         overflow-x: auto;
         background: var(--bg);
       }
+      .diff-stat-bar {
+        display: flex;
+        gap: 0.6rem;
+        padding: 0.35rem 0.6rem;
+        border-bottom: 1px solid var(--border);
+        font-family: monospace;
+        font-size: 0.75rem;
+        font-weight: 700;
+      }
+      .diff-stat-add {
+        color: #3fb950;
+      }
+      .diff-stat-del {
+        color: #f85149;
+      }
       .diff-content {
+        display: grid;
+        grid-template-columns: max-content max-content 1fr;
         font-family: monospace;
         font-size: 0.78rem;
-        white-space: pre;
-        padding: 0.25rem 0;
       }
-      .diff-line {
+      .diff-row {
+        display: contents;
+      }
+      .diff-gutter {
         padding: 0 0.5rem;
+        text-align: right;
+        color: #6e7681;
+        user-select: none;
+        white-space: nowrap;
       }
-      .diff-add {
-        background: rgba(76, 175, 80, 0.15);
-        color: #8fd694;
+      .diff-gutter-new {
+        border-right: 1px solid var(--border);
       }
-      .diff-del {
-        background: rgba(168, 50, 50, 0.15);
-        color: #e08b8b;
+      .diff-code {
+        padding: 0 0.6rem;
+        white-space: pre;
       }
-      .diff-hunk {
-        color: #4a9edc;
+      .diff-marker {
+        display: inline-block;
+        width: 1em;
+        color: #6e7681;
+        user-select: none;
       }
-      .diff-file-header {
-        color: #888;
+      .diff-row--add > .diff-gutter,
+      .diff-row--add > .diff-code {
+        background: rgba(46, 160, 67, 0.15);
       }
-      .diff-context {
-        color: var(--text);
+      .diff-row--add .diff-marker {
+        color: #3fb950;
+      }
+      .diff-row--del > .diff-gutter,
+      .diff-row--del > .diff-code {
+        background: rgba(248, 81, 73, 0.15);
+      }
+      .diff-row--del .diff-marker {
+        color: #f85149;
+      }
+      .diff-row--add .diff-char-changed {
+        background: rgba(46, 160, 67, 0.45);
+        border-radius: 2px;
+      }
+      .diff-row--del .diff-char-changed {
+        background: rgba(248, 81, 73, 0.45);
+        border-radius: 2px;
+      }
+      .diff-hunk-band {
+        grid-column: 1 / -1;
+        padding: 0.3rem 0.6rem;
+        background: rgba(56, 139, 253, 0.1);
+        color: #6e9fd8;
+        font-size: 0.72rem;
+      }
+      .diff-code-meta {
+        color: #6e7681;
+        font-style: italic;
       }
       .diff-note {
         padding: 0.4rem 0.5rem;
