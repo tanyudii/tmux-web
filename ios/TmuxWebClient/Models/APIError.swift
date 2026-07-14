@@ -17,7 +17,7 @@ enum APIError: Error, LocalizedError {
     var errorDescription: String? {
         switch self {
         case .unauthorized:
-            return "Token tidak valid atau kedaluwarsa."
+            return "Token is invalid or expired."
         case .notFound(let message), .badRequest(let message):
             return message
         case .conflict(let message, _):
@@ -25,9 +25,9 @@ enum APIError: Error, LocalizedError {
         case .server(_, let message):
             return message
         case .transport(let error):
-            return "Tidak bisa menghubungi server: \(error.localizedDescription)"
+            return "Could not reach the server: \(error.localizedDescription)"
         case .decoding:
-            return "Respons server tidak sesuai format yang diharapkan."
+            return "Server response did not match the expected format."
         }
     }
 }

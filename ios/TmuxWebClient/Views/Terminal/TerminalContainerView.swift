@@ -32,7 +32,7 @@ struct TerminalContainerView: View {
     var body: some View {
         VStack(spacing: 0) {
             if !isConnected {
-                Label("Terputus -- menyambung ulang...", systemImage: "wifi.slash")
+                Label("Disconnected -- reconnecting...", systemImage: "wifi.slash")
                     .font(.caption)
                     .foregroundStyle(.white)
                     .frame(maxWidth: .infinity)

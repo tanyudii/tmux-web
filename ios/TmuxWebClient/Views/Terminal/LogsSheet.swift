@@ -104,7 +104,7 @@ struct LogsSheet: View {
                         .pickerStyle(.menu)
                     }
                     ToolbarItem(placement: .cancellationAction) {
-                        Button("Tutup") { dismiss() }
+                        Button("Close") { dismiss() }
                     }
                 }
                 .onAppear { connect() }
