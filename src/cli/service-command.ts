@@ -40,7 +40,7 @@ After=network.target
 
 [Service]
 Type=simple
-ExecStart=${execPathNode} --experimental-strip-types ${binPath}
+ExecStart=${execPathNode} --experimental-strip-types ${binPath} start
 Restart=on-failure
 RestartSec=2
 

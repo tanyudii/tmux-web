@@ -3,6 +3,7 @@ import { promisify } from "node:util";
 import { mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
 import { defaultAppDir } from "./app-dir.ts";
+import { installService } from "./service-command.ts";
 
 const execFileAsync = promisify(execFileCb);
 
@@ -54,6 +55,7 @@ export interface UpgradeDeps {
   repoUrl?: string;
   appDir?: string;
   mkdirRecursive?: (path: string) => Promise<unknown>;
+  refreshService?: (deps: { exec: ExecFn }) => Promise<void>;
 }
 
 interface ResolvedUpgradeDeps {
@@ -61,6 +63,7 @@ interface ResolvedUpgradeDeps {
   repoUrl: string;
   appDir: string;
   mkdirRecursive: (path: string) => Promise<unknown>;
+  refreshService: (deps: { exec: ExecFn }) => Promise<void>;
 }
 
 function resolveUpgradeDeps(deps: UpgradeDeps): ResolvedUpgradeDeps {
@@ -69,6 +72,7 @@ function resolveUpgradeDeps(deps: UpgradeDeps): ResolvedUpgradeDeps {
     repoUrl: deps.repoUrl ?? REPO_SSH_URL,
     appDir: deps.appDir ?? defaultAppDir(),
     mkdirRecursive: deps.mkdirRecursive ?? ((path) => mkdir(path, { recursive: true })),
+    refreshService: deps.refreshService ?? installService,
   };
 }
 
@@ -205,7 +209,7 @@ export async function runUpgrade(args: string[], deps: UpgradeDeps = {}): Promis
     throw new UpgradeError("Usage: tmuxweb upgrade [--tag <tag>] [--app-dir <path>]");
   }
 
-  const { exec, repoUrl, appDir, mkdirRecursive } = resolveUpgradeDeps({
+  const { exec, repoUrl, appDir, mkdirRecursive, refreshService } = resolveUpgradeDeps({
     ...deps,
     appDir: explicitAppDir ?? deps.appDir,
   });
@@ -218,6 +222,17 @@ export async function runUpgrade(args: string[], deps: UpgradeDeps = {}): Promis
   console.log(`Installed ${tag} at ${appDir}.`);
 
   if (await isServiceActive(exec)) {
+    // Re-write the systemd unit before restarting, not just restart in
+    // place -- what ExecStart needs to look like can change between
+    // versions (it did, going into v1.1.0), and a stale unit file would
+    // otherwise silently stop running the actual server on restart.
+    console.log("Refreshing the systemd service definition...");
+    try {
+      await refreshService({ exec });
+    } catch (error) {
+      console.warn(`Could not refresh the systemd service definition: ${messageOf(error)}`);
+    }
+
     console.log("Restarting the tmux-web service...");
     try {
       await exec("systemctl", ["--user", "restart", SERVICE_NAME]);

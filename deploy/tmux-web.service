@@ -6,7 +6,7 @@
 #   mkdir -p ~/.config/systemd/user
 #   cp deploy/tmux-web.service ~/.config/systemd/user/tmux-web.service
 #   # edit ExecStart below: replace the placeholder path with `which tmuxweb`
-#   # (or wherever `npm install -g` put it)
+#   # (see README "Installation (global CLI, production)" for how it gets there)
 #   systemctl --user daemon-reload
 #   systemctl --user enable --now tmux-web
 #   loginctl enable-linger $USER   # keep it running after you log out / reboot without logging in
@@ -17,7 +17,7 @@ After=network.target
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/env -S node --experimental-strip-types /path/to/tmuxweb/bin/tmuxweb.ts
+ExecStart=/usr/bin/env -S node --experimental-strip-types /path/to/tmuxweb/bin/tmuxweb.ts start
 Restart=on-failure
 RestartSec=2
 

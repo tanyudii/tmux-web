@@ -404,14 +404,16 @@ src/
   config.ts               JSON config read/write (~/.tmux-web/config.json)
   main.ts                 composition root: wires the above into a real server
   cli/
-    index.ts                argv router for the `tmuxweb` command
+    index.ts                argv router for the `tmuxweb` command;
+                              no subcommand -> help, not the server
     init.ts                  `tmuxweb init`
     generate-token.ts         `tmuxweb generate`
     config-command.ts          `tmuxweb config port|host`
     service-command.ts          `tmuxweb service install|uninstall|status`
     upgrade.ts                   `tmuxweb upgrade [--tag <tag>]`
-    version.ts                    `tmuxweb --version`
-    help.ts                        `tmuxweb help`
+    app-dir.ts                    `~/.local/share/tmux-web` path resolution
+    version.ts                     `tmuxweb --version`
+    help.ts                         `tmuxweb help`
 bin/
   tmuxweb.ts             CLI entry point (shebang); dispatches into src/cli/
 public/
