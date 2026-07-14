@@ -6,7 +6,12 @@ import { ValidationError } from "./tmux.ts";
 import { ProjectValidationError, type Project } from "./projects.ts";
 import { WorktreeConflictError, DirtyWorktreeError } from "./worktree.ts";
 import { WorktreeNotFoundError, GitStatusError, type GroupedChanges, type FileDiff, type DiffMode } from "./git-status.ts";
-import type { ProjectSession } from "./project-sessions.ts";
+import {
+  SessionCreationInProgressError,
+  SessionCreationNotFoundError,
+  type ProjectSession,
+  type SessionCreationStatus,
+} from "./project-sessions.ts";
 import {
   EnvUnavailableError,
   EnvAlreadyRunningError,
@@ -27,7 +32,8 @@ export interface ServerDeps {
   removeProject: (id: string) => Promise<void>;
 
   listProjectSessions: (project: Project) => Promise<ProjectSession[]>;
-  createProjectSession: (project: Project, name: string) => Promise<ProjectSession>;
+  startProjectSessionCreation: (project: Project, name: string) => Promise<{ name: string; fullName: string }>;
+  getProjectSessionCreationStatus: (project: Project, sessionSlug: string) => Promise<SessionCreationStatus>;
   killProjectSession: (
     project: Project,
     sessionSlug: string,
@@ -119,6 +125,14 @@ function sendMappedError(res: ServerResponse, error: unknown): boolean {
   }
   if (error instanceof EnvConfigError) {
     sendJson(res, 400, { error: error.message });
+    return true;
+  }
+  if (error instanceof SessionCreationInProgressError) {
+    sendJson(res, 409, { error: error.message });
+    return true;
+  }
+  if (error instanceof SessionCreationNotFoundError) {
+    sendJson(res, 404, { error: error.message });
     return true;
   }
   return false;
@@ -219,8 +233,8 @@ export function createServer(deps: ServerDeps): Server {
         }
 
         try {
-          const session = await deps.createProjectSession(project, name);
-          return sendJson(res, 201, session);
+          const pending = await deps.startProjectSessionCreation(project, name);
+          return sendJson(res, 202, { ...pending, phase: "creating" });
         } catch (error) {
           if (sendMappedError(res, error)) return;
           throw error;
@@ -244,6 +258,24 @@ export function createServer(deps: ServerDeps): Server {
           throw error;
         }
         return sendEmpty(res, 204);
+      }
+
+      const creationMatch = path.match(/^\/api\/projects\/([^/]+)\/sessions\/([^/]+)\/creation$/);
+      if (creationMatch && req.method === "GET") {
+        if (!isAuthorized(req, deps.token)) return sendEmpty(res, 401);
+
+        const project = await deps.getProject(decodeURIComponent(creationMatch[1]));
+        if (!project) return sendJson(res, 404, { error: "Project not found" });
+
+        const sessionSlug = decodeURIComponent(creationMatch[2]);
+
+        try {
+          const status = await deps.getProjectSessionCreationStatus(project, sessionSlug);
+          return sendJson(res, 200, status);
+        } catch (error) {
+          if (sendMappedError(res, error)) return;
+          throw error;
+        }
       }
 
       const changesMatch = path.match(/^\/api\/projects\/([^/]+)\/sessions\/([^/]+)\/changes$/);

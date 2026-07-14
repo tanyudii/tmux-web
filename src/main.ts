@@ -16,7 +16,9 @@ import { isGitRepo, addWorktree, removeWorktree } from "./worktree.ts";
 import { getChangedFiles, getFileDiff } from "./git-status.ts";
 import {
   listProjectSessions as listProjectSessionsImpl,
-  createProjectSession as createProjectSessionImpl,
+  startProjectSessionCreation as startProjectSessionCreationImpl,
+  getSessionCreationStatus as getSessionCreationStatusImpl,
+  createSessionCreationStore,
   killProjectSession as killProjectSessionImpl,
   getProjectSessionChanges as getProjectSessionChangesImpl,
   getProjectSessionDiff as getProjectSessionDiffImpl,
@@ -78,6 +80,7 @@ export async function main(): Promise<void> {
     worktreesRoot,
   };
   const sessionEnvStore = createSessionEnvStore();
+  const sessionCreationStore = createSessionCreationStore();
 
   const projectSessionsDeps: ProjectSessionsDeps = {
     listSessions,
@@ -103,8 +106,10 @@ export async function main(): Promise<void> {
     removeProject: (id) => removeProjectImpl(projectsFile, id),
 
     listProjectSessions: (project) => listProjectSessionsImpl(project, projectSessionsDeps),
-    createProjectSession: (project, name) =>
-      createProjectSessionImpl(project, name, projectSessionsDeps),
+    startProjectSessionCreation: (project, name) =>
+      startProjectSessionCreationImpl(project, name, projectSessionsDeps, sessionCreationStore),
+    getProjectSessionCreationStatus: (project, slug) =>
+      getSessionCreationStatusImpl(project, slug, sessionCreationStore),
     killProjectSession: (project, slug, options) =>
       killProjectSessionImpl(project, slug, projectSessionsDeps, options),
 
