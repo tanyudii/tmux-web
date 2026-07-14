@@ -10,9 +10,14 @@ export class EnvNotRunningError extends Error {}
 
 export type EnvPhase = "unavailable" | "idle" | "starting" | "running" | "error" | "stopping";
 
+export interface ResolvedOpenLink {
+  label: string;
+  url: string;
+}
+
 export interface EnvStatus {
   phase: EnvPhase;
-  openUrl?: string;
+  openLinks?: ResolvedOpenLink[];
   message?: string;
   services?: ComposeServiceStatus[];
 }
@@ -56,23 +61,32 @@ async function safeComposePs(deps: SessionEnvDeps, ctx: ComposeContext): Promise
   }
 }
 
-async function resolveOpenUrl(
+// Resolves every configured open-link independently and in parallel -- one
+// service not having published its port yet (e.g. still starting) never
+// blocks the others from showing up.
+async function resolveOpenLinks(
   deps: SessionEnvDeps,
   ctx: ComposeContext,
   config: EnvConfig,
   requestHost?: string,
-): Promise<string | undefined> {
-  if (!config.openService || config.openPort == null) return undefined;
-  const hostPort = await deps.composePort(ctx, config.openService, config.openPort);
-  if (hostPort == null) return undefined;
-  // requestHost (the Host header of whatever request asked for this status --
-  // see server.ts) wins: it's whatever address the browser is CURRENTLY using
-  // to reach tmux-web itself (127.0.0.1, a LAN IP, a VPN IP, ...), so the
-  // "Open" link keeps working no matter which of those the user is on right
-  // now. deps.openHost is a static fallback for callers that don't have a
-  // request (e.g. tests, or a future non-HTTP caller); "localhost" is the
-  // last resort when neither is available.
-  return `http://${requestHost ?? deps.openHost ?? "localhost"}:${hostPort}`;
+): Promise<ResolvedOpenLink[]> {
+  const resolved = await Promise.all(
+    config.openLinks.map(async (link) => {
+      const hostPort = await deps.composePort(ctx, link.service, link.port);
+      if (hostPort == null) return null;
+      // requestHost (the Host header of whatever request asked for this
+      // status -- see server.ts) wins: it's whatever address the browser is
+      // CURRENTLY using to reach tmux-web itself (127.0.0.1, a LAN IP, a VPN
+      // IP, ...), so every "Open" link keeps working no matter which of
+      // those the user is on right now. deps.openHost is a static fallback
+      // for callers that don't have a request (e.g. tests, or a future
+      // non-HTTP caller); "localhost" is the last resort when neither is
+      // available.
+      const host = requestHost ?? deps.openHost ?? "localhost";
+      return { label: link.label, url: `http://${host}:${hostPort}` };
+    }),
+  );
+  return resolved.filter((link): link is ResolvedOpenLink => link !== null);
 }
 
 export async function requireConfig(
@@ -124,14 +138,19 @@ export async function getSessionEnvStatus(
   const services = await safeComposePs(deps, ctx);
 
   if (transient?.phase === "error") {
-    const openUrl = services.length ? await resolveOpenUrl(deps, ctx, config, requestHost) : undefined;
-    return { phase: "error", message: transient.message, services: services.length ? services : undefined, openUrl };
+    const openLinks = services.length ? await resolveOpenLinks(deps, ctx, config, requestHost) : [];
+    return {
+      phase: "error",
+      message: transient.message,
+      services: services.length ? services : undefined,
+      openLinks: openLinks.length ? openLinks : undefined,
+    };
   }
 
   if (services.length === 0) return { phase: "idle" };
 
-  const openUrl = await resolveOpenUrl(deps, ctx, config, requestHost);
-  return { phase: "running", openUrl, services };
+  const openLinks = await resolveOpenLinks(deps, ctx, config, requestHost);
+  return { phase: "running", openLinks: openLinks.length ? openLinks : undefined, services };
 }
 
 export async function startSessionEnv(

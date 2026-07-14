@@ -869,3 +869,134 @@ verification artifact, not project documentation).
   inline at the call site. Production code never polls a session's own pane
   via external `tmux` CLI calls immediately before attaching, so this does
   not affect real usage.
+
+## Feature addendum: multiple per-service open links
+
+**Source plan**: no `*.plan.md` file — produced inline via `/ecc:plan`
+(requirements/risk/step breakdown grounded in the existing per-session
+environment feature), implemented via `/ecc:tdd-workflow`. The user's
+real-world motivation: a session's `docker-compose.yml` sometimes runs more
+than one browser-facing service (e.g. the frontend *and* a database UI like
+DBeaver's web client, `dbeaver/cloudbeaver`) on an ephemeral/random host
+port each, and the environment bar could previously only ever show one
+**Open ↗** link (`env.json`'s singular `openService`/`openPort`).
+
+### User journey
+
+31. As the server owner, I want an **Open ↗** link for every service I care
+    about in a session's environment (not just one), each resolved to
+    whatever ephemeral host port docker actually picked for it, so I can
+    e.g. open the frontend and a database web UI side by side to validate
+    data the frontend just wrote — without hardcoding ports anywhere.
+
+### Task report
+
+| Journey | Summary | Validation command | Result |
+|---|---|---|---|
+| 31 | `src/env-config.ts`: new `open` array in `env.json` (`{ label?, service, port }[]`), parsed into `EnvConfig.openLinks: OpenLinkConfig[]`, replacing the old singular `openService`/`openPort` fields on the type. The legacy singular fields are still *read* from `env.json` (backward compatible with existing repos) and synthesized into a one-entry `openLinks` array labeled `"Open"` when `open` is absent; `open` wins when both are present | `node --experimental-strip-types --test src/env-config.test.ts` | RED (10 fail) → GREEN (15 pass) |
+| 31 | `src/session-env.ts`: `resolveOpenUrl` (singular) replaced by `resolveOpenLinks`, resolving every configured link's `docker compose port <service> <port>` independently and in parallel (`Promise.all`) — one service not having published its port yet (still starting) never blocks the others from appearing. `EnvStatus.openUrl?: string` replaced by `EnvStatus.openLinks?: { label, url }[]` | `node --experimental-strip-types --test src/session-env.test.ts` | RED (7 fail) → GREEN (26 pass) |
+| 31 | `src/server.test.ts` fixtures updated (`openUrl` → `openLinks`) — `server.ts` itself needed no change, it only passes `EnvStatus` through as JSON | `npm run typecheck` | GREEN (clean) |
+| 31 | `public/index.html`/`public/app.js`: the single `<a id="env-open-link">` replaced with a `<span id="env-open-links">` container, rebuilt from scratch each poll (same pattern as the existing `renderLogsServiceOptions`) into one `<a class="env-action">` per resolved link | `node --check public/app.js` | PASS (syntax clean; no unit test — same DOM-rendering rationale as `renderLogsServiceOptions`, which was never unit-tested either) |
+| 31 | `README.md`'s "Per-session environments" section updated: `open[]` schema documented with a DBeaver example, legacy shorthand and precedence rule spelled out | manual read-through | PASS |
+| — | Full suite unaffected otherwise | `npm test` | GREEN (398 pass, 0 fail) |
+| — | Typecheck | `npm run typecheck` | PASS (clean) |
+
+### Manual smoke test (real Docker daemon, not a fake `exec`)
+
+Same rationale as the original per-session-environments manual smoke test
+above: unit tests prove `resolveOpenLinks`'s control flow against a fake
+`composePort`, not that a real Docker daemon's ephemeral-port assignment for
+*two simultaneous services* actually behaves the way the fakes assume.
+Rather than register a scratch project through the live HTTP API (this
+build machine already has a real tmux-web-managed server running against
+the default `~/.tmux-web` data directory, managing real projects — sharing
+that registry for a throwaway test would risk racing its writes), this was
+verified by calling `session-env.ts`'s real exported functions
+(`startSessionEnv`/`getSessionEnvStatus`/`stopSessionEnv`) directly, wired
+to the real `docker-compose.ts` implementations (not fakes), against a
+scratch `.tmux-web-env/` folder outside any tracked repo:
+
+1. Wrote a scratch `docker-compose.yml` with two services: `web`
+   (`nginx:alpine`, container port 80) and `dbeaver`
+   (`dbeaver/cloudbeaver:latest`, container port 8978) — both published as
+   `"127.0.0.1::<port>"` (ephemeral host port, per this project's own
+   documented convention), and a scratch `env.json` with
+   `"open": [{"label":"Frontend","service":"web","port":80},
+   {"label":"DBeaver","service":"dbeaver","port":8978}]`.
+2. Called `startSessionEnv` for a fake `Project`/session slug pointing at
+   that scratch worktree. Polled `getSessionEnvStatus` until `"running"`.
+3. Result: both links resolved on the very first `"running"` poll, each to
+   its own distinct ephemeral port docker actually picked —
+   `openLinks: [{"label":"Frontend","url":"http://localhost:32796"},
+   {"label":"DBeaver","url":"http://localhost:32795"}]` — confirming
+   per-service port resolution is independent and correct, matching the
+   user's literal DBeaver-web use case.
+4. `fetch()`'d both resolved URLs directly (retrying every 1.5s up to 20
+   times, since `cloudbeaver`'s HTTP server takes longer to become ready
+   than nginx's even after docker reports the container "running"): both
+   returned HTTP 200, confirming the resolved ports actually point at the
+   right container in each case.
+5. Called `stopSessionEnv`; a follow-up `getSessionEnvStatus` returned
+   `{"phase":"idle"}` with no `openLinks`, confirming teardown.
+6. Verified via `docker ps -a`/`docker volume ls` filtered on this scratch
+   compose project's name that no containers or volumes were left behind,
+   and that the host's other, unrelated running containers (including
+   another project's own real `dbeaver/cloudbeaver` container, coincidentally
+   already running on this build machine for unrelated work) were completely
+   untouched throughout.
+
+All steps passed. Driver script and scratch fixtures were temporary
+(written under the session's own scratchpad directory, not this repo) and
+were deleted afterward.
+
+### Test specification
+
+| # | What is guaranteed | Test file | Type | Result |
+|---|--------------------|-----------|------|--------|
+| 52 | `loadEnvConfig` parses `open[]` into `openLinks`, defaulting a missing `label` to the service name | `src/env-config.test.ts:loadEnvConfig parses the open[] array into openLinks, defaulting label to the service name` | unit | PASS |
+| 53 | The legacy singular `openService`/`openPort` shape still works, synthesized into a one-entry `openLinks` array labeled `"Open"` | `src/env-config.test.ts:loadEnvConfig falls back to a single openLinks entry from legacy openService/openPort` | unit | PASS |
+| 54 | A legacy `openService` with no matching `openPort` (or vice versa) resolves to an empty `openLinks`, not a half-built link | `src/env-config.test.ts:loadEnvConfig ignores a legacy openService with no matching openPort...` | unit | PASS |
+| 55 | When both `open[]` and the legacy singular fields are present, `open[]` wins | `src/env-config.test.ts:loadEnvConfig prefers the open[] array over legacy openService/openPort...` | unit | PASS |
+| 56 | Malformed `open[]` (not an array, or an entry missing `service`, with a non-integer `port`, or a non-string `label`) is rejected with `EnvConfigError` before `loadEnvConfig` ever returns | `src/env-config.test.ts` (×4) | unit | PASS |
+| 57 | `getSessionEnvStatus` resolves every configured `openLinks` entry independently — a service that hasn't published its port yet is simply omitted, without blocking the others | `src/session-env.test.ts:getSessionEnvStatus resolves multiple openLinks independently, omitting entries whose service hasn't published a port yet` | unit | PASS |
+| 58 | Once every configured service has published its port, all configured links resolve, each to its own host port | `src/session-env.test.ts:getSessionEnvStatus resolves every configured openLinks entry once all services have published their ports` | unit | PASS |
+| 59 | A config with no `openLinks` at all reports no `openLinks` on the status (not an empty-but-present array) | `src/session-env.test.ts:getSessionEnvStatus reports no openLinks when the config declares none` | unit | PASS |
+| 60 | End-to-end against a real Docker daemon: two distinct services' ephemeral host ports both resolve correctly and independently, and both are actually reachable over HTTP | manual smoke test (see above) | integration (real Docker) | PASS |
+
+### Coverage
+
+```
+npm run test:coverage
+```
+
+```
+env-config.ts   | 100.00 |    93.75 |  100.00 |
+session-env.ts  | 100.00 |    98.28 |  100.00 |
+all files       |  96.37 |    95.31 |   95.85 |
+```
+
+398 tests total, 0 failures. (This is the whole-suite figure at the time
+this addendum was written — later addenda in this document may report a
+different total; see each addendum's own "Task report" for the count at
+that point in time.)
+
+### Known, intentional gaps
+
+- **Frontend caveat, same as every other UI change in this report**: no
+  browser is installed in this build environment, so `renderOpenLinks`'s
+  actual DOM output (multiple `<a class="env-action">` elements, correct
+  `href`/label text, correct show/hide behavior across polls) was verified
+  only via `node --check` (syntax) and a manual read-through against
+  `index.html`'s element IDs — not driven through a real rendered page.
+  Flagged explicitly rather than overclaiming, consistent with this
+  project's established practice for `app.js`.
+- The manual smoke test above calls `session-env.ts`'s exported functions
+  directly with a fake `Project` object and a throwaway `SessionEnvStore`,
+  rather than driving the full HTTP API against a live `main.ts` process —
+  deliberately, to avoid touching the real `~/.tmux-web` project registry
+  already in active use on this build machine for unrelated real projects.
+  This still exercises the real `docker-compose.ts` (`composeUp`/
+  `composePs`/`composePort`/`composeDown`) against a real Docker daemon,
+  which is the actual integration risk this feature introduces; the HTTP
+  routing layer itself is unchanged by this feature (still just passes
+  `EnvStatus` through as JSON) and remains covered by `server.test.ts`.

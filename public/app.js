@@ -59,7 +59,7 @@ const envMessageEl = document.getElementById("env-message");
 const envSetupBtn = document.getElementById("env-setup-btn");
 const envLogsBtn = document.getElementById("env-logs-btn");
 const envStopBtn = document.getElementById("env-stop-btn");
-const envOpenLink = document.getElementById("env-open-link");
+const envOpenLinksContainer = document.getElementById("env-open-links");
 
 const logsModal = document.getElementById("logs-modal");
 const logsServiceSelect = document.getElementById("logs-service-select");
@@ -1238,11 +1238,23 @@ function renderEnvBar(status) {
   renderLogsServiceOptions(services);
   if (services.length === 0) closeLogsModal();
 
-  if (status.openUrl) {
-    envOpenLink.href = status.openUrl;
-    envOpenLink.style.display = "inline-block";
-  } else {
-    envOpenLink.style.display = "none";
+  renderOpenLinks(status.openLinks || []);
+}
+
+// Renders one "<label> ↗" link per configured+resolved open link (e.g. a
+// frontend and a DBeaver/database UI running side by side in the same
+// session) -- rebuilt from scratch each poll, same approach as
+// renderLogsServiceOptions below.
+function renderOpenLinks(openLinks) {
+  envOpenLinksContainer.textContent = "";
+  for (const link of openLinks) {
+    const anchor = document.createElement("a");
+    anchor.className = "env-action";
+    anchor.href = link.url;
+    anchor.target = "_blank";
+    anchor.rel = "noopener";
+    anchor.textContent = link.label + " ↗";
+    envOpenLinksContainer.appendChild(anchor);
   }
 }
 
