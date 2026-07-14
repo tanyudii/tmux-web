@@ -1,6 +1,6 @@
 import { WebSocketServer, type WebSocket } from "ws";
-import { fileURLToPath, pathToFileURL } from "node:url";
-import { dirname, join } from "node:path";
+import { pathToFileURL } from "node:url";
+import { join } from "node:path";
 import { createServer } from "./server.ts";
 import { readConfig, ConfigError, defaultConfigDir } from "./config.ts";
 import { listSessions, createSession, killSession, isValidSessionName } from "./tmux.ts";
@@ -39,8 +39,6 @@ import {
 import { attachLogsToSocket, type LogSocketLike } from "./log-stream.ts";
 import { sanitizeServiceName } from "./service-name.ts";
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const PUBLIC_DIR = join(__dirname, "..", "public");
 const DEFAULT_COLS = 80;
 const DEFAULT_ROWS = 24;
 
@@ -97,7 +95,6 @@ export async function main(): Promise<void> {
 
   const httpServer = createServer({
     token: config.token,
-    publicDir: PUBLIC_DIR,
 
     listProjects: () => loadProjects(projectsFile),
     registerProject: (name, repoPath) =>

@@ -12,10 +12,14 @@ sessions → every session is an isolated git worktree** on its own branch,
 so parallel sessions never collide on the same working directory.
 
 Built to be read in one sitting: the entire core (`src/`) is around 1700
-lines across 16 files, with 4 runtime dependencies (`node-pty`, `ws`,
-`@xterm/xterm`, `@xterm/addon-fit`) — the per-session environment feature
-below shells out to the `docker`/`docker compose` CLIs already on your
-system rather than adding a client library.
+lines across 16 files, with 2 runtime dependencies (`node-pty`, `ws`) — the
+per-session environment feature below shells out to the `docker`/`docker
+compose` CLIs already on your system rather than adding a client library.
+
+The client (web + iOS) is being rebuilt as a single Kotlin Multiplatform +
+Compose Multiplatform project under `kmp/` — see
+`.claude/plans/rebuild-web-ios-kmp.plan.md` for the in-progress migration
+plan. The backend (`src/`) is a frozen contract throughout that migration.
 
 ## How it works
 
@@ -214,7 +218,7 @@ restarts the systemd service automatically if it was already running.
 ```bash
 git clone git@github.com:tanyudii/tmux-web.git
 cd tmux-web
-npm install                 # also copies xterm.js into public/vendor/
+npm install
 npm run init                 # creates ~/.tmux-web/config.json with a generated token
 
 npm test                    # includes real-tmux and real-git integration tests
@@ -393,22 +397,12 @@ src/
     help.ts                        `tmuxweb help`
 bin/
   tmuxweb.ts             CLI entry point (shebang); dispatches into src/cli/
-public/
-  index.html, app.js   vanilla JS frontend: project list -> project detail
-                        (session sidebar, xterm.js, right-hand changes/diff
-                        sidebar, environment setup bar above the terminal,
-                        Logs modal with a second read-only xterm.js instance)
-  notify.js             pure bell-alert decision logic (mute state, cooldown,
-                        title text) -- DOM-free so it's unit-tested directly
-                        with node:test while still loading as a browser
-                        ES module, imported by app.js
-  vendor/              xterm.js/addon-fit build output, committed to git
-                        (kept fresh by `npm install`'s postinstall step, but
-                        checked in so a `github:...#tag` install always has
-                        it even if that postinstall step is skipped)
+kmp/
+  Kotlin Multiplatform + Compose Multiplatform client (web + iOS), replacing
+  the old vanilla-JS `public/` frontend and the old `ios/TmuxWebClient`
+  SwiftUI app -- see `.claude/plans/rebuild-web-ios-kmp.plan.md` for the
+  in-progress migration plan and architecture decisions.
 scripts/
-  copy-vendor.mjs       postinstall step, refreshes public/vendor/ from
-                        node_modules when available; no-ops otherwise
   install-service.mjs   `npm run install-service` -- thin wrapper around
                         `tmuxweb service install`, for a local dev clone
 deploy/
