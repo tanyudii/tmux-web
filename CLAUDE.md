@@ -141,7 +141,3 @@ match the existing v1.x convention.
 
 To cut a release by hand instead (e.g. the workflow is broken): bump the three
 version fields, commit `chore: release vX.Y.Z`, `git tag vX.Y.Z`, push both.
-The workflow's bump step uses a node one-liner (not `npm version`) precisely
-because `npm version` requires a clean working tree and `npm ci`'s postinstall
-rewrites the tracked `public/vendor/` files -- don't "simplify" it back to
-`npm version` without handling that.
