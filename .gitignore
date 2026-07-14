@@ -1,6 +1,5 @@
 node_modules/
 dist/
 *.log
-public/vendor/
 ios/TmuxWebClient.xcodeproj/
 .serena/
