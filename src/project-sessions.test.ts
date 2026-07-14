@@ -3,10 +3,16 @@ import assert from "node:assert/strict";
 import {
   listProjectSessions,
   createProjectSession,
+  startProjectSessionCreation,
+  getSessionCreationStatus,
+  createSessionCreationStore,
   killProjectSession,
   getProjectSessionChanges,
   getProjectSessionDiff,
+  SessionCreationInProgressError,
+  SessionCreationNotFoundError,
   type ProjectSessionsDeps,
+  type SessionCreationStatus,
 } from "./project-sessions.ts";
 import type { Project } from "./projects.ts";
 import { ValidationError } from "./tmux.ts";
@@ -31,6 +37,12 @@ function makeDeps(overrides: Partial<ProjectSessionsDeps> = {}): ProjectSessions
     worktreesRoot: "/data/worktrees",
     ...overrides,
   };
+}
+
+async function flush(): Promise<void> {
+  for (let i = 0; i < 8; i++) {
+    await new Promise((resolve) => setImmediate(resolve));
+  }
 }
 
 test("listProjectSessions returns only sessions belonging to the project, with the prefix stripped", async () => {
@@ -247,4 +259,117 @@ test("getProjectSessionDiff resolves the worktree path and delegates to getFileD
     { worktreePath: "/data/worktrees/proj1-ab12cd/feature-x", filePath: "src/index.ts", mode: "staged" },
   ]);
   assert.equal(result.diff, "diff text");
+});
+
+test("startProjectSessionCreation returns {name, fullName} immediately without waiting for the background work", async () => {
+  const deps = makeDeps({ addWorktree: () => new Promise(() => {}) }); // never resolves during this test
+  const store = createSessionCreationStore();
+
+  const result = await startProjectSessionCreation(PROJECT, "Feature X", deps, store);
+
+  assert.deepEqual(result, { name: "feature-x", fullName: "proj1-ab12cd__feature-x" });
+});
+
+test("startProjectSessionCreation leaves the store in phase 'creating' right after it returns", async () => {
+  const deps = makeDeps({ addWorktree: () => new Promise(() => {}) }); // never resolves during this test
+  const store = createSessionCreationStore();
+
+  await startProjectSessionCreation(PROJECT, "feature-x", deps, store);
+
+  assert.deepEqual(store.get("proj1-ab12cd__feature-x"), { phase: "creating" });
+});
+
+test("startProjectSessionCreation rejects a second truly concurrent create for the same name (no TOCTOU race)", async () => {
+  let addWorktreeCalls = 0;
+  const deps = makeDeps({
+    addWorktree: async () => {
+      addWorktreeCalls++;
+    },
+  });
+  const store = createSessionCreationStore();
+
+  // Both calls fire before either has a chance to claim the store entry --
+  // mirrors "startSessionEnv rejects a second truly concurrent start()..."
+  // in session-env.test.ts.
+  const results = await Promise.allSettled([
+    startProjectSessionCreation(PROJECT, "feature-x", deps, store),
+    startProjectSessionCreation(PROJECT, "feature-x", deps, store),
+  ]);
+
+  const fulfilled = results.filter((r) => r.status === "fulfilled");
+  const rejected = results.filter((r) => r.status === "rejected");
+  assert.equal(fulfilled.length, 1);
+  assert.equal(rejected.length, 1);
+  assert.ok(rejected[0].status === "rejected" && rejected[0].reason instanceof SessionCreationInProgressError);
+
+  await flush();
+  assert.equal(addWorktreeCalls, 1);
+});
+
+test("startProjectSessionCreation reports {phase: 'ready', session} once the background work completes", async () => {
+  const deps = makeDeps();
+  const store = createSessionCreationStore();
+
+  await startProjectSessionCreation(PROJECT, "feature-x", deps, store);
+  await flush();
+
+  assert.deepEqual(store.get("proj1-ab12cd__feature-x"), {
+    phase: "ready",
+    session: { name: "feature-x", fullName: "proj1-ab12cd__feature-x", windows: 1, attached: false },
+  });
+});
+
+test("startProjectSessionCreation reports {phase: 'error', message} when createSession throws", async () => {
+  const deps = makeDeps({
+    createSession: async () => {
+      throw new Error("tmux exploded");
+    },
+  });
+  const store = createSessionCreationStore();
+
+  await startProjectSessionCreation(PROJECT, "feature-x", deps, store);
+  await flush();
+
+  const status = store.get("proj1-ab12cd__feature-x");
+  assert.equal(status?.phase, "error");
+  assert.match(status?.message ?? "", /tmux exploded/);
+});
+
+test("startProjectSessionCreation records progress messages from addWorktree and the tmux-start step in order", async () => {
+  const deps = makeDeps({
+    addWorktree: async (_repoPath, _worktreePath, _branchName, onProgress) => {
+      onProgress?.("Creating worktree…");
+    },
+  });
+  const store = createSessionCreationStore();
+  const fullName = "proj1-ab12cd__feature-x";
+  const messages: Array<string | undefined> = [];
+  const originalSet = store.set.bind(store);
+  store.set = (key: string, value: SessionCreationStatus) => {
+    if (key === fullName) messages.push(value.message);
+    return originalSet(key, value);
+  };
+
+  await startProjectSessionCreation(PROJECT, "feature-x", deps, store);
+  await flush();
+
+  assert.deepEqual(messages, [undefined, "Creating worktree…", "Starting tmux session…", undefined]);
+});
+
+test("getSessionCreationStatus throws SessionCreationNotFoundError when nothing is in the store for that slug", async () => {
+  const store = createSessionCreationStore();
+
+  await assert.rejects(
+    () => getSessionCreationStatus(PROJECT, "feature-x", store),
+    SessionCreationNotFoundError,
+  );
+});
+
+test("getSessionCreationStatus returns whatever is currently in the store for a known slug", async () => {
+  const store = createSessionCreationStore();
+  store.set("proj1-ab12cd__feature-x", { phase: "creating", message: "Pruning stale worktrees…" });
+
+  const status = await getSessionCreationStatus(PROJECT, "feature-x", store);
+
+  assert.deepEqual(status, { phase: "creating", message: "Pruning stale worktrees…" });
 });

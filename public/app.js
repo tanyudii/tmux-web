@@ -36,6 +36,10 @@ const newSessionBtn = document.getElementById("new-session");
 const newSessionSpinner = document.getElementById("new-session-spinner");
 const newSessionLabel = document.getElementById("new-session-label");
 const newSessionHint = document.getElementById("new-session-hint");
+// Captured once at load time so setNewSessionPending(false) can restore the
+// static placeholder text after a poll has overwritten it with a live
+// progress message -- see startSessionCreationPolling.
+const DEFAULT_NEW_SESSION_HINT = newSessionHint.textContent;
 const terminalEl = document.getElementById("terminal");
 const emptyStateEl = document.getElementById("empty-state");
 const copyToastEl = document.getElementById("copy-toast");
@@ -70,6 +74,7 @@ let fitAddon = null;
 let sessionPollTimer = null;
 let changesPollTimer = null;
 let envPollTimer = null;
+let creationPollTimer = null;
 let isCreatingSession = false;
 let expandedDiffKey = null; // "mode:path" of the single currently-open inline diff, or null
 let logsSocket = null;
@@ -369,14 +374,20 @@ function renderSessionList(sessions) {
 }
 
 // Creating a session runs `git fetch origin` + `git worktree add` on the
-// server before it responds (see worktree.ts) -- on a large repo or slow
-// connection that can take several seconds, so this button needs its own
-// pending state or it just looks stuck for a while.
+// server (see worktree.ts) -- on a large repo or slow connection that can
+// take several seconds, so this button needs its own pending state or it
+// just looks stuck for a while. The server now returns fast (202) and does
+// the actual work in the background (see startProjectSessionCreation in
+// project-sessions.ts); this stays pending until the poll below observes
+// phase "ready" or "error".
 function setNewSessionPending(pending) {
   newSessionBtn.disabled = pending;
   newSessionSpinner.hidden = !pending;
   newSessionLabel.textContent = pending ? "Creating…" : "+ New session";
   newSessionHint.hidden = !pending;
+  // Reset to the static placeholder so a stale progress message from a
+  // previous attempt never flashes before the next poll tick fills it in.
+  if (!pending) newSessionHint.textContent = DEFAULT_NEW_SESSION_HINT;
 }
 
 newSessionBtn.addEventListener("click", async () => {
@@ -386,25 +397,106 @@ newSessionBtn.addEventListener("click", async () => {
 
   isCreatingSession = true;
   setNewSessionPending(true);
+
+  let res;
   try {
-    const res = await apiFetch(projectSessionsUrl(""), {
+    res = await apiFetch(projectSessionsUrl(""), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name }),
     });
-    if (!res.ok) {
-      const body = await res.json().catch(() => ({}));
-      window.alert("Could not create session: " + (body.error || res.status));
-      return;
-    }
-    const session = await res.json();
-    await refreshSessions();
-    attachToSession(session);
-  } finally {
+  } catch (error) {
     isCreatingSession = false;
     setNewSessionPending(false);
+    throw error;
   }
+
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    window.alert("Could not create session: " + (body.error || res.status));
+    isCreatingSession = false;
+    setNewSessionPending(false);
+    return;
+  }
+
+  const pending = await res.json();
+  startSessionCreationPolling(pending.name);
 });
+
+function stopCreationPolling() {
+  if (creationPollTimer) clearInterval(creationPollTimer);
+  creationPollTimer = null;
+}
+
+// Polls GET .../sessions/:name/creation (mirrors the env status poll below)
+// on a short interval -- session creation is much shorter-lived than a
+// docker-compose environment, so this ticks faster than envPollTimer.
+function startSessionCreationPolling(sessionSlug) {
+  const CREATION_POLL_INTERVAL_MS = 1000;
+
+  const poll = async () => {
+    if (!currentProject) {
+      // The user navigated back to the project list mid-creation.
+      stopCreationPolling();
+      isCreatingSession = false;
+      setNewSessionPending(false);
+      return;
+    }
+
+    let res;
+    try {
+      res = await apiFetch(projectSessionsUrl("/" + encodeURIComponent(sessionSlug) + "/creation"));
+    } catch {
+      // Network error -- fall back to a best-effort session list refresh,
+      // same as the non-ok branch below.
+      stopCreationPolling();
+      await refreshSessions();
+      isCreatingSession = false;
+      setNewSessionPending(false);
+      return;
+    }
+
+    if (res.status === 401) {
+      stopCreationPolling();
+      sessionStorage.removeItem(TOKEN_KEY);
+      location.reload();
+      return;
+    }
+
+    if (!res.ok) {
+      // e.g. 404 if the in-memory store was wiped by a server restart --
+      // the session may have actually finished server-side even though
+      // progress tracking was lost, so refresh the list instead of alerting.
+      stopCreationPolling();
+      await refreshSessions();
+      isCreatingSession = false;
+      setNewSessionPending(false);
+      return;
+    }
+
+    const status = await res.json();
+    newSessionHint.textContent = status.message || DEFAULT_NEW_SESSION_HINT;
+
+    if (status.phase === "ready") {
+      stopCreationPolling();
+      await refreshSessions();
+      attachToSession(status.session);
+      isCreatingSession = false;
+      setNewSessionPending(false);
+      return;
+    }
+
+    if (status.phase === "error") {
+      stopCreationPolling();
+      window.alert("Could not create session: " + status.message);
+      isCreatingSession = false;
+      setNewSessionPending(false);
+    }
+  };
+
+  poll();
+  creationPollTimer = setInterval(poll, CREATION_POLL_INTERVAL_MS);
+}
 
 async function killSession(name) {
   if (!window.confirm('Kill session "' + name + '" and remove its worktree? This ends every process running inside it.')) {
