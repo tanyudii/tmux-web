@@ -1,54 +1,92 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { homedir } from "node:os";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { parseConfig, ConfigError } from "./config.ts";
+import {
+  configExists,
+  configFilePath,
+  ConfigError,
+  ConfigNotFoundError,
+  createDefaultConfig,
+  readConfig,
+  writeConfig,
+} from "./config.ts";
 
-const VALID_ENV = {
-  TMUX_WEB_TOKEN: "a-secret-token-that-is-long-enough",
-  TMUX_WEB_PORT: "5309",
-  TMUX_WEB_BIND_HOST: "10.0.0.1",
-  TMUX_WEB_DATA_DIR: "/data/tmux-web",
-};
+async function withTempDir(fn: (dir: string) => Promise<void>): Promise<void> {
+  const dir = await mkdtemp(join(tmpdir(), "tmux-web-config-test-"));
+  try {
+    await fn(dir);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}
 
-test("parseConfig returns the parsed values for a fully-specified env", () => {
-  assert.deepEqual(parseConfig(VALID_ENV), {
-    token: "a-secret-token-that-is-long-enough",
-    port: 5309,
-    bindHost: "10.0.0.1",
-    dataDir: "/data/tmux-web",
+test("readConfig throws ConfigNotFoundError when config.json does not exist", async () => {
+  await withTempDir(async (dir) => {
+    await assert.rejects(() => readConfig(dir), ConfigNotFoundError);
   });
 });
 
-test("parseConfig defaults TMUX_WEB_DATA_DIR to ~/.tmux-web when unset", () => {
-  const { TMUX_WEB_DATA_DIR, ...rest } = VALID_ENV;
-  assert.equal(parseConfig(rest).dataDir, join(homedir(), ".tmux-web"));
+test("configExists returns false before init, true after writeConfig", async () => {
+  await withTempDir(async (dir) => {
+    assert.equal(await configExists(dir), false);
+    await writeConfig(createDefaultConfig(), dir);
+    assert.equal(await configExists(dir), true);
+  });
 });
 
-test("parseConfig throws when TMUX_WEB_TOKEN is missing", () => {
-  const { TMUX_WEB_TOKEN, ...rest } = VALID_ENV;
-  assert.throws(() => parseConfig(rest), ConfigError);
+test("writeConfig then readConfig round-trips the same values", async () => {
+  await withTempDir(async (dir) => {
+    const config = { token: "a-secret-token-that-is-long-enough", port: 6000, host: "0.0.0.0" };
+    await writeConfig(config, dir);
+    assert.deepEqual(await readConfig(dir), config);
+  });
 });
 
-test("parseConfig throws when TMUX_WEB_TOKEN is too short", () => {
-  assert.throws(() => parseConfig({ ...VALID_ENV, TMUX_WEB_TOKEN: "short" }), ConfigError);
+test("readConfig fills in defaults for a partially-specified config.json", async () => {
+  await withTempDir(async (dir) => {
+    await writeConfig({ token: "a-secret-token-that-is-long-enough" } as never, dir);
+    const config = await readConfig(dir);
+    assert.equal(config.port, 5309);
+    assert.equal(config.host, "127.0.0.1");
+  });
 });
 
-test("parseConfig throws when TMUX_WEB_PORT is not a number", () => {
-  assert.throws(() => parseConfig({ ...VALID_ENV, TMUX_WEB_PORT: "not-a-port" }), ConfigError);
+test("readConfig throws ConfigError when token is too short", async () => {
+  await withTempDir(async (dir) => {
+    await writeConfig({ token: "short", port: 5309, host: "127.0.0.1" }, dir);
+    await assert.rejects(() => readConfig(dir), ConfigError);
+  });
 });
 
-test("parseConfig throws when TMUX_WEB_PORT is out of range", () => {
-  assert.throws(() => parseConfig({ ...VALID_ENV, TMUX_WEB_PORT: "0" }), ConfigError);
-  assert.throws(() => parseConfig({ ...VALID_ENV, TMUX_WEB_PORT: "70000" }), ConfigError);
+test("readConfig throws ConfigError when port is out of range", async () => {
+  await withTempDir(async (dir) => {
+    await writeConfig(
+      { token: "a-secret-token-that-is-long-enough", port: 70000, host: "127.0.0.1" },
+      dir,
+    );
+    await assert.rejects(() => readConfig(dir), ConfigError);
+  });
 });
 
-test("parseConfig defaults TMUX_WEB_PORT to 5309 when unset", () => {
-  const { TMUX_WEB_PORT, ...rest } = VALID_ENV;
-  assert.equal(parseConfig(rest).port, 5309);
+test("readConfig throws ConfigError when config.json is not valid JSON", async () => {
+  await withTempDir(async (dir) => {
+    const { writeFile, mkdir } = await import("node:fs/promises");
+    await mkdir(dir, { recursive: true });
+    await writeFile(configFilePath(dir), "not json");
+    await assert.rejects(() => readConfig(dir), ConfigError);
+  });
 });
 
-test("parseConfig defaults TMUX_WEB_BIND_HOST to 127.0.0.1 when unset", () => {
-  const { TMUX_WEB_BIND_HOST, ...rest } = VALID_ENV;
-  assert.equal(parseConfig(rest).bindHost, "127.0.0.1");
+test("createDefaultConfig generates a token that passes validation", async () => {
+  await withTempDir(async (dir) => {
+    const config = createDefaultConfig();
+    await writeConfig(config, dir);
+    assert.deepEqual(await readConfig(dir), config);
+  });
+});
+
+test("createDefaultConfig generates a different token each call", () => {
+  assert.notEqual(createDefaultConfig().token, createDefaultConfig().token);
 });

@@ -71,8 +71,10 @@ automates the same free-account re-signing via a companion app running on
 your Mac/PC.
 
 On first launch, the app asks for:
-- **Server URL** — `http://<vpn-host>:5309` (or your `TMUX_WEB_PORT`)
-- **Token** — the same `TMUX_WEB_TOKEN` value the server's `.env` uses
+- **Server URL** — `http://<vpn-host>:5309` (or whatever port/host you set
+  with `tmuxweb config port`/`tmuxweb config host`)
+- **Token** — the same token from the server's `~/.tmux-web/config.json`
+  (`tmuxweb init` prints it once; re-print it with `tmuxweb generate`)
 
 The token is stored in the Keychain (`kSecAttrAccessibleWhenUnlockedThisDeviceOnly`),
 never in `UserDefaults` or plain text.
