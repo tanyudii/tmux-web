@@ -1,8 +1,8 @@
 import { WebSocketServer, type WebSocket } from "ws";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { dirname, join } from "node:path";
 import { createServer } from "./server.ts";
-import { parseConfig, ConfigError } from "./config.ts";
+import { readConfig, ConfigError, defaultConfigDir } from "./config.ts";
 import { listSessions, createSession, killSession, isValidSessionName } from "./tmux.ts";
 import { extractQueryToken, verifyToken } from "./auth.ts";
 import { attachPtyToSocket, type SocketLike } from "./pty-bridge.ts";
@@ -52,10 +52,11 @@ function rejectUpgrade(socket: DestroyableSocket, status: number, reason: string
   socket.destroy();
 }
 
-function main(): void {
+export async function main(): Promise<void> {
+  const configDir = defaultConfigDir();
   let config;
   try {
-    config = parseConfig(process.env);
+    config = await readConfig(configDir);
   } catch (error) {
     if (error instanceof ConfigError) {
       console.error(`Configuration error: ${error.message}`);
@@ -64,8 +65,8 @@ function main(): void {
     throw error;
   }
 
-  const projectsFile = join(config.dataDir, "projects.json");
-  const worktreesRoot = join(config.dataDir, "worktrees");
+  const projectsFile = join(configDir, "projects.json");
+  const worktreesRoot = join(configDir, "worktrees");
 
   const sessionEnvDeps: SessionEnvDeps = {
     loadEnvConfig,
@@ -181,10 +182,13 @@ function main(): void {
     socket.destroy();
   });
 
-  httpServer.listen(config.port, config.bindHost, () => {
-    console.log(`tmux-web listening on http://${config.bindHost}:${config.port}`);
-    console.log(`data dir: ${config.dataDir}`);
+  httpServer.listen(config.port, config.host, () => {
+    console.log(`tmux-web listening on http://${config.host}:${config.port}`);
+    console.log(`data dir: ${configDir}`);
   });
 }
 
-main();
+const isEntryPoint = process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href;
+if (isEntryPoint) {
+  main();
+}
