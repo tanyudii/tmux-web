@@ -87,6 +87,7 @@ let fitAddon = null;
 let sessionPollTimer = null;
 let changesPollTimer = null;
 let envPollTimer = null;
+let envPollFailureCount = 0;
 let creationPollTimer = null;
 let isCreatingSession = false;
 let expandedDiffKey = null; // "mode:path" of the single currently-open inline diff, or null
@@ -1177,18 +1178,44 @@ function envSessionUrl() {
 function stopEnvPolling() {
   if (envPollTimer) clearInterval(envPollTimer);
   envPollTimer = null;
+  envPollFailureCount = 0;
 }
+
+// A single failed poll is usually just a transient hiccup (e.g. the server
+// restarting after a deploy) -- only stop trusting the last-rendered status
+// after several consecutive failures, so the bar doesn't flicker on every
+// blip but also doesn't freeze on stale data forever if the server stays
+// unreachable.
+const ENV_POLL_FAILURE_THRESHOLD = 3;
 
 async function refreshEnvStatus() {
   if (!currentProject || !activeSessionName) return;
-  const res = await apiFetch(envSessionUrl());
+  let res;
+  try {
+    res = await apiFetch(envSessionUrl());
+  } catch {
+    handleEnvPollFailure();
+    return;
+  }
   if (res.status === 401) {
     sessionStorage.removeItem(TOKEN_KEY);
     location.reload();
     return;
   }
-  if (!res.ok) return; // e.g. 404 if the worktree just got removed elsewhere
+  if (!res.ok) {
+    handleEnvPollFailure(); // e.g. 404 if the worktree just got removed elsewhere
+    return;
+  }
+  envPollFailureCount = 0;
   renderEnvBar(await res.json());
+}
+
+function handleEnvPollFailure() {
+  envPollFailureCount++;
+  if (envPollFailureCount >= ENV_POLL_FAILURE_THRESHOLD) {
+    envBar.style.display = "none";
+    closeLogsModal();
+  }
 }
 
 function renderEnvBar(status) {
