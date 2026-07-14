@@ -1,9 +1,12 @@
-# Install as a systemd --user service so it runs as your own user, not
-# root (a shell-access tool has no business running as root).
+# Reference systemd --user unit for tmux-web. `tmuxweb service install`
+# generates this automatically (with your actual node/bin paths) --
+# read this file if you'd rather install by hand or want to see what that
+# command does first:
 #
 #   mkdir -p ~/.config/systemd/user
-#   cp deploy/tmux-web.service ~/.config/systemd/user/
-#   # edit WorkingDirectory below to match where you cloned this repo
+#   cp deploy/tmux-web.service ~/.config/systemd/user/tmux-web.service
+#   # edit ExecStart below: replace the placeholder path with `which tmuxweb`
+#   # (or wherever `npm install -g` put it)
 #   systemctl --user daemon-reload
 #   systemctl --user enable --now tmux-web
 #   loginctl enable-linger $USER   # keep it running after you log out / reboot without logging in
@@ -14,19 +17,18 @@ After=network.target
 
 [Service]
 Type=simple
-WorkingDirectory=%h/go/src/github.com/tanyudii/tmux-web
-EnvironmentFile=%h/go/src/github.com/tanyudii/tmux-web/.env
-ExecStart=/usr/bin/env node --experimental-strip-types src/main.ts
+ExecStart=/usr/bin/env -S node --experimental-strip-types /path/to/tmuxweb/bin/tmuxweb.ts
 Restart=on-failure
 RestartSec=2
 
 # Defense in depth: filesystem access is scoped to this service, and the
 # service still runs as the systemd --user account (not root). /tmp must
 # stay writable because that's where tmux keeps its server socket
-# (/tmp/tmux-$UID/); without it the tmux server can't even start.
+# (/tmp/tmux-$UID/); without it the tmux server can't even start. Config
+# and project data live under %h/.tmux-web (JSON, not env vars).
 NoNewPrivileges=true
 ProtectSystem=strict
-ReadWritePaths=%h/go/src/github.com/tanyudii/tmux-web /tmp
+ReadWritePaths=%h/.tmux-web /tmp
 
 [Install]
 WantedBy=default.target

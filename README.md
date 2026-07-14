@@ -46,7 +46,8 @@ system rather than adding a client library.
   changes, killing its session is refused (409) until you explicitly
   confirm force-delete in the UI — this tool never silently discards
   work, unlike some worktree-removal defaults elsewhere.
-- A single shared token (`TMUX_WEB_TOKEN`) gates every API and WebSocket
+- A single shared token (`~/.tmux-web/config.json`, see `tmuxweb generate`)
+  gates every API and WebSocket
   request, compared with a constant-time check (`crypto.timingSafeEqual`).
 - **The right sidebar shows what's changed** in the attached session's
   worktree — staged/unstaged/untracked files as a collapsible tree, click a
@@ -90,15 +91,16 @@ system rather than adding a client library.
 This tool grants shell access to whatever user runs it. Treat it
 accordingly:
 
-1. **Never bind it to a public interface.** Use `TMUX_WEB_BIND_HOST` to
-   bind only to a private interface — e.g. your WireGuard/Tailscale
+1. **Never bind it to a public interface.** Use `tmuxweb config host <addr>`
+   to bind only to a private interface — e.g. your WireGuard/Tailscale
    tunnel IP, or `127.0.0.1` behind your own reverse proxy. Do not
    port-forward this on your router.
 2. **Run it as a non-root, non-privileged user.** The provided systemd
    unit runs as a `--user` service, not root.
-3. **Generate a real token**, not a short/guessable string:
+3. **Generate a real token**, not a short/guessable string — `tmuxweb init`
+   does this for you automatically; rotate it any time with:
    ```bash
-   node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+   tmuxweb generate
    ```
 4. **Audit it yourself.** This is a young, low-adoption project (it's
    yours). Before trusting it with real access, read at minimum:
@@ -135,45 +137,102 @@ accordingly:
 - **Optional**: `docker` + the `docker compose` v2 plugin, only needed if
   you use the per-session environment feature on any registered project.
   Everything else works fine without Docker installed at all.
+- **For a global install from the private repo**: SSH access to
+  `git@github.com:tanyudii/tmux-web` on the server (a deploy key with
+  read-only access works well) — `npm install -g github:...` shells out to
+  `git` under the hood and needs this to clone a private repo.
 
-## Setup
+## Installation (global CLI, production)
+
+Install a specific release tag — recommended for servers, since it pins
+exactly what's running:
+
+```bash
+npm install -g github:tanyudii/tmux-web#v1.0.0
+```
+
+Or track whatever's on the default branch:
+
+```bash
+npm install -g github:tanyudii/tmux-web
+```
+
+Either way this puts a `tmuxweb` binary on your `PATH`. Then:
+
+```bash
+tmuxweb init              # creates ~/.tmux-web/config.json with a generated token
+tmuxweb service install   # installs + starts a systemd --user service
+```
+
+`tmuxweb init` prints the generated token once — save it, you'll need it to
+open the UI. `tmuxweb help` lists every subcommand.
+
+### Configuring port and host
+
+```bash
+tmuxweb config port 5309
+tmuxweb config host 127.0.0.1   # see "Security model" above before changing this
+```
+
+Both write to `~/.tmux-web/config.json`; restart the service afterward
+(`systemctl --user restart tmux-web`) for the change to take effect.
+
+### Rotating the token
+
+```bash
+tmuxweb generate
+```
+
+Prints the new token and restarts nothing for you — restart the service
+afterward so the running process picks it up.
+
+### Upgrading
+
+```bash
+tmuxweb upgrade                 # resolves and installs the latest tag
+tmuxweb upgrade --tag v1.2.0    # pin to a specific tag
+```
+
+Re-runs the same `npm install -g` from above against the resolved tag, then
+restarts the systemd service automatically if it was already running.
+
+## Local development
 
 ```bash
 git clone git@github.com:tanyudii/tmux-web.git
 cd tmux-web
 npm install                 # also copies xterm.js into public/vendor/
-cp .env.example .env
-# edit .env: set TMUX_WEB_TOKEN (see command above), TMUX_WEB_BIND_HOST
+npm run init                 # creates ~/.tmux-web/config.json with a generated token
 
 npm test                    # includes real-tmux and real-git integration tests
 npm run typecheck
 
-npm start                   # foreground, for a first manual check
+npm run dev                 # watch mode, or `npm start` for a plain foreground run
 ```
 
-Open `http://<bind-host>:5309` (or whatever `TMUX_WEB_PORT` you set), paste
-the token, click **+ Add project** and point it at an absolute path to a
-git repo already on this server, open the project, then **+ New session**
-and confirm you land in a real shell whose `pwd` is a freshly created
-worktree.
+Open `http://<host>:<port>` (`http://127.0.0.1:5309` by default — see
+`~/.tmux-web/config.json`), paste the token, click **+ Add project** and
+point it at an absolute path to a git repo already on this server, open the
+project, then **+ New session** and confirm you land in a real shell whose
+`pwd` is a freshly created worktree.
 
 ### Data directory
 
-Everything this tool persists lives under `TMUX_WEB_DATA_DIR` (default
-`~/.tmux-web`):
+Everything this tool persists lives under `~/.tmux-web/`:
 
 ```
 ~/.tmux-web/
+  config.json             token, port, host (see `tmuxweb config`/`tmuxweb generate`)
   projects.json          registered projects (name, id, repo path)
   worktrees/
     <projectId>/
       <branch-slug>/      one git worktree per active session
 ```
 
-Nothing here is a database — `projects.json` is a plain JSON array
-(atomic write via temp-file + rename), and the worktree directories are
-just what `git worktree add` produced. You can `cat`, back up, or hand-edit
-either with tools you already trust.
+Nothing here is a database — `config.json` and `projects.json` are plain
+JSON (atomic write via temp-file + rename), and the worktree directories
+are just what `git worktree add` produced. You can `cat`, back up, or
+hand-edit any of them with tools you already trust.
 
 ## Per-session environments (docker-compose)
 
@@ -242,24 +301,28 @@ intentionally does.
 
 ## Running as a service (survives reboots and crashes)
 
-Make sure `.env` exists first (`cp .env.example .env`, fill in
-`TMUX_WEB_TOKEN`), then:
+For a global install (see "Installation" above):
 
 ```bash
-npm run install-service
+tmuxweb service install
 ```
 
 This writes a `systemd --user` unit to `~/.config/systemd/user/tmux-web.service`
-(pointing at wherever you actually cloned this repo, using the exact `node`
-binary currently running the script — so it works with nvm/mise/asdf, not
-just a system-wide install), then runs `daemon-reload`, `enable --now`, and
-`loginctl enable-linger $USER`.
+(pointing at the resolved `tmuxweb` binary and the exact `node` binary
+currently running the command — so it works with nvm/mise/asdf, not just a
+system-wide install), then runs `daemon-reload`, `enable --now`, and
+`loginctl enable-linger $USER`. There's no `EnvironmentFile` involved —
+config is the JSON file at `~/.tmux-web/config.json`, read directly by
+whatever process starts the server.
+
+For a local dev clone, `npm run install-service` does the same thing (it's
+a thin wrapper around `tmuxweb service install`).
 
 **Autostart on boot / after logout:** enabling the service makes it start
 with your user session; enabling *linger* is what keeps that session (and
 therefore the service) alive even when you're not logged in, including
 across reboots. `loginctl enable-linger` needs admin privileges on most
-distros, so if the script can't do it for you, run it yourself once:
+distros, so if the command can't do it for you, run it yourself once:
 
 ```bash
 sudo loginctl enable-linger $(whoami)
@@ -268,24 +331,15 @@ sudo loginctl enable-linger $(whoami)
 Useful commands afterward:
 
 ```bash
-journalctl --user -u tmux-web -f       # tail logs
-systemctl --user restart tmux-web      # restart
-systemctl --user disable --now tmux-web # stop and remove from autostart
+tmuxweb service status                  # same as `systemctl --user status tmux-web`
+journalctl --user -u tmux-web -f        # tail logs
+systemctl --user restart tmux-web       # restart (needed after `tmuxweb config`/`tmuxweb generate`)
+tmuxweb service uninstall               # stop and remove from autostart
 ```
 
 Prefer to inspect the unit before running anything? `deploy/tmux-web.service`
-is the same thing as a plain file you can read, edit, and install by hand:
-
-```bash
-mkdir -p ~/.config/systemd/user
-cp deploy/tmux-web.service ~/.config/systemd/user/
-# edit WorkingDirectory/EnvironmentFile paths in the unit if you cloned
-# somewhere other than ~/go/src/github.com/tanyudii/tmux-web
-systemctl --user daemon-reload
-systemctl --user enable --now tmux-web
-loginctl enable-linger $USER   # keeps it running even when you're logged out
-systemctl --user status tmux-web
-```
+is the same thing `tmuxweb service install` writes, as a plain file you can
+read, edit, and install by hand — see the comment at the top of that file.
 
 Because tmux sessions live in the tmux *server* (a separate process,
 already independent of this Node process), restarting or crash-looping
@@ -313,8 +367,19 @@ src/
   session-env.ts           orchestrates pre-run -> compose up -> post-run per session
   server.ts               HTTP API + auth middleware (testable via injected deps)
   pty-bridge.ts            node-pty <-> WebSocket bridge, resize handling
-  config.ts               env var parsing/validation
+  config.ts               JSON config read/write (~/.tmux-web/config.json)
   main.ts                 composition root: wires the above into a real server
+  cli/
+    index.ts                argv router for the `tmuxweb` command
+    init.ts                  `tmuxweb init`
+    generate-token.ts         `tmuxweb generate`
+    config-command.ts          `tmuxweb config port|host`
+    service-command.ts          `tmuxweb service install|uninstall|status`
+    upgrade.ts                   `tmuxweb upgrade [--tag <tag>]`
+    version.ts                    `tmuxweb --version`
+    help.ts                        `tmuxweb help`
+bin/
+  tmuxweb.ts             CLI entry point (shebang); dispatches into src/cli/
 public/
   index.html, app.js   vanilla JS frontend: project list -> project detail
                         (session sidebar, xterm.js, right-hand changes/diff
@@ -327,12 +392,13 @@ public/
   vendor/              generated by `npm install` (postinstall), gitignored
 scripts/
   copy-vendor.mjs       postinstall step, populates public/vendor/
-  install-service.mjs   `npm run install-service` -- generates and installs
-                        the systemd --user unit for this checkout
+  install-service.mjs   `npm run install-service` -- thin wrapper around
+                        `tmuxweb service install`, for a local dev clone
 deploy/
   tmux-web.service     systemd --user unit (manual/reference copy; the
-                       generated one from install-service.mjs uses your
-                       actual paths and node binary instead of placeholders)
+                       generated one from `tmuxweb service install` uses
+                       your actual paths and node binary instead of the
+                       placeholder path)
 docs/testing/
   tmux-web.tdd.md      TDD evidence report (what's tested and how)
 ```
