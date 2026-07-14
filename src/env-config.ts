@@ -3,12 +3,17 @@ import { join } from "node:path";
 
 export class EnvConfigError extends Error {}
 
+export interface OpenLinkConfig {
+  label: string;
+  service: string;
+  port: number;
+}
+
 export interface EnvConfig {
   composeFile: string;
   preRunScript: string | null;
   postRunScript: string | null;
-  openService: string | null;
-  openPort: number | null;
+  openLinks: OpenLinkConfig[];
 }
 
 // Convention directory read from inside a project's worktree -- distinct
@@ -29,14 +34,51 @@ async function fileExists(path: string): Promise<boolean> {
   }
 }
 
+function parseOpenLinkEntry(entry: unknown, index: number): OpenLinkConfig {
+  const item = (entry ?? {}) as { label?: unknown; service?: unknown; port?: unknown };
+
+  if (typeof item.service !== "string" || item.service.length === 0) {
+    throw new EnvConfigError(`${MANIFEST_FILENAME}: open[${index}].service must be a non-empty string`);
+  }
+  if (typeof item.port !== "number" || !Number.isInteger(item.port)) {
+    throw new EnvConfigError(`${MANIFEST_FILENAME}: open[${index}].port must be an integer`);
+  }
+  if (item.label !== undefined && typeof item.label !== "string") {
+    throw new EnvConfigError(`${MANIFEST_FILENAME}: open[${index}].label must be a string`);
+  }
+
+  return { label: (item.label as string | undefined) ?? item.service, service: item.service, port: item.port };
+}
+
+// The legacy single-link shape (openService/openPort) is still read so
+// existing .tmux-web-env/env.json files in other projects keep working
+// without a migration -- see loadManifest below for the precedence rule
+// between this and the newer open[] array.
+function parseLegacyOpenLink(manifest: {
+  openService?: unknown;
+  openPort?: unknown;
+}): OpenLinkConfig[] {
+  if (manifest.openService !== undefined && typeof manifest.openService !== "string") {
+    throw new EnvConfigError(`${MANIFEST_FILENAME}: openService must be a string`);
+  }
+  if (
+    manifest.openPort !== undefined &&
+    (typeof manifest.openPort !== "number" || !Number.isInteger(manifest.openPort))
+  ) {
+    throw new EnvConfigError(`${MANIFEST_FILENAME}: openPort must be an integer`);
+  }
+
+  if (typeof manifest.openService !== "string" || typeof manifest.openPort !== "number") return [];
+  return [{ label: "Open", service: manifest.openService, port: manifest.openPort }];
+}
+
 interface EnvManifest {
-  openService: string | null;
-  openPort: number | null;
+  openLinks: OpenLinkConfig[];
 }
 
 async function loadManifest(manifestPath: string): Promise<EnvManifest> {
   if (!(await fileExists(manifestPath))) {
-    return { openService: null, openPort: null };
+    return { openLinks: [] };
   }
 
   let parsed: unknown;
@@ -48,22 +90,21 @@ async function loadManifest(manifestPath: string): Promise<EnvManifest> {
     );
   }
 
-  const manifest = (parsed ?? {}) as { openService?: unknown; openPort?: unknown };
+  const manifest = (parsed ?? {}) as { open?: unknown; openService?: unknown; openPort?: unknown };
 
-  if (manifest.openService !== undefined && typeof manifest.openService !== "string") {
-    throw new EnvConfigError(`${MANIFEST_FILENAME}: openService must be a string`);
+  // open[] takes precedence over the legacy singular fields when both are
+  // present -- still validate the legacy fields either way, so a stray
+  // wrong-typed openService/openPort is caught rather than silently ignored.
+  const legacyLinks = parseLegacyOpenLink(manifest);
+
+  if (manifest.open === undefined) {
+    return { openLinks: legacyLinks };
   }
-  if (
-    manifest.openPort !== undefined &&
-    (typeof manifest.openPort !== "number" || !Number.isInteger(manifest.openPort))
-  ) {
-    throw new EnvConfigError(`${MANIFEST_FILENAME}: openPort must be an integer`);
+  if (!Array.isArray(manifest.open)) {
+    throw new EnvConfigError(`${MANIFEST_FILENAME}: open must be an array`);
   }
 
-  return {
-    openService: (manifest.openService as string | undefined) ?? null,
-    openPort: (manifest.openPort as number | undefined) ?? null,
-  };
+  return { openLinks: manifest.open.map((entry, index) => parseOpenLinkEntry(entry, index)) };
 }
 
 // Reads the opt-in `.tmux-web-env/` convention from a session's worktree.
@@ -82,7 +123,6 @@ export async function loadEnvConfig(worktreePath: string): Promise<EnvConfig | n
     composeFile,
     preRunScript: (await fileExists(preRunScript)) ? preRunScript : null,
     postRunScript: (await fileExists(postRunScript)) ? postRunScript : null,
-    openService: manifest.openService,
-    openPort: manifest.openPort,
+    openLinks: manifest.openLinks,
   };
 }
