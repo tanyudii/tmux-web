@@ -254,7 +254,7 @@ test("runUpgrade wraps an npm link failure in UpgradeError", async () => {
   await assert.rejects(() => runUpgrade(["--tag", "v1.0.0"], { exec, appDir }), UpgradeError);
 });
 
-test("runUpgrade restarts the service when it was active before upgrading", async () => {
+test("runUpgrade refreshes the systemd unit and restarts when the service was active before upgrading", async () => {
   const appDir = "/existing/app/dir";
   const { exec, calls } = recordingExec({
     git: (args) => {
@@ -265,9 +265,14 @@ test("runUpgrade restarts the service when it was active before upgrading", asyn
     npm: () => ({ stdout: "", stderr: "" }),
     systemctl: (args) => (args.includes("is-active") ? { stdout: "active", stderr: "" } : { stdout: "", stderr: "" }),
   });
+  let refreshServiceCalled = false;
+  const refreshService = async (): Promise<void> => {
+    refreshServiceCalled = true;
+  };
 
-  await runUpgrade(["--tag", "v1.0.0"], { exec, appDir });
+  await runUpgrade(["--tag", "v1.0.0"], { exec, appDir, refreshService });
 
+  assert.ok(refreshServiceCalled, "refreshService must be called before restarting an active service");
   assert.deepEqual(calls, [
     `git -C ${appDir} rev-parse --is-inside-work-tree`,
     `git -C ${appDir} remote get-url origin`,
@@ -278,6 +283,47 @@ test("runUpgrade restarts the service when it was active before upgrading", asyn
     "systemctl --user is-active tmux-web",
     "systemctl --user restart tmux-web",
   ]);
+});
+
+test("runUpgrade does not refresh the systemd unit when the service is not active", async () => {
+  const appDir = "/existing/app/dir";
+  const { exec } = recordingExec({
+    git: (args) => {
+      if (args.includes("rev-parse")) return { stdout: "true", stderr: "" };
+      if (args.includes("get-url")) return { stdout: "git@github.com:tanyudii/tmux-web\n", stderr: "" };
+      return { stdout: "", stderr: "" };
+    },
+    npm: () => ({ stdout: "", stderr: "" }),
+    systemctl: (args) => (args.includes("is-active") ? { stdout: "inactive", stderr: "" } : { stdout: "", stderr: "" }),
+  });
+  let refreshServiceCalled = false;
+  const refreshService = async (): Promise<void> => {
+    refreshServiceCalled = true;
+  };
+
+  await runUpgrade(["--tag", "v1.0.0"], { exec, appDir, refreshService });
+
+  assert.equal(refreshServiceCalled, false);
+});
+
+test("runUpgrade still restarts the service when refreshing the systemd unit fails", async () => {
+  const appDir = "/existing/app/dir";
+  const { exec, calls } = recordingExec({
+    git: (args) => {
+      if (args.includes("rev-parse")) return { stdout: "true", stderr: "" };
+      if (args.includes("get-url")) return { stdout: "git@github.com:tanyudii/tmux-web\n", stderr: "" };
+      return { stdout: "", stderr: "" };
+    },
+    npm: () => ({ stdout: "", stderr: "" }),
+    systemctl: (args) => (args.includes("is-active") ? { stdout: "active", stderr: "" } : { stdout: "", stderr: "" }),
+  });
+  const refreshService = async (): Promise<void> => {
+    throw new Error("could not write unit file");
+  };
+
+  await runUpgrade(["--tag", "v1.0.0"], { exec, appDir, refreshService });
+
+  assert.ok(calls.includes("systemctl --user restart tmux-web"), "must still attempt a restart");
 });
 
 test("runUpgrade throws UpgradeError when --tag is passed without a value", async () => {

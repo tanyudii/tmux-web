@@ -62,7 +62,7 @@ test("installService writes a systemd unit with resolved paths and no Environmen
 
     const unitPath = join(dir, ".config", "systemd", "user", "tmux-web.service");
     const unit = await readFile(unitPath, "utf-8");
-    assert.match(unit, /ExecStart=\/usr\/bin\/node --experimental-strip-types \/pkg\/bin\/tmuxweb\.ts/);
+    assert.match(unit, /ExecStart=\/usr\/bin\/node --experimental-strip-types \/pkg\/bin\/tmuxweb\.ts start/);
     assert.doesNotMatch(unit, /EnvironmentFile/);
     assert.match(unit, /ReadWritePaths=\/home\/u\/\.tmux-web \/tmp/);
 
