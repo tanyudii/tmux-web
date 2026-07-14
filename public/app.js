@@ -66,6 +66,18 @@ const logsServiceSelect = document.getElementById("logs-service-select");
 const logsCloseBtn = document.getElementById("logs-close-btn");
 const logsTerminalEl = document.getElementById("logs-terminal");
 
+const browseModal = document.getElementById("browse-modal");
+const browseCloseBtn = document.getElementById("browse-close-btn");
+const browseCancelBtn = document.getElementById("browse-cancel-btn");
+const browseUseBtn = document.getElementById("browse-use-btn");
+const browseUpBtn = document.getElementById("browse-up-btn");
+const browseCurrentPathEl = document.getElementById("browse-current-path");
+const browseEntriesEl = document.getElementById("browse-entries");
+const browseEmptyEl = document.getElementById("browse-empty");
+const browseErrorEl = document.getElementById("browse-error");
+const browseTruncatedHintEl = document.getElementById("browse-truncated-hint");
+const browseNameInput = document.getElementById("browse-name-input");
+
 let token = sessionStorage.getItem(TOKEN_KEY) || "";
 let currentProject = null; // { id, name, repoPath, createdAt }
 let activeSessionName = null; // display name (slug), not the full tmux name
@@ -83,6 +95,10 @@ let logsTerm = null;
 let logsFitAddon = null;
 let terminalWheelHandler = null;
 let wheelLineAccumulator = 0;
+let browseCurrentPath = null;
+let browseParentPath = null;
+let browseIsGitRepo = false;
+let browseNameTouched = false;
 
 // --- Bell notifications (sound + title flash when this tab isn't the one
 // the developer is looking at) --------------------------------------------
@@ -277,22 +293,144 @@ function renderProjectList(projects) {
   }
 }
 
-addProjectBtn.addEventListener("click", async () => {
-  const name = window.prompt("Project name:");
-  if (!name) return;
-  const repoPath = window.prompt("Absolute path to the git repo on this server:");
-  if (!repoPath) return;
+addProjectBtn.addEventListener("click", () => openBrowseModal());
+
+// --- Browse-folder modal (Add project) -------------------------------------
+// Replaces the old window.prompt()-based flow: instead of typing an absolute
+// path blind, the user navigates the server's filesystem starting at its
+// home directory and can go up to "/". Only directories are listed (see
+// GET /api/browse -> src/directory-browser.ts); "Use This Folder" is only
+// enabled once the currently displayed directory itself looks like a git
+// repo (cheap ".git" existence check -- the authoritative check still runs
+// server-side in registerProject when the project is actually created).
+
+function pathBasename(path) {
+  const trimmed = path.replace(/\/+$/, "");
+  const idx = trimmed.lastIndexOf("/");
+  return idx === -1 ? trimmed : trimmed.slice(idx + 1);
+}
+
+function handleBrowseModalKeydown(event) {
+  if (event.key === "Escape") closeBrowseModal();
+}
+
+function openBrowseModal() {
+  browseModal.style.display = "flex";
+  browseNameInput.value = "";
+  browseNameTouched = false;
+  browseErrorEl.style.display = "none";
+  // Reset navigation state so a failed initial load in *this* session can
+  // never inherit currentPath/parentPath left over from a previous, already
+  // -closed modal session (the Up button in particular must not stay
+  // clickable against a stale path).
+  browseCurrentPath = null;
+  browseParentPath = null;
+  browseIsGitRepo = false;
+  browseUpBtn.disabled = true;
+  browseUseBtn.disabled = true;
+  document.addEventListener("keydown", handleBrowseModalKeydown);
+  loadBrowseDirectory(undefined);
+}
+
+function closeBrowseModal() {
+  if (browseModal.style.display === "none") return;
+  browseModal.style.display = "none";
+  document.removeEventListener("keydown", handleBrowseModalKeydown);
+}
+
+async function loadBrowseDirectory(path) {
+  browseErrorEl.style.display = "none";
+  browseEntriesEl.textContent = "";
+  browseEmptyEl.style.display = "none";
+  browseTruncatedHintEl.style.display = "none";
+  browseUseBtn.disabled = true;
+
+  const query = path ? "?path=" + encodeURIComponent(path) : "";
+  const res = await apiFetch("/api/browse" + query);
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    browseErrorEl.textContent = body.error || "Could not read that directory (HTTP " + res.status + ").";
+    browseErrorEl.style.display = "block";
+    return;
+  }
+
+  const listing = await res.json();
+  renderBrowseDirectory(listing);
+}
+
+function updateBrowseUseButtonState() {
+  browseUseBtn.disabled = !browseIsGitRepo || browseNameInput.value.trim() === "";
+}
+
+function renderBrowseDirectory(listing) {
+  browseCurrentPath = listing.path;
+  browseParentPath = listing.parentPath;
+  browseIsGitRepo = listing.isGitRepo;
+
+  browseCurrentPathEl.textContent = listing.path;
+  browseUpBtn.disabled = !listing.parentPath;
+  browseTruncatedHintEl.style.display = listing.truncated ? "block" : "none";
+
+  if (!browseNameTouched) {
+    browseNameInput.value = listing.isGitRepo ? pathBasename(listing.path) : "";
+  }
+  updateBrowseUseButtonState();
+
+  browseEntriesEl.textContent = "";
+  browseEmptyEl.style.display = listing.entries.length === 0 ? "block" : "none";
+
+  for (const entry of listing.entries) {
+    const row = document.createElement("div");
+    row.className = "browse-entry";
+
+    const icon = document.createElement("span");
+    icon.className = "browse-entry-icon";
+    icon.textContent = "\u{1F4C1}";
+    row.appendChild(icon);
+
+    const name = document.createElement("span");
+    name.textContent = entry.name;
+    row.appendChild(name);
+
+    if (entry.isGitRepo) {
+      const badge = document.createElement("span");
+      badge.className = "browse-entry-git-badge";
+      badge.textContent = "git";
+      row.appendChild(badge);
+    }
+
+    row.addEventListener("click", () => loadBrowseDirectory(entry.path));
+    browseEntriesEl.appendChild(row);
+  }
+}
+
+browseNameInput.addEventListener("input", () => {
+  browseNameTouched = true;
+  updateBrowseUseButtonState();
+});
+
+browseUpBtn.addEventListener("click", () => {
+  if (browseParentPath) loadBrowseDirectory(browseParentPath);
+});
+
+browseCloseBtn.addEventListener("click", () => closeBrowseModal());
+browseCancelBtn.addEventListener("click", () => closeBrowseModal());
+
+browseUseBtn.addEventListener("click", async () => {
+  const name = browseNameInput.value.trim();
+  if (!name || !browseCurrentPath) return;
 
   const res = await apiFetch("/api/projects", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name, repoPath }),
+    body: JSON.stringify({ name, repoPath: browseCurrentPath }),
   });
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
     window.alert("Could not add project: " + (body.error || res.status));
     return;
   }
+  closeBrowseModal();
   await refreshProjects();
 });
 
