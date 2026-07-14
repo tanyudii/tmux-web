@@ -85,16 +85,22 @@ export async function resolveOriginDefaultBranch(
   return match[1];
 }
 
+export type WorktreeProgressListener = (message: string) => void;
+
 export async function addWorktree(
   repoPath: string,
   worktreePath: string,
   branchName: string,
+  onProgress?: WorktreeProgressListener,
   exec: ExecFn = defaultExec,
 ): Promise<void> {
+  onProgress?.("Pruning stale worktrees…");
   await pruneWorktrees(repoPath, exec);
 
+  onProgress?.("Resolving default branch from origin…");
   const baseBranch = await resolveOriginDefaultBranch(repoPath, exec);
 
+  onProgress?.(`Fetching origin/${baseBranch}…`);
   try {
     await exec("git", [
       "-C", repoPath,
@@ -104,6 +110,7 @@ export async function addWorktree(
     throw new WorktreeError(`Failed to fetch origin/${baseBranch}: ${messageOf(error)}`);
   }
 
+  onProgress?.("Creating worktree…");
   try {
     await exec("git", [
       "-C", repoPath,

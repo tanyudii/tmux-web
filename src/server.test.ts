@@ -12,6 +12,7 @@ import { WorktreeConflictError, DirtyWorktreeError } from "./worktree.ts";
 import { WorktreeNotFoundError, GitStatusError, type GroupedChanges } from "./git-status.ts";
 import { EnvUnavailableError, EnvAlreadyRunningError, EnvNotRunningError, type EnvStatus } from "./session-env.ts";
 import { EnvConfigError } from "./env-config.ts";
+import { SessionCreationNotFoundError, type SessionCreationStatus } from "./project-sessions.ts";
 
 const TOKEN = "test-token-123";
 
@@ -35,12 +36,11 @@ function makeDeps(overrides: Partial<ServerDeps> = {}): ServerDeps {
     getProject: async (id: string) => (id === SAMPLE_PROJECT.id ? SAMPLE_PROJECT : undefined),
     removeProject: async () => {},
     listProjectSessions: async () => [],
-    createProjectSession: async (_project: Project, name: string) => ({
+    startProjectSessionCreation: async (_project: Project, name: string) => ({
       name,
       fullName: `${SAMPLE_PROJECT.id}__${name}`,
-      windows: 1,
-      attached: false,
     }),
+    getProjectSessionCreationStatus: async () => ({ phase: "creating" }),
     killProjectSession: async () => {},
     getProjectSessionChanges: async () => ({ staged: [], unstaged: [], untracked: [] }),
     getProjectSessionDiff: async () => ({ diff: "", isUntracked: false, isBinary: false }),
@@ -234,12 +234,12 @@ test("GET /api/projects/:id/sessions returns 404 for an unknown project", async 
   });
 });
 
-test("POST /api/projects/:id/sessions creates a session and returns 201", async () => {
+test("POST /api/projects/:id/sessions starts session creation and returns 202", async () => {
   const calls: Array<{ projectId: string; name: string }> = [];
   const deps = makeDeps({
-    createProjectSession: async (project: Project, name: string) => {
+    startProjectSessionCreation: async (project: Project, name: string) => {
       calls.push({ projectId: project.id, name });
-      return { name, fullName: `${project.id}__${name}`, windows: 1, attached: false };
+      return { name, fullName: `${project.id}__${name}` };
     },
   });
   await withServer(deps, async (baseUrl) => {
@@ -248,14 +248,19 @@ test("POST /api/projects/:id/sessions creates a session and returns 201", async 
       headers: authHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify({ name: "Feature X" }),
     });
-    assert.equal(res.status, 201);
+    assert.equal(res.status, 202);
+    assert.deepEqual(await res.json(), {
+      name: "Feature X",
+      fullName: `${SAMPLE_PROJECT.id}__Feature X`,
+      phase: "creating",
+    });
     assert.deepEqual(calls, [{ projectId: SAMPLE_PROJECT.id, name: "Feature X" }]);
   });
 });
 
 test("POST /api/projects/:id/sessions returns 400 for a ValidationError", async () => {
   const deps = makeDeps({
-    createProjectSession: async () => {
+    startProjectSessionCreation: async () => {
       throw new ValidationError("no usable characters");
     },
   });
@@ -271,7 +276,7 @@ test("POST /api/projects/:id/sessions returns 400 for a ValidationError", async 
 
 test("POST /api/projects/:id/sessions returns 409 for a WorktreeConflictError", async () => {
   const deps = makeDeps({
-    createProjectSession: async () => {
+    startProjectSessionCreation: async () => {
       throw new WorktreeConflictError("branch already exists");
     },
   });
@@ -298,7 +303,7 @@ test("POST /api/projects/:id/sessions with malformed JSON returns 400", async ()
 
 test("POST /api/projects/:id/sessions propagates an unexpected error as 500", async () => {
   const deps = makeDeps({
-    createProjectSession: async () => {
+    startProjectSessionCreation: async () => {
       throw new Error("git binary not found");
     },
   });
@@ -391,6 +396,48 @@ test("DELETE /api/projects/:id/sessions/:name returns 404 for an unknown project
   await withServer(makeDeps(), async (baseUrl) => {
     const res = await fetch(`${baseUrl}/api/projects/unknown-id/sessions/feature-x`, {
       method: "DELETE",
+      headers: authHeaders(),
+    });
+    assert.equal(res.status, 404);
+  });
+});
+
+test("GET /api/projects/:id/sessions/:name/creation without a token returns 401", async () => {
+  await withServer(makeDeps(), async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/projects/${SAMPLE_PROJECT.id}/sessions/feature-x/creation`);
+    assert.equal(res.status, 401);
+  });
+});
+
+test("GET /api/projects/:id/sessions/:name/creation returns the current status", async () => {
+  const status: SessionCreationStatus = { phase: "creating", message: "Creating worktree…" };
+  const deps = makeDeps({ getProjectSessionCreationStatus: async () => status });
+  await withServer(deps, async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/projects/${SAMPLE_PROJECT.id}/sessions/feature-x/creation`, {
+      headers: authHeaders(),
+    });
+    assert.equal(res.status, 200);
+    assert.deepEqual(await res.json(), status);
+  });
+});
+
+test("GET /api/projects/:id/sessions/:name/creation returns 404 when nothing is tracked for that slug (SessionCreationNotFoundError)", async () => {
+  const deps = makeDeps({
+    getProjectSessionCreationStatus: async () => {
+      throw new SessionCreationNotFoundError("No session creation in progress");
+    },
+  });
+  await withServer(deps, async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/projects/${SAMPLE_PROJECT.id}/sessions/feature-x/creation`, {
+      headers: authHeaders(),
+    });
+    assert.equal(res.status, 404);
+  });
+});
+
+test("GET /api/projects/:id/sessions/:name/creation returns 404 for an unknown project", async () => {
+  await withServer(makeDeps(), async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/projects/unknown-id/sessions/feature-x/creation`, {
       headers: authHeaders(),
     });
     assert.equal(res.status, 404);

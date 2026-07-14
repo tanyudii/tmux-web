@@ -56,11 +56,24 @@ final class APIClient {
         return response.sessions
     }
 
-    func createSession(projectId: String, name: String) async throws -> ProjectSession {
+    /// Only awaits the fast validation + slot-claim server-side -- the
+    /// actual `git fetch` + `git worktree add` + tmux session creation
+    /// keeps running in the background (202 Accepted). Progress is
+    /// observed by polling `sessionCreationStatus`, matching how `startEnv`
+    /// / `envStatus` work above and how ../../public/app.js's "+ New
+    /// session" button works.
+    func startSessionCreation(projectId: String, name: String) async throws -> PendingSessionCreation {
         try await request(
             path: "/api/projects/\(pathEscape(projectId))/sessions",
             method: "POST",
             body: NewSessionRequest(name: name)
+        )
+    }
+
+    func sessionCreationStatus(projectId: String, sessionName: String) async throws -> SessionCreationStatus {
+        try await request(
+            path: "/api/projects/\(pathEscape(projectId))/sessions/\(pathEscape(sessionName))/creation",
+            method: "GET"
         )
     }
 
