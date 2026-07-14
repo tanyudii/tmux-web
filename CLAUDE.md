@@ -122,3 +122,26 @@ These exist because a 100%-mocked test suite is exactly what let the
 original `npm install -g github:...` bug ship invisibly -- mocks would
 happily "pass" even with the wrong command. Keep both real-process tests if
 you touch this code again; don't reduce coverage back to mocks-only.
+
+## Cutting a release
+
+Releases are cut by the **Release** workflow (`.github/workflows/release.yml`),
+triggered manually from the Actions tab: pick a bump level (patch/minor/major)
+and it reads the latest `v*.*.*` tag, increments it, bumps `package.json` +
+`package-lock.json` (the three `tmux-web` version fields only -- top-level in
+both files plus `packages[""].version` in the lockfile), runs typecheck + the
+full test suite as a gate, then commits `chore: release vX.Y.Z`, creates a
+lightweight tag, and pushes both to `main`. It refuses to run off `main`.
+
+The version is computed from the latest *tag* (not `package.json`), matching
+what `tmuxweb upgrade`'s `resolveLatestTag()` resolves (`git ls-remote --tags
+--sort=-v:refname`), so a new release always advances past the tag
+`tmuxweb upgrade` would install. Tags stay lightweight (`vX.Y.Z`, no `-a`) to
+match the existing v1.x convention.
+
+To cut a release by hand instead (e.g. the workflow is broken): bump the three
+version fields, commit `chore: release vX.Y.Z`, `git tag vX.Y.Z`, push both.
+The workflow's bump step uses a node one-liner (not `npm version`) precisely
+because `npm version` requires a clean working tree and `npm ci`'s postinstall
+rewrites the tracked `public/vendor/` files -- don't "simplify" it back to
+`npm version` without handling that.
