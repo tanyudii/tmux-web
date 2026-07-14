@@ -1,0 +1,144 @@
+name: Release
+
+# Manually-triggered semver release. Pick a bump level (patch/minor/major);
+# the workflow reads the latest v*.*.* tag, increments it, bumps package.json
+# + package-lock.json to match, commits "chore: release vX.Y.Z", creates a
+# lightweight tag (matching the existing v1.x tag convention), and pushes
+# both to main. This mirrors the manual release process documented in
+# CLAUDE.md -- keep them in sync if this changes.
+#
+# Notes:
+#  - Runs the full typecheck + test suite as a gate before tagging, so a
+#    failing release here means the code wasn't green -- fix it, don't bypass.
+#  - The version is computed from the latest *tag*, not package.json, so it
+#    always advances past whatever `tmuxweb upgrade`'s resolveLatestTag()
+#    (git ls-remote --tags --sort=-v:refname) would resolve.
+#  - Pushes with GITHUB_TOKEN, which does NOT re-trigger the push-to-main CI
+#    workflow (a GitHub limitation). The release commit is a version-only
+#    bump gated by the test step above, so that's acceptable.
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: "Version bump level"
+        required: true
+        type: choice
+        default: patch
+        options:
+          - patch
+          - minor
+          - major
+
+permissions:
+  contents: write
+
+# Two simultaneous release dispatches would race on the version number; queue
+# them rather than letting both compute the same "latest + 1".
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Refuse to release from outside main
+        env:
+          GITHUB_REF: ${{ github.ref }}
+        run: |
+          if [ "$GITHUB_REF" != "refs/heads/main" ]; then
+            echo "::error::Releases must come from main (got $GITHUB_REF). Switch to main and re-run."
+            exit 1
+          fi
+
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # full history + every tag, for version computation
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+
+      # Same system deps as ci.yml -- tmux for the real-tmux integration
+      # tests, build-essential + python3 for node-pty's native addon (node-gyp).
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y tmux build-essential python3
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        run: npm test
+
+      - name: Compute next version
+        id: next
+        env:
+          BUMP: ${{ inputs.bump }}
+        run: |
+          set -eu
+          bump="$BUMP"
+          latest=$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | awk 'NR==1{print; exit}')
+          if [ -z "$latest" ]; then
+            echo "::error::No v*.*.* tag found to increment from."
+            exit 1
+          fi
+          base="${latest#v}"
+          major=$(printf '%s' "$base" | cut -d. -f1)
+          minor=$(printf '%s' "$base" | cut -d. -f2)
+          patch=$(printf '%s' "$base" | cut -d. -f3)
+          case "$bump" in
+            major) major=$((major + 1)); minor=0; patch=0 ;;
+            minor) minor=$((minor + 1)); patch=0 ;;
+            patch) patch=$((patch + 1)) ;;
+            *) echo "::error::Invalid bump '$bump'"; exit 1 ;;
+          esac
+          new="$major.$minor.$patch"
+          new_tag="v$new"
+          if git rev-parse "$new_tag" >/dev/null 2>&1; then
+            echo "::error::Tag $new_tag already exists."
+            exit 1
+          fi
+          echo "Latest tag: $latest"
+          echo "Bump:       $bump"
+          echo "Next tag:   $new_tag"
+          {
+            echo "new_version=$new"
+            echo "new_tag=$new_tag"
+            echo "latest_tag=$latest"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Bump, commit, tag, and push
+        env:
+          NEW_VERSION: ${{ steps.next.outputs.new_version }}
+          NEW_TAG: ${{ steps.next.outputs.new_tag }}
+        run: |
+          set -eu
+          # Edit only the three tmux-web version fields (top-level in both
+          # files + packages[""].version in the lockfile) -- identical to
+          # what `npm version --no-git-tag-version` writes. Done with a node
+          # one-liner instead of `npm version` so a dirty working tree
+          # (e.g. public/vendor rewritten by npm ci's postinstall) can't
+          # block the bump; only package.json + package-lock.json are staged.
+          node -e '
+            const fs = require("node:fs");
+            const v = process.env.NEW_VERSION;
+            for (const f of ["package.json", "package-lock.json"]) {
+              const j = JSON.parse(fs.readFileSync(f, "utf8"));
+              j.version = v;
+              if (j.packages && j.packages[""]) j.packages[""].version = v;
+              fs.writeFileSync(f, JSON.stringify(j, null, 2) + "\n");
+            }
+          '
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add package.json package-lock.json
+          git commit -m "chore: release $NEW_TAG"
+          git tag "$NEW_TAG"
+          git push origin HEAD:main
+          git push origin "$NEW_TAG"
+          echo "Released $NEW_TAG"

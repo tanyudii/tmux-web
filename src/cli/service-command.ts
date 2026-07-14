@@ -4,7 +4,6 @@ import { mkdir, rm, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { homedir, userInfo } from "node:os";
 import { join } from "node:path";
-import { defaultConfigDir } from "../config.ts";
 
 const execFileAsync = promisify(execFileCb);
 
@@ -33,24 +32,25 @@ export function resolveBinPath(): string {
   return fileURLToPath(new URL("../../bin/tmuxweb.ts", import.meta.url));
 }
 
-function buildUnit(execPathNode: string, binPath: string, configDir: string): string {
+function buildUnit(execPathNode: string, binPath: string): string {
   return `[Unit]
 Description=tmux-web - browser GUI for tmux sessions
 After=network.target
 
 [Service]
 Type=simple
-ExecStart=${execPathNode} --experimental-strip-types ${binPath}
+ExecStart=${execPathNode} --experimental-strip-types ${binPath} start
 Restart=on-failure
 RestartSec=2
 
-# Defense in depth: filesystem access is scoped to this service, and the
-# service still runs as the systemd --user account (not root). /tmp must
-# stay writable because that's where tmux keeps its server socket
-# (/tmp/tmux-$UID/); without it the tmux server can't even start.
+# ProtectSystem=strict was removed: as a systemd --user unit (non-root),
+# enforcing it requires an unprivileged user namespace where every UID
+# other than the service's own (including root) collapses to
+# nobody:nogroup. That broke ownership checks on root-owned files like
+# /etc/ssh/ssh_config.d/*.conf, causing "Bad owner or permissions" errors
+# for any ssh-based command (ssh, git over ssh, scp) run inside tmux
+# sessions spawned by this service.
 NoNewPrivileges=true
-ProtectSystem=strict
-ReadWritePaths=${configDir} /tmp
 
 [Install]
 WantedBy=default.target
@@ -63,7 +63,6 @@ export interface ServiceCommandDeps {
   homeDir?: string;
   execPathNode?: string;
   binPath?: string;
-  configDir?: string;
   username?: string;
 }
 
@@ -73,7 +72,6 @@ interface ResolvedDeps {
   homeDir: string;
   execPathNode: string;
   binPath: string;
-  configDir: string;
   username: string;
 }
 
@@ -84,7 +82,6 @@ function resolveDeps(deps: ServiceCommandDeps): ResolvedDeps {
     homeDir: deps.homeDir ?? homedir(),
     execPathNode: deps.execPathNode ?? process.execPath,
     binPath: deps.binPath ?? resolveBinPath(),
-    configDir: deps.configDir ?? defaultConfigDir(),
     username: deps.username ?? userInfo().username,
   };
 }
@@ -104,7 +101,7 @@ async function run(exec: ExecFn, file: string, args: string[]): Promise<void> {
 }
 
 export async function installService(deps: ServiceCommandDeps = {}): Promise<void> {
-  const { platform, exec, homeDir, execPathNode, binPath, configDir, username } = resolveDeps(deps);
+  const { platform, exec, homeDir, execPathNode, binPath, username } = resolveDeps(deps);
 
   if (platform !== "linux") {
     throw new ServiceCommandError(
@@ -120,7 +117,7 @@ export async function installService(deps: ServiceCommandDeps = {}): Promise<voi
     );
   }
 
-  const unit = buildUnit(execPathNode, binPath, configDir);
+  const unit = buildUnit(execPathNode, binPath);
   await mkdir(unitDir(homeDir), { recursive: true });
   await writeFile(unitFilePath(homeDir), unit);
   console.log(`Wrote ${unitFilePath(homeDir)}`);

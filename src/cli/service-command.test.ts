@@ -39,7 +39,6 @@ test("installService rejects on non-linux platforms", async () => {
           homeDir: dir,
           execPathNode: "/usr/bin/node",
           binPath: "/pkg/bin/tmuxweb.ts",
-          configDir: "/home/u/.tmux-web",
           username: "u",
         }),
       ServiceCommandError,
@@ -56,15 +55,17 @@ test("installService writes a systemd unit with resolved paths and no Environmen
       homeDir: dir,
       execPathNode: "/usr/bin/node",
       binPath: "/pkg/bin/tmuxweb.ts",
-      configDir: "/home/u/.tmux-web",
       username: "u",
     });
 
     const unitPath = join(dir, ".config", "systemd", "user", "tmux-web.service");
     const unit = await readFile(unitPath, "utf-8");
-    assert.match(unit, /ExecStart=\/usr\/bin\/node --experimental-strip-types \/pkg\/bin\/tmuxweb\.ts/);
+    assert.match(unit, /ExecStart=\/usr\/bin\/node --experimental-strip-types \/pkg\/bin\/tmuxweb\.ts start/);
     assert.doesNotMatch(unit, /EnvironmentFile/);
-    assert.match(unit, /ReadWritePaths=\/home\/u\/\.tmux-web \/tmp/);
+    // ProtectSystem=strict is deliberately absent -- it broke ssh/git-over-ssh
+    // inside tmux sessions spawned by this service (see buildUnit's comment).
+    // Match only an actual directive line, not the explanatory comment above.
+    assert.doesNotMatch(unit, /^ProtectSystem=/m);
 
     assert.deepEqual(calls, [
       "systemctl --version",
@@ -88,7 +89,6 @@ test("installService throws when systemctl is unavailable", async () => {
           homeDir: dir,
           execPathNode: "/usr/bin/node",
           binPath: "/pkg/bin/tmuxweb.ts",
-          configDir: "/home/u/.tmux-web",
           username: "u",
         }),
       ServiceCommandError,
@@ -105,7 +105,6 @@ test("uninstallService disables the unit and removes the file", async () => {
       homeDir: dir,
       execPathNode: "/usr/bin/node",
       binPath: "/pkg/bin/tmuxweb.ts",
-      configDir: "/x",
       username: "u",
     });
 

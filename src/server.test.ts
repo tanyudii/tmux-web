@@ -13,6 +13,12 @@ import { WorktreeNotFoundError, GitStatusError, type GroupedChanges } from "./gi
 import { EnvUnavailableError, EnvAlreadyRunningError, EnvNotRunningError, type EnvStatus } from "./session-env.ts";
 import { EnvConfigError } from "./env-config.ts";
 import { SessionCreationNotFoundError, type SessionCreationStatus } from "./project-sessions.ts";
+import {
+  InvalidDirectoryPathError,
+  DirectoryNotFoundError,
+  DirectoryAccessDeniedError,
+  type DirectoryListing,
+} from "./directory-browser.ts";
 
 const TOKEN = "test-token-123";
 
@@ -35,6 +41,13 @@ function makeDeps(overrides: Partial<ServerDeps> = {}): ServerDeps {
     }),
     getProject: async (id: string) => (id === SAMPLE_PROJECT.id ? SAMPLE_PROJECT : undefined),
     removeProject: async () => {},
+    browseDirectory: async (path?: string) => ({
+      path: path ?? "/home/user",
+      parentPath: "/home",
+      isGitRepo: false,
+      entries: [],
+      truncated: false,
+    }),
     listProjectSessions: async () => [],
     startProjectSessionCreation: async (_project: Project, name: string) => ({
       name,
@@ -157,6 +170,91 @@ test("POST /api/projects propagates an unexpected registerProject error as 500",
       body: JSON.stringify({ name: "New Project", repoPath: "/abs/repo" }),
     });
     assert.equal(res.status, 500);
+  });
+});
+
+// --- Browse ---
+
+test("GET /api/browse without a token returns 401", async () => {
+  await withServer(makeDeps(), async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/browse`);
+    assert.equal(res.status, 401);
+  });
+});
+
+test("GET /api/browse forwards the path query param and returns the listing", async () => {
+  const calls: Array<string | undefined> = [];
+  const listing: DirectoryListing = {
+    path: "/home/user/projects",
+    parentPath: "/home/user",
+    isGitRepo: false,
+    entries: [{ name: "tmux-web", path: "/home/user/projects/tmux-web", isGitRepo: true }],
+    truncated: false,
+  };
+  const deps = makeDeps({
+    browseDirectory: async (path) => {
+      calls.push(path);
+      return listing;
+    },
+  });
+  await withServer(deps, async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/browse?path=${encodeURIComponent("/home/user/projects")}`, {
+      headers: authHeaders(),
+    });
+    assert.equal(res.status, 200);
+    assert.deepEqual(await res.json(), listing);
+    assert.deepEqual(calls, ["/home/user/projects"]);
+  });
+});
+
+test("GET /api/browse without a path query param passes undefined through", async () => {
+  const calls: Array<string | undefined> = [];
+  const deps = makeDeps({
+    browseDirectory: async (path) => {
+      calls.push(path);
+      return { path: "/home/user", parentPath: "/home", isGitRepo: false, entries: [], truncated: false };
+    },
+  });
+  await withServer(deps, async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/browse`, { headers: authHeaders() });
+    assert.equal(res.status, 200);
+    assert.deepEqual(calls, [undefined]);
+  });
+});
+
+test("GET /api/browse returns 400 for InvalidDirectoryPathError", async () => {
+  const deps = makeDeps({
+    browseDirectory: async () => {
+      throw new InvalidDirectoryPathError("path must be an absolute path");
+    },
+  });
+  await withServer(deps, async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/browse?path=relative`, { headers: authHeaders() });
+    assert.equal(res.status, 400);
+  });
+});
+
+test("GET /api/browse returns 404 for DirectoryNotFoundError", async () => {
+  const deps = makeDeps({
+    browseDirectory: async () => {
+      throw new DirectoryNotFoundError("Directory not found");
+    },
+  });
+  await withServer(deps, async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/browse?path=/nope`, { headers: authHeaders() });
+    assert.equal(res.status, 404);
+  });
+});
+
+test("GET /api/browse returns 403 for DirectoryAccessDeniedError", async () => {
+  const deps = makeDeps({
+    browseDirectory: async () => {
+      throw new DirectoryAccessDeniedError("Permission denied");
+    },
+  });
+  await withServer(deps, async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/browse?path=/root`, { headers: authHeaders() });
+    assert.equal(res.status, 403);
   });
 });
 
@@ -587,7 +685,7 @@ test("GET /api/projects/:id/sessions/:name/env without a token returns 401", asy
 });
 
 test("GET /api/projects/:id/sessions/:name/env returns the current status", async () => {
-  const status: EnvStatus = { phase: "running", openUrl: "http://localhost:54321" };
+  const status: EnvStatus = { phase: "running", openLinks: [{ label: "Open", url: "http://localhost:54321" }] };
   const deps = makeDeps({ getProjectSessionEnvStatus: async () => status });
   await withServer(deps, async (baseUrl) => {
     const res = await fetch(`${baseUrl}/api/projects/${SAMPLE_PROJECT.id}/sessions/feature-x/env`, {
@@ -605,7 +703,7 @@ test("GET /api/projects/:id/sessions/:name/env passes the request's own Host hea
   // incoming request is the one signal that tells us which address the
   // browser is CURRENTLY using, so it must be threaded through untouched.
   let capturedHost: string | undefined;
-  const status: EnvStatus = { phase: "running", openUrl: "http://10.8.0.2:54321" };
+  const status: EnvStatus = { phase: "running", openLinks: [{ label: "Open", url: "http://10.8.0.2:54321" }] };
   const deps = makeDeps({
     getProjectSessionEnvStatus: async (_project: Project, _slug: string, requestHost?: string) => {
       capturedHost = requestHost;
