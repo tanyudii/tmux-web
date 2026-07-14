@@ -5,17 +5,23 @@ import com.tanyudii.tmuxweb.domain.model.ChangedFile
 import com.tanyudii.tmuxweb.domain.model.FileStatus
 import com.tanyudii.tmuxweb.domain.model.GroupedChanges
 import com.tanyudii.tmuxweb.presentation.fakes.FakeChangesRepository
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.test.StandardTestDispatcher
-import kotlinx.coroutines.test.TestCoroutineScheduler
+import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
-import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
 
-/** Ports ChangesListView.swift's 5s poll loop — see plan §2.6 (poll intervals kept as-is, tested with virtual time). */
+/**
+ * Ports ChangesListView.swift's 5s poll loop — see plan §2.6 (poll intervals
+ * kept as-is, tested with virtual time). The ViewModel's poll loop runs
+ * forever (`while (isActive)`), so it's launched on [TestScope.backgroundScope]
+ * — a scope kotlinx-coroutines-test exempts from "must finish" checks — and
+ * every settle point uses [runCurrent] (drain only what's ready *now*)
+ * instead of `advanceUntilIdle()`, which would spin forever chasing an
+ * infinite recurring `delay()`.
+ */
 class ChangesViewModelTest {
     private fun changes(vararg staged: String) = GroupedChanges(
         staged = staged.map { ChangedFile(path = it, oldPath = null, status = FileStatus.MODIFIED, staged = true) },
@@ -23,15 +29,15 @@ class ChangesViewModelTest {
         untracked = emptyList(),
     )
 
-    private fun viewModel(repository: FakeChangesRepository, scheduler: TestCoroutineScheduler) =
-        ChangesViewModel("proj-1", "main", repository, CoroutineScope(StandardTestDispatcher(scheduler)))
+    private fun TestScope.viewModel(repository: FakeChangesRepository) =
+        ChangesViewModel("proj-1", "main", repository, backgroundScope)
 
     @Test
     fun `initial load populates changes`() = runTest {
         val repository = FakeChangesRepository(default = changes("a.txt"))
-        val viewModel = viewModel(repository, testScheduler)
+        val viewModel = viewModel(repository)
 
-        advanceUntilIdle()
+        runCurrent()
 
         assertEquals(changes("a.txt"), viewModel.state.value.changes)
     }
@@ -42,8 +48,8 @@ class ChangesViewModelTest {
         repository.changesQueue.addAll(
             listOf(Result.success(changes("a.txt")), Result.success(changes("a.txt", "b.txt"))),
         )
-        val viewModel = viewModel(repository, testScheduler)
-        advanceUntilIdle()
+        val viewModel = viewModel(repository)
+        runCurrent()
         assertEquals(changes("a.txt"), viewModel.state.value.changes)
 
         advanceTimeBy(5_001)
@@ -57,8 +63,8 @@ class ChangesViewModelTest {
         repository.changesQueue.addAll(
             listOf(Result.success(changes("a.txt")), Result.success(changes("a.txt", "b.txt"))),
         )
-        val viewModel = viewModel(repository, testScheduler)
-        advanceUntilIdle()
+        val viewModel = viewModel(repository)
+        runCurrent()
 
         advanceTimeBy(2_000)
 
@@ -71,8 +77,8 @@ class ChangesViewModelTest {
         repository.changesQueue.addAll(
             listOf(Result.failure(ApiError.Server(500, "boom")), Result.success(changes("a.txt"))),
         )
-        val viewModel = viewModel(repository, testScheduler)
-        advanceUntilIdle()
+        val viewModel = viewModel(repository)
+        runCurrent()
         assertEquals("boom", viewModel.state.value.errorMessage)
 
         advanceTimeBy(5_001)
@@ -85,12 +91,12 @@ class ChangesViewModelTest {
     fun `refresh triggers an immediate reload outside the poll cadence`() = runTest {
         val repository = FakeChangesRepository()
         repository.changesQueue.add(Result.success(changes("a.txt")))
-        val viewModel = viewModel(repository, testScheduler)
-        advanceUntilIdle()
+        val viewModel = viewModel(repository)
+        runCurrent()
         repository.changesQueue.add(Result.success(changes("a.txt", "b.txt")))
 
         viewModel.refresh()
-        advanceUntilIdle()
+        runCurrent()
 
         assertEquals(changes("a.txt", "b.txt"), viewModel.state.value.changes)
     }
@@ -99,8 +105,8 @@ class ChangesViewModelTest {
     fun `dismissError clears error without touching changes`() = runTest {
         val repository = FakeChangesRepository()
         repository.changesQueue.add(Result.failure(ApiError.Server(500, "boom")))
-        val viewModel = viewModel(repository, testScheduler)
-        advanceUntilIdle()
+        val viewModel = viewModel(repository)
+        runCurrent()
 
         viewModel.dismissError()
 
