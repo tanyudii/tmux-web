@@ -4,6 +4,13 @@ import { join, normalize } from "node:path";
 import { extractBearerToken, verifyToken } from "./auth.ts";
 import { ValidationError } from "./tmux.ts";
 import { ProjectValidationError, type Project } from "./projects.ts";
+import {
+  InvalidDirectoryPathError,
+  DirectoryNotFoundError,
+  DirectoryAccessDeniedError,
+  NotADirectoryError,
+  type DirectoryListing,
+} from "./directory-browser.ts";
 import { WorktreeConflictError, DirtyWorktreeError } from "./worktree.ts";
 import { WorktreeNotFoundError, GitStatusError, type GroupedChanges, type FileDiff, type DiffMode } from "./git-status.ts";
 import {
@@ -30,6 +37,7 @@ export interface ServerDeps {
   registerProject: (name: string, repoPath: string) => Promise<Project>;
   getProject: (id: string) => Promise<Project | undefined>;
   removeProject: (id: string) => Promise<void>;
+  browseDirectory: (path: string | undefined) => Promise<DirectoryListing>;
 
   listProjectSessions: (project: Project) => Promise<ProjectSession[]>;
   startProjectSessionCreation: (project: Project, name: string) => Promise<{ name: string; fullName: string }>;
@@ -135,6 +143,18 @@ function sendMappedError(res: ServerResponse, error: unknown): boolean {
     sendJson(res, 404, { error: error.message });
     return true;
   }
+  if (error instanceof InvalidDirectoryPathError || error instanceof NotADirectoryError) {
+    sendJson(res, 400, { error: error.message });
+    return true;
+  }
+  if (error instanceof DirectoryNotFoundError) {
+    sendJson(res, 404, { error: error.message });
+    return true;
+  }
+  if (error instanceof DirectoryAccessDeniedError) {
+    sendJson(res, 403, { error: error.message });
+    return true;
+  }
   return false;
 }
 
@@ -166,6 +186,18 @@ export function createServer(deps: ServerDeps): Server {
       if (path === "/api/projects" && req.method === "GET") {
         if (!isAuthorized(req, deps.token)) return sendEmpty(res, 401);
         return sendJson(res, 200, { projects: await deps.listProjects() });
+      }
+
+      if (path === "/api/browse" && req.method === "GET") {
+        if (!isAuthorized(req, deps.token)) return sendEmpty(res, 401);
+
+        try {
+          const listing = await deps.browseDirectory(url.searchParams.get("path") ?? undefined);
+          return sendJson(res, 200, listing);
+        } catch (error) {
+          if (sendMappedError(res, error)) return;
+          throw error;
+        }
       }
 
       if (path === "/api/projects" && req.method === "POST") {

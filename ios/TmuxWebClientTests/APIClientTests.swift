@@ -95,6 +95,57 @@ struct APIClientTests {
         }
     }
 
+    // MARK: Browse
+
+    @Test
+    func browseDirectoryWithoutPathOmitsQueryAndDecodesListing() async throws {
+        let client = makeClient()
+        StubURLProtocol.stubs["/api/browse"] = .init(
+            status: 200,
+            body: Data(#"{"path":"/home/user","parentPath":"/home","isGitRepo":false,"entries":[{"name":"repo","path":"/home/user/repo","isGitRepo":true}],"truncated":false}"#.utf8)
+        )
+
+        let listing = try await client.browseDirectory(path: nil)
+
+        #expect(listing.path == "/home/user")
+        #expect(listing.parentPath == "/home")
+        #expect(listing.isGitRepo == false)
+        #expect(listing.entries == [DirectoryEntry(name: "repo", path: "/home/user/repo", isGitRepo: true)])
+        #expect(listing.truncated == false)
+        #expect(StubURLProtocol.capturedRequests.first?.url?.query == nil)
+    }
+
+    @Test
+    func browseDirectorySendsPathQueryItem() async throws {
+        let client = makeClient()
+        StubURLProtocol.stubs["/api/browse"] = .init(
+            status: 200,
+            body: Data(#"{"path":"/srv/repos","parentPath":"/srv","isGitRepo":false,"entries":[],"truncated":false}"#.utf8)
+        )
+
+        _ = try await client.browseDirectory(path: "/srv/repos")
+
+        let requestURL = StubURLProtocol.capturedRequests.first?.url
+        let queryItems = requestURL.flatMap { URLComponents(url: $0, resolvingAgainstBaseURL: false)?.queryItems }
+        #expect(queryItems == [URLQueryItem(name: "path", value: "/srv/repos")])
+    }
+
+    @Test
+    func browseDirectoryNotFoundThrowsNotFoundWithServerMessage() async {
+        let client = makeClient()
+        StubURLProtocol.stubs["/api/browse"] = .init(
+            status: 404,
+            body: Data(#"{"error":"Directory not found: /nope"}"#.utf8)
+        )
+
+        await #expect {
+            _ = try await client.browseDirectory(path: "/nope")
+        } throws: { error in
+            guard case APIError.notFound(let message) = error else { return false }
+            return message == "Directory not found: /nope"
+        }
+    }
+
     // MARK: Environment (docker-compose)
 
     @Test

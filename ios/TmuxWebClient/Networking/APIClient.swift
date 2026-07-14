@@ -46,6 +46,16 @@ final class APIClient {
         )
     }
 
+    /// `path` omitted (nil) lets the server default to its own home
+    /// directory, matching ../../src/directory-browser.ts's `listDirectory`.
+    func browseDirectory(path: String?) async throws -> DirectoryBrowseResponse {
+        try await request(
+            path: "/api/browse",
+            method: "GET",
+            query: path.map { [URLQueryItem(name: "path", value: $0)] } ?? []
+        )
+    }
+
     // MARK: Sessions
 
     func listSessions(projectId: String) async throws -> [ProjectSession] {
