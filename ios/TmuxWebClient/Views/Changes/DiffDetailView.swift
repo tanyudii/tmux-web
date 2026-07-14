@@ -59,7 +59,7 @@ struct DiffDetailView: View {
         .navigationBarTitleDisplayMode(.inline)
         .refreshable { await load() }
         .task { await load() }
-        .alert("Gagal", isPresented: .constant(errorMessage != nil), presenting: errorMessage) { _ in
+        .alert("Failed", isPresented: .constant(errorMessage != nil), presenting: errorMessage) { _ in
             Button("OK") { errorMessage = nil }
         } message: { message in
             Text(message)

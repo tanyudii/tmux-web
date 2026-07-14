@@ -13,9 +13,9 @@ struct NewProjectSheet: View {
     var body: some View {
         NavigationStack {
             Form {
-                TextField("Nama project", text: $name)
+                TextField("Project name", text: $name)
                     .textInputAutocapitalization(.never)
-                TextField("Path absolut ke repo git", text: $repoPath)
+                TextField("Absolute path to the git repo", text: $repoPath)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
 
@@ -23,13 +23,13 @@ struct NewProjectSheet: View {
                     Text(errorMessage).foregroundStyle(.red)
                 }
             }
-            .navigationTitle("Project Baru")
+            .navigationTitle("New Project")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Batal") { dismiss() }
+                    Button("Cancel") { dismiss() }
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Simpan") {
+                    Button("Save") {
                         Task { await save() }
                     }
                     .disabled(name.isEmpty || repoPath.isEmpty || isSaving)

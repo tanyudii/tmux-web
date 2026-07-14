@@ -32,7 +32,7 @@ struct ChangesListView: View {
         .navigationBarTitleDisplayMode(.inline)
         .overlay {
             if let changes, changes.staged.isEmpty, changes.unstaged.isEmpty, changes.untracked.isEmpty {
-                ContentUnavailableView("Tidak ada perubahan", systemImage: "checkmark.circle")
+                ContentUnavailableView("No changes", systemImage: "checkmark.circle")
             }
         }
         .refreshable { await load() }
@@ -42,7 +42,7 @@ struct ChangesListView: View {
                 try? await Task.sleep(for: .seconds(5))
             }
         }
-        .alert("Gagal", isPresented: .constant(errorMessage != nil), presenting: errorMessage) { _ in
+        .alert("Failed", isPresented: .constant(errorMessage != nil), presenting: errorMessage) { _ in
             Button("OK") { errorMessage = nil }
         } message: { message in
             Text(message)

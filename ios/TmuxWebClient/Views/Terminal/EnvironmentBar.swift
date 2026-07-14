@@ -31,18 +31,18 @@ struct EnvironmentBar: View {
                 try? await Task.sleep(for: .seconds(3))
             }
         }
-        .alert("Gagal", isPresented: .constant(errorMessage != nil), presenting: errorMessage) { _ in
+        .alert("Failed", isPresented: .constant(errorMessage != nil), presenting: errorMessage) { _ in
             Button("OK") { errorMessage = nil }
         } message: { message in
             Text(message)
         }
-        .alert("Hentikan environment sesi ini?", isPresented: $isShowingStopConfirm) {
-            Button("Stop (buang volume)", role: .destructive) {
+        .alert("Stop this session's environment?", isPresented: $isShowingStopConfirm) {
+            Button("Stop (discard volumes)", role: .destructive) {
                 Task { await stop() }
             }
-            Button("Batal", role: .cancel) {}
+            Button("Cancel", role: .cancel) {}
         } message: {
-            Text("Ini menjalankan `docker compose down -v` -- containers dan volumes untuk environment sesi ini akan dihapus.")
+            Text("This runs `docker compose down -v` -- the containers and volumes for this session's environment will be removed.")
         }
         .sheet(isPresented: $isShowingLogs) {
             if let services = status?.services, !services.isEmpty {
