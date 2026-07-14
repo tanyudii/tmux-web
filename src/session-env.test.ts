@@ -103,6 +103,7 @@ test("getSessionEnvStatus reports 'stopping' while teardown is still in flight",
 
   const status = await getSessionEnvStatus(PROJECT, "feature-x", deps, store);
   assert.equal(status.phase, "stopping");
+  assert.equal(status.message, "Stopping containers and removing volumes…");
 
   await stopPromise;
 });
@@ -171,6 +172,42 @@ test("startSessionEnv throws EnvAlreadyRunningError when already starting", asyn
   assert.equal(store.get(FULL_NAME)?.phase, "starting");
 
   await assert.rejects(() => startSessionEnv(PROJECT, "feature-x", deps, store), EnvAlreadyRunningError);
+});
+
+test("startSessionEnv reports 'Running pre-run script…' while the pre-run script is in flight", async () => {
+  const config: EnvConfig = { ...AVAILABLE_CONFIG, preRunScript: `${WORKTREE_PATH}/.tmux-web-env/pre-run.sh` };
+  const deps = makeDeps({
+    loadEnvConfig: async () => config,
+    runScript: () => new Promise(() => {}), // never resolves during this test
+  });
+  const store = createSessionEnvStore();
+
+  await startSessionEnv(PROJECT, "feature-x", deps, store);
+
+  assert.deepEqual(store.get(FULL_NAME), { phase: "starting", message: "Running pre-run script…" });
+});
+
+test("startSessionEnv reports 'Pulling and starting containers…' during compose up", async () => {
+  const deps = makeDeps({ composeUp: () => new Promise(() => {}) }); // never resolves during this test
+  const store = createSessionEnvStore();
+
+  await startSessionEnv(PROJECT, "feature-x", deps, store);
+
+  assert.deepEqual(store.get(FULL_NAME), { phase: "starting", message: "Pulling and starting containers…" });
+});
+
+test("startSessionEnv reports 'Running post-run script…' once compose up finishes", async () => {
+  const config: EnvConfig = { ...AVAILABLE_CONFIG, postRunScript: `${WORKTREE_PATH}/.tmux-web-env/post-run.sh` };
+  const deps = makeDeps({
+    loadEnvConfig: async () => config,
+    runScript: () => new Promise(() => {}), // never resolves during this test
+  });
+  const store = createSessionEnvStore();
+
+  await startSessionEnv(PROJECT, "feature-x", deps, store);
+  await flush();
+
+  assert.deepEqual(store.get(FULL_NAME), { phase: "starting", message: "Running post-run script…" });
 });
 
 test("startSessionEnv rejects a second truly concurrent start() for the same session (no TOCTOU race)", async () => {
