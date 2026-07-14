@@ -1,7 +1,8 @@
 export const HELP_TEXT = `tmuxweb - browser GUI for tmux sessions
 
 Usage:
-  tmuxweb                         Start the server (reads ~/.tmux-web/config.json)
+  tmuxweb                         Show this help (same as \`tmuxweb help\`)
+  tmuxweb start                   Start the server (reads ~/.tmux-web/config.json)
   tmuxweb init                    Create ~/.tmux-web/config.json with a generated token
   tmuxweb generate                Regenerate the auth token
   tmuxweb config port <n>         Set the listen port

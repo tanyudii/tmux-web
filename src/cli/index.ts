@@ -12,6 +12,9 @@ export async function runCli(argv: string[]): Promise<void> {
 
   switch (command) {
     case undefined:
+      printHelp();
+      return;
+    case "start":
       return startServer();
     case "init":
       return runInit(rest);
