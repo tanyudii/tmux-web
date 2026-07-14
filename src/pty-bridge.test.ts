@@ -438,9 +438,9 @@ test(
       assert.match(scrolledHistory, /LINE_\d+/);
 
       // One WS "input" message per keystroke, matching how a real user
-      // typing sends data (public/app.js's term.onData fires per key) --
-      // this is what actually exposed the "only the first keystroke waits
-      // for cancel" bug that a single combined message would have hidden.
+      // typing sends data (a terminal's onData fires per key) -- this is
+      // what actually exposed the "only the first keystroke waits for
+      // cancel" bug that a single combined message would have hidden.
       for (const ch of "echo RESUMED_AFTER_SCROLL\n") {
         socket.emitMessage(JSON.stringify({ type: "input", data: ch }));
       }

@@ -1,0 +1,61 @@
+name: iosApp
+options:
+  bundleIdPrefix: com.tanyudii
+  deploymentTarget:
+    iOS: "17.0"
+  createIntermediateGroups: true
+
+packages:
+  SwiftTerm:
+    url: https://github.com/migueldeicaza/SwiftTerm
+    from: 1.2.4
+
+targets:
+  iosApp:
+    type: application
+    platform: iOS
+    sources:
+      - path: iosApp
+    dependencies:
+      - package: SwiftTerm
+    info:
+      path: iosApp/Info.plist
+      properties:
+        CFBundleDisplayName: tmux-web
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: false
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.tanyudii.tmuxweb
+        SWIFT_VERSION: "5.0"
+        MARKETING_VERSION: "0.1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        TARGETED_DEVICE_FAMILY: "1,2"
+        DEVELOPMENT_TEAM: "R4UMNB6KH2"
+        CODE_SIGN_STYLE: Automatic
+        # Framework produced by :composeApp:embedAndSignAppleFrameworkForXcode (run script phase below).
+        FRAMEWORK_SEARCH_PATHS: "$(inherited) $(SRCROOT)/../composeApp/build/xcode-frameworks/$(CONFIGURATION)/$(SDK_NAME)"
+    preBuildScripts:
+      - name: "Compile Kotlin Framework"
+        script: |
+          cd "$SRCROOT/.."
+          ./gradlew :composeApp:embedAndSignAppleFrameworkForXcode
+        basedOnDependencyAnalysis: false
+    scheme:
+      testTargets: []
+      configVariants:
+        - Debug
+        - Release
+
+schemes:
+  iosApp:
+    build:
+      targets:
+        iosApp: all
+    run:
+      config: Debug

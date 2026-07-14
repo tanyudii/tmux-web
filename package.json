@@ -11,18 +11,15 @@
     "tmuxweb": "./bin/tmuxweb.ts"
   },
   "scripts": {
-    "postinstall": "node scripts/copy-vendor.mjs",
     "start": "node --experimental-strip-types src/main.ts",
     "dev": "node --experimental-strip-types --watch src/main.ts",
     "init": "node --experimental-strip-types bin/tmuxweb.ts init",
     "install-service": "node --experimental-strip-types scripts/install-service.mjs",
-    "test": "node --experimental-strip-types --test src/*.test.ts src/cli/*.test.ts public/*.test.js",
-    "test:coverage": "node --experimental-strip-types --test --experimental-test-coverage src/*.test.ts src/cli/*.test.ts public/*.test.js",
+    "test": "node --experimental-strip-types --test src/*.test.ts src/cli/*.test.ts",
+    "test:coverage": "node --experimental-strip-types --test --experimental-test-coverage src/*.test.ts src/cli/*.test.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@xterm/addon-fit": "0.10.0",
-    "@xterm/xterm": "5.5.0",
     "node-pty": "1.1.0",
     "ws": "8.21.0"
   },
