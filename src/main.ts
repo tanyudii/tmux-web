@@ -13,6 +13,7 @@ import {
   getProject as getProjectImpl,
 } from "./projects.ts";
 import { isGitRepo, addWorktree, removeWorktree } from "./worktree.ts";
+import { listDirectory as listDirectoryImpl } from "./directory-browser.ts";
 import { getChangedFiles, getFileDiff } from "./git-status.ts";
 import {
   listProjectSessions as listProjectSessionsImpl,
@@ -104,6 +105,7 @@ export async function main(): Promise<void> {
       registerProjectImpl(projectsFile, name, repoPath, { isGitRepo }),
     getProject: (id) => getProjectImpl(projectsFile, id),
     removeProject: (id) => removeProjectImpl(projectsFile, id),
+    browseDirectory: (path) => listDirectoryImpl(path, {}),
 
     listProjectSessions: (project) => listProjectSessionsImpl(project, projectSessionsDeps),
     startProjectSessionCreation: (project, name) =>

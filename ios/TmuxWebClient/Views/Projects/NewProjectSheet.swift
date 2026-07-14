@@ -1,3 +1,4 @@
+import Foundation
 import SwiftUI
 
 struct NewProjectSheet: View {
@@ -7,17 +8,40 @@ struct NewProjectSheet: View {
     @Environment(\.dismiss) private var dismiss
     @State private var name = ""
     @State private var repoPath = ""
+    @State private var nameWasEdited = false
     @State private var isSaving = false
     @State private var errorMessage: String?
+    @State private var isShowingBrowser = false
 
     var body: some View {
         NavigationStack {
             Form {
-                TextField("Project name", text: $name)
-                    .textInputAutocapitalization(.never)
-                TextField("Absolute path to the git repo", text: $repoPath)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
+                // Custom binding (not onChange(of: name)) so only a real
+                // keystroke from the user marks the name as edited --
+                // onChange would also fire for the programmatic auto-fill
+                // below, since it can't tell the two apart.
+                TextField("Project name", text: Binding(
+                    get: { name },
+                    set: { newValue in
+                        name = newValue
+                        nameWasEdited = true
+                    }
+                ))
+                .textInputAutocapitalization(.never)
+
+                Button {
+                    isShowingBrowser = true
+                } label: {
+                    HStack {
+                        Text("Folder")
+                        Spacer()
+                        Text(repoPath.isEmpty ? "Choose..." : repoPath)
+                            .foregroundStyle(repoPath.isEmpty ? .secondary : .primary)
+                            .lineLimit(1)
+                            .truncationMode(.head)
+                    }
+                }
+                .buttonStyle(.plain)
 
                 if let errorMessage {
                     Text(errorMessage).foregroundStyle(.red)
@@ -33,6 +57,17 @@ struct NewProjectSheet: View {
                         Task { await save() }
                     }
                     .disabled(name.isEmpty || repoPath.isEmpty || isSaving)
+                }
+            }
+            .sheet(isPresented: $isShowingBrowser) {
+                DirectoryBrowserView(client: client) { chosenPath in
+                    repoPath = chosenPath
+                    // Prefill the name from the folder if the user hasn't
+                    // typed one yet -- same UX as the web modal
+                    // (../../public/app.js `browseNameTouched`).
+                    if !nameWasEdited {
+                        name = (chosenPath as NSString).lastPathComponent
+                    }
                 }
             }
         }
