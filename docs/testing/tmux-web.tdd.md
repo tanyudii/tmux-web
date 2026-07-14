@@ -741,3 +741,131 @@ ran `tmux set -g mouse on` to reproduce the reported environment, then:
   wants to select text" from "user wants a mouse-mode interaction" other
   than the modifier key convention every other terminal app already
   uses).
+
+## Feature addendum: mouse-wheel scroll drives tmux copy-mode
+
+**Source plan**: no `*.plan.md` file — produced inline via `/ecc:plan`
+(conversational mode) after the user reported the terminal "doesn't support
+scroll yet."
+
+### Root cause
+
+tmux redraws its pane via cursor positioning rather than emitting new lines,
+so a browser terminal's own native scrollback (xterm.js's local
+`.xterm-viewport`, `scrollback` option) is mostly useless for a tmux
+session — it mostly replays repaint noise, not usable history. The real
+scrollback lives inside tmux's own copy-mode, and until this addendum,
+reaching it depended entirely on the user's own `tmux.conf` having `set -g
+mouse on` (undocumented as a *requirement* — README merely described its
+side effect on click-drag selection, from the previous addendum). This
+addendum makes scroll a first-class, always-on feature the server drives
+directly, independent of the user's `tmux.conf`.
+
+### User journeys
+
+29. As a user, I want to scroll up in the terminal with my mouse wheel to
+    see previous output, without needing to edit my own `tmux.conf`.
+30. As a user who scrolled up, I want typing to automatically bring me back
+    to the live pane, like every other terminal+tmux setup.
+
+### Task report
+
+| Journey | Summary | Validation command | Result |
+|---|---|---|---|
+| 29 | `src/tmux.ts`: added `getPaneMode`, `scrollPane`, `cancelCopyMode` — drive tmux's copy-mode directly via the `tmux` CLI (`display-message`, `copy-mode`, `send-keys -X`), mirroring the existing `createSession`/`killSession` exec pattern | `npm test` (14 new unit tests) | PASS |
+| 29 | `src/pty-bridge.ts`: `ClientMessage` gains a `scroll` variant; `attachPtyToSocket` dispatches it to `scrollPane`, serializing tmux CLI calls per connection (`scrollQueue`) so concurrent copy-mode/send-keys calls can't race each other | `npm test` | PASS |
+| 29 | `public/app.js`: a capture-phase `wheel` listener on `#terminal` fully replaces xterm.js's own wheel handling (`stopPropagation`/`preventDefault`), normalizes `deltaY`/`deltaMode`, and sends coalesced `scroll` WS messages | `node --check public/app.js`; manual browser check below | PASS |
+| 30 | `attachPtyToSocket` tracks an optimistic "possibly in copy-mode" flag; the next `input` message(s) call `cancelCopyMode` before forwarding keystrokes | `npm test` | PASS |
+| — | Real tmux integration: a `scroll` message against a live tmux session flips `#{pane_in_mode}` and advances `#{scroll_position}`, and the scrolled-to history line range shows genuinely earlier content; a following per-keystroke `input` sequence flips `#{pane_in_mode}` back and reaches the shell in order | `npm test` (`real tmux integration: a scroll message drives tmux copy-mode...`) | PASS |
+| — | Full suite unaffected | `npm test` | GREEN (288 pass, 0 fail) |
+| — | Typecheck unaffected | `npm run typecheck` | PASS (clean) |
+
+### Bugs found and fixed during verification (not just written once and assumed correct)
+
+1. **`tmux capture-pane -p` does not reflect a client's copy-mode scroll
+   offset.** The first draft of the real-tmux integration test asserted on
+   a raw `capture-pane -p` diff before/after scrolling — it passed, but for
+   the wrong reason (the fill loop was still running, so the pane content
+   was trivially different regardless of scrolling). Confirmed empirically
+   with a throwaway session: `capture-pane -p` is unchanged by copy-mode
+   scrolling even while `#{pane_in_mode}` is `1` and `#{scroll_position}` is
+   nonzero — only `#{scroll_position}` and `capture-pane`'s own `-S`/`-E`
+   history-range flags reflect it. Rewrote the test to assert on those, and
+   to wait for an explicit completion marker before taking any snapshot.
+2. **Only the first keystroke after a scroll-up waited for `cancelCopyMode`
+   to finish; later keystrokes in the same burst raced ahead of it.** Found
+   by the manual, real-browser check below (typing `echo
+   RESUMED_MANUAL_CHECK` after scrolling only delivered a single stray
+   character to the shell — the rest were swallowed by copy-mode's own
+   keytable because they were written to the pty before the pending cancel
+   had actually taken effect). Fixed in `attachPtyToSocket` by gating *every*
+   input message on the in-flight cancel promise (`cancelInFlight`), not
+   just the one that triggered it, while still calling `cancelCopyMode`
+   exactly once per resume. Locked in with a unit test using a
+   deliberately slow `cancelCopyModeFn` and a rapid burst of per-character
+   `input` messages, and by rewriting the real-tmux integration test's
+   resume step to send one WS message per keystroke (matching how
+   `public/app.js`'s `term.onData` actually fires) instead of one combined
+   string, which had been hiding the bug.
+
+### Manual verification (real browser, real tmux, real project/session flow)
+
+Driven end-to-end via Playwright (`playwright-core`, headless Chromium)
+against a throwaway local git remote (a bare repo + working clone, isolated
+from this project's own repository — no network dependency, no risk to real
+branches): started the real server, registered a project, created a session
+through the real HTTP API (real `git worktree add` + real `tmux
+new-session`), logged into the real UI, attached the real xterm.js
+terminal, and typed 300 numbered lines into the real shell. Then:
+
+1. Hovered the terminal and issued a real wheel-scroll via
+   `page.mouse.wheel(0, -900)`. Confirmed via `tmux display-message`
+   against the real session that `#{pane_in_mode}` flipped to `1` and
+   `#{scroll_position}` advanced to a positive value, and that
+   `capture-pane -S <-scroll_position> -E <-scroll_position+5>` showed
+   genuinely earlier `LINE_N` content.
+2. Typed `echo RESUMED_MANUAL_CHECK` and pressed Enter. First attempt (before
+   the multi-keystroke fix above) failed — only one stray character reached
+   the shell. After the fix, `#{pane_in_mode}` correctly flipped back to `0`
+   and the full command reached the shell, matching the automated
+   real-tmux test.
+
+Screenshots captured after each step (`after-scroll-up.png`,
+`after-resume.png`) as visual evidence, not committed to the repo (ad hoc
+verification artifact, not project documentation).
+
+### Test specification
+
+| # | What is guaranteed | Test file | Type | Result |
+|---|---|---|---|---|
+| 29 | `getPaneMode`/`scrollPane`/`cancelCopyMode` build the correct `tmux` CLI invocations for every branch (already-in-mode vs not, up vs down, no-op on scroll-down when live) | `src/tmux.test.ts` | unit | PASS |
+| 29 | `parseClientMessage` accepts a well-formed `scroll` message and rejects invalid direction/lines | `src/pty-bridge.test.ts` | unit | PASS |
+| 29 | `attachPtyToSocket` dispatches `scroll` messages to the injected `scrollPaneFn` with the session name | `src/pty-bridge.test.ts` | unit | PASS |
+| 30 | `attachPtyToSocket` calls `cancelCopyModeFn` before writing input that follows a scroll-up, skips it when no scroll-up preceded the input, and gates *every* keystroke in a rapid burst on a slow cancel (not just the first) | `src/pty-bridge.test.ts` | unit | PASS |
+| 29, 30 | End-to-end against a real `tmux` binary: scrolling up advances the real pane's copy-mode scroll offset and reveals genuinely earlier history; a following per-keystroke `input` sequence exits copy-mode and reaches the shell, in order | `src/pty-bridge.test.ts` (`real tmux integration: a scroll message drives tmux copy-mode...`, gated on `isTmuxAvailable()`) | integration | PASS |
+| 29, 30 | End-to-end in a real browser against the real HTTP API, real worktree/session creation, and a real wheel-scroll gesture | manual (Playwright-driven Chromium, described above) | e2e | PASS |
+
+### Known, intentional gaps
+
+- No automated test drives the actual `wheel` DOM event through a real
+  browser inside `npm test` (this project has no browser test runner wired
+  into the suite, same reasoning as the previous two addenda). The client
+  deltaY/deltaMode normalization and coalescing logic in `public/app.js` is
+  exercised only by manual verification and `node --check` for syntax.
+- Multiple browser tabs/clients attached to the same tmux session can each
+  drive copy-mode independently and interfere with each other's scroll
+  position. Acceptable for a single-user, self-hosted tool — the same class
+  of limitation as re-attaching to an already-attached session elsewhere in
+  this app.
+- The `SCROLL_PIXELS_PER_LINE` heuristic (34px) is a cross-browser
+  approximation, not derived from the terminal's actual rendered line
+  height — scroll speed may feel slightly off on unusual font sizes.
+- A test-harness-only timing quirk was found and worked around (not a
+  product bug): rapid-fire `tmux capture-pane` polling from *outside* any
+  tmux client, run immediately before attaching a new client, can leave
+  tmux's client-resolution in a state where a subsequent `copy-mode`/
+  `send-keys -X` from that new client silently no-ops. `src/pty-bridge.test.ts`
+  works around it with a short settle delay after such polling, documented
+  inline at the call site. Production code never polls a session's own pane
+  via external `tmux` CLI calls immediately before attaching, so this does
+  not affect real usage.
