@@ -174,9 +174,16 @@ async function runLifecycle(
   store: SessionEnvStore,
 ): Promise<void> {
   try {
-    if (config.preRunScript) await deps.runScript(config.preRunScript, worktreePath);
+    if (config.preRunScript) {
+      store.set(fullName, { phase: "starting", message: "Running pre-run script…" });
+      await deps.runScript(config.preRunScript, worktreePath);
+    }
+    store.set(fullName, { phase: "starting", message: "Pulling and starting containers…" });
     await deps.composeUp(ctx);
-    if (config.postRunScript) await deps.runScript(config.postRunScript, worktreePath);
+    if (config.postRunScript) {
+      store.set(fullName, { phase: "starting", message: "Running post-run script…" });
+      await deps.runScript(config.postRunScript, worktreePath);
+    }
     store.delete(fullName);
   } catch (error) {
     store.set(fullName, {
@@ -202,7 +209,7 @@ export async function stopSessionEnv(
     throw new EnvNotRunningError(`Environment for "${sessionSlug}" is not running`);
   }
 
-  store.set(fullName, { phase: "stopping" });
+  store.set(fullName, { phase: "stopping", message: "Stopping containers and removing volumes…" });
   try {
     await deps.composeDown(ctx);
   } finally {
