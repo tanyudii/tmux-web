@@ -7,6 +7,7 @@
 
 import { parseMuted, buildBellTitle, shouldPlayBellAlert } from "./notify.js";
 import { isCopyShortcut, copyResultMessage } from "./terminal-clipboard.js";
+import { parseUnifiedDiff, parsedDiffFromAdditions, withIntralineHighlights } from "./diff-parser.js";
 
 const TOKEN_KEY = "tmux-web-token";
 const NOTIFY_MUTE_KEY = "tmux-web-notify-muted";
@@ -833,27 +834,100 @@ async function openDiffFor(fileEl, path, mode) {
     note.className = "diff-note";
     note.textContent = "New file:";
     panel.appendChild(note);
-    panel.appendChild(renderDiffLines(result.diff.split("\n").map((line) => "+" + line).join("\n")));
+    panel.appendChild(renderDiff(parsedDiffFromAdditions(result.diff)));
     return;
   }
 
-  panel.appendChild(renderDiffLines(result.diff));
+  panel.appendChild(renderDiff(withIntralineHighlights(parseUnifiedDiff(result.diff))));
 }
 
-function renderDiffLines(diffText) {
-  const container = document.createElement("div");
-  container.className = "diff-content";
-  for (const line of diffText.split("\n")) {
-    const lineEl = document.createElement("div");
-    lineEl.textContent = line || " ";
-    if (line.startsWith("+++") || line.startsWith("---")) lineEl.classList.add("diff-line", "diff-file-header");
-    else if (line.startsWith("@@")) lineEl.classList.add("diff-line", "diff-hunk");
-    else if (line.startsWith("+")) lineEl.classList.add("diff-line", "diff-add");
-    else if (line.startsWith("-")) lineEl.classList.add("diff-line", "diff-del");
-    else lineEl.classList.add("diff-line", "diff-context");
-    container.appendChild(lineEl);
+const DIFF_ROW_MARKERS = { add: "+", del: "−", context: " " };
+
+function renderDiff(parsedDiff) {
+  const fragment = document.createDocumentFragment();
+  fragment.appendChild(renderDiffStatBar(parsedDiff));
+  fragment.appendChild(renderDiffContent(parsedDiff));
+  return fragment;
+}
+
+function renderDiffStatBar(parsedDiff) {
+  const bar = document.createElement("div");
+  bar.className = "diff-stat-bar";
+  const added = document.createElement("span");
+  added.className = "diff-stat-add";
+  added.textContent = "+" + parsedDiff.additions;
+  const removed = document.createElement("span");
+  removed.className = "diff-stat-del";
+  removed.textContent = "−" + parsedDiff.deletions;
+  bar.appendChild(added);
+  bar.appendChild(removed);
+  return bar;
+}
+
+function renderDiffContent(parsedDiff) {
+  const content = document.createElement("div");
+  content.className = "diff-content";
+  for (const hunk of parsedDiff.hunks) {
+    content.appendChild(renderDiffHunkBand(hunk.header));
+    for (const line of hunk.lines) content.appendChild(renderDiffRow(line));
   }
-  return container;
+  return content;
+}
+
+function renderDiffHunkBand(header) {
+  const band = document.createElement("div");
+  band.className = "diff-hunk-band";
+  band.textContent = header;
+  return band;
+}
+
+function renderDiffRow(line) {
+  const row = document.createElement("div");
+  row.className = "diff-row diff-row--" + line.type;
+
+  const gutterOld = document.createElement("span");
+  gutterOld.className = "diff-gutter diff-gutter-old";
+  gutterOld.textContent = line.oldLineNo == null ? "" : String(line.oldLineNo);
+
+  const gutterNew = document.createElement("span");
+  gutterNew.className = "diff-gutter diff-gutter-new";
+  gutterNew.textContent = line.newLineNo == null ? "" : String(line.newLineNo);
+
+  const code = document.createElement("span");
+  code.className = "diff-code";
+
+  if (line.type === "meta") {
+    code.classList.add("diff-code-meta");
+    code.textContent = line.content;
+  } else {
+    const marker = document.createElement("span");
+    marker.className = "diff-marker";
+    marker.textContent = DIFF_ROW_MARKERS[line.type] || " ";
+    code.appendChild(marker);
+    code.appendChild(renderDiffCodeText(line));
+  }
+
+  row.appendChild(gutterOld);
+  row.appendChild(gutterNew);
+  row.appendChild(code);
+  return row;
+}
+
+function renderDiffCodeText(line) {
+  if (!line.segments) return document.createTextNode(line.content || " ");
+
+  const span = document.createElement("span");
+  for (const segment of line.segments) {
+    if (!segment.changed) {
+      span.appendChild(document.createTextNode(segment.text));
+      continue;
+    }
+    const mark = document.createElement("span");
+    mark.className = "diff-char-changed";
+    mark.textContent = segment.text;
+    span.appendChild(mark);
+  }
+  return span;
 }
 
 // --- Environment setup (docker-compose, one-click per session) ---
