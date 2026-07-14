@@ -73,6 +73,36 @@ The user-facing version of this is documented in `README.md` under
 **Installation (global CLI, production)** and **Upgrading** -- keep those
 sections in sync with `upgrade.ts` if the mechanism changes.
 
+## A running `tmuxweb upgrade` process can't apply its own code changes
+
+Learned the hard way shipping v1.1.0/v1.1.1: when `tmuxweb upgrade` updates
+`~/.local/share/tmux-web` on disk and then calls back into
+`service-command.ts` (via `refreshService` in `upgrade.ts`) to regenerate
+the systemd unit, it uses the **already-loaded, in-memory** version of
+`service-command.ts` -- i.e. whatever code was running when that
+`tmuxweb upgrade` invocation started, NOT the newly-installed version that
+was just written to disk. Node doesn't hot-reload a module that's already
+imported, even though the file on disk changed underneath it.
+
+Practical effect: any release that changes what `buildUnit()` produces
+(v1.1.0 added the `start` argument to `ExecStart`; v1.1.1 removed
+`ProtectSystem=strict`) does NOT take full effect on the upgrade that
+introduces it -- `tmuxweb upgrade`'s own unit-refresh step still writes
+the OLD unit shape that upgrade. It only takes effect starting with the
+NEXT `tmuxweb upgrade` (or any other fresh `tmuxweb` invocation, e.g.
+`tmuxweb service install` run by hand), because that starts a brand new
+process which loads the already-updated files fresh from disk.
+
+If you ship another `buildUnit()`/`installService()` change: after
+upgrading a server past that release, run `tmuxweb service install`
+by hand once (a fresh process) to force the corrected unit into place
+immediately, then `systemctl --user restart tmux-web` -- systemd
+sandboxing directives like `ProtectSystem` apply at process start, so an
+already-running process stays under the old sandbox until restarted even
+after the unit file itself is rewritten. Don't assume the self-refresh
+mechanism alone is sufficient on the very first upgrade past such a
+change.
+
 ## Testing this mechanism
 
 `src/cli/upgrade.test.ts` has both fully-mocked unit tests (exec calls
