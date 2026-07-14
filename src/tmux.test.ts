@@ -6,6 +6,9 @@ import {
   listSessions,
   createSession,
   killSession,
+  getPaneMode,
+  scrollPane,
+  cancelCopyMode,
   ValidationError,
 } from "./tmux.ts";
 
@@ -157,4 +160,133 @@ test("killSession calls tmux kill-session -t <name> for a valid name", async () 
   await killSession("main", fakeExec);
 
   assert.deepEqual(calls, [{ file: "tmux", args: ["kill-session", "-t", "main"] }]);
+});
+
+function fakeExecWithPaneMode(inMode: boolean, calls: Array<{ file: string; args: string[] }>) {
+  return async (file: string, args: string[]) => {
+    calls.push({ file, args });
+    if (args[0] === "display-message") return { stdout: inMode ? "1\n" : "0\n" };
+    return { stdout: "" };
+  };
+}
+
+test("getPaneMode rejects invalid session names without calling exec", async () => {
+  let called = false;
+  const fakeExec = async () => {
+    called = true;
+    return { stdout: "0\n" };
+  };
+
+  await assert.rejects(() => getPaneMode("bad name", fakeExec), ValidationError);
+  assert.equal(called, false);
+});
+
+test("getPaneMode queries #{pane_in_mode} and returns true when tmux reports 1", async () => {
+  const calls: Array<{ file: string; args: string[] }> = [];
+  const fakeExec = fakeExecWithPaneMode(true, calls);
+
+  assert.equal(await getPaneMode("main", fakeExec), true);
+  assert.deepEqual(calls, [
+    { file: "tmux", args: ["display-message", "-p", "-t", "main", "#{pane_in_mode}"] },
+  ]);
+});
+
+test("getPaneMode returns false when tmux reports 0", async () => {
+  const calls: Array<{ file: string; args: string[] }> = [];
+  const fakeExec = fakeExecWithPaneMode(false, calls);
+
+  assert.equal(await getPaneMode("main", fakeExec), false);
+});
+
+test("scrollPane rejects invalid session names without calling exec", async () => {
+  let called = false;
+  const fakeExec = async () => {
+    called = true;
+    return { stdout: "0\n" };
+  };
+
+  await assert.rejects(() => scrollPane("bad name", "up", 3, fakeExec), ValidationError);
+  assert.equal(called, false);
+});
+
+test("scrollPane('up') enters copy-mode then scrolls up when pane is not already in a mode", async () => {
+  const calls: Array<{ file: string; args: string[] }> = [];
+  const fakeExec = fakeExecWithPaneMode(false, calls);
+
+  await scrollPane("main", "up", 3, fakeExec);
+
+  assert.deepEqual(calls, [
+    { file: "tmux", args: ["display-message", "-p", "-t", "main", "#{pane_in_mode}"] },
+    { file: "tmux", args: ["copy-mode", "-t", "main"] },
+    { file: "tmux", args: ["send-keys", "-X", "-t", "main", "-N", "3", "scroll-up"] },
+  ]);
+});
+
+test("scrollPane('up') skips re-entering copy-mode when already in a mode", async () => {
+  const calls: Array<{ file: string; args: string[] }> = [];
+  const fakeExec = fakeExecWithPaneMode(true, calls);
+
+  await scrollPane("main", "up", 5, fakeExec);
+
+  assert.deepEqual(calls, [
+    { file: "tmux", args: ["display-message", "-p", "-t", "main", "#{pane_in_mode}"] },
+    { file: "tmux", args: ["send-keys", "-X", "-t", "main", "-N", "5", "scroll-up"] },
+  ]);
+});
+
+test("scrollPane('down') scrolls down when already in copy-mode", async () => {
+  const calls: Array<{ file: string; args: string[] }> = [];
+  const fakeExec = fakeExecWithPaneMode(true, calls);
+
+  await scrollPane("main", "down", 2, fakeExec);
+
+  assert.deepEqual(calls, [
+    { file: "tmux", args: ["display-message", "-p", "-t", "main", "#{pane_in_mode}"] },
+    { file: "tmux", args: ["send-keys", "-X", "-t", "main", "-N", "2", "scroll-down"] },
+  ]);
+});
+
+test("scrollPane('down') is a no-op when the pane is not in copy-mode", async () => {
+  const calls: Array<{ file: string; args: string[] }> = [];
+  const fakeExec = fakeExecWithPaneMode(false, calls);
+
+  await scrollPane("main", "down", 2, fakeExec);
+
+  assert.deepEqual(calls, [
+    { file: "tmux", args: ["display-message", "-p", "-t", "main", "#{pane_in_mode}"] },
+  ]);
+});
+
+test("cancelCopyMode rejects invalid session names without calling exec", async () => {
+  let called = false;
+  const fakeExec = async () => {
+    called = true;
+    return { stdout: "0\n" };
+  };
+
+  await assert.rejects(() => cancelCopyMode("bad name", fakeExec), ValidationError);
+  assert.equal(called, false);
+});
+
+test("cancelCopyMode sends cancel when the pane is in copy-mode", async () => {
+  const calls: Array<{ file: string; args: string[] }> = [];
+  const fakeExec = fakeExecWithPaneMode(true, calls);
+
+  await cancelCopyMode("main", fakeExec);
+
+  assert.deepEqual(calls, [
+    { file: "tmux", args: ["display-message", "-p", "-t", "main", "#{pane_in_mode}"] },
+    { file: "tmux", args: ["send-keys", "-X", "-t", "main", "cancel"] },
+  ]);
+});
+
+test("cancelCopyMode is a no-op when the pane is not in copy-mode", async () => {
+  const calls: Array<{ file: string; args: string[] }> = [];
+  const fakeExec = fakeExecWithPaneMode(false, calls);
+
+  await cancelCopyMode("main", fakeExec);
+
+  assert.deepEqual(calls, [
+    { file: "tmux", args: ["display-message", "-p", "-t", "main", "#{pane_in_mode}"] },
+  ]);
 });

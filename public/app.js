@@ -12,6 +12,11 @@ const TOKEN_KEY = "tmux-web-token";
 const NOTIFY_MUTE_KEY = "tmux-web-notify-muted";
 const BELL_COOLDOWN_MS = 1500;
 const COPY_TOAST_DURATION_MS = 1800;
+// Rough cross-browser heuristic for how many wheel pixels make up one
+// terminal line (browsers report wildly different deltaY magnitudes for the
+// same physical scroll gesture) -- not exact line metrics, just enough to
+// keep a single wheel "notch" mapping to a small, sane number of lines.
+const SCROLL_PIXELS_PER_LINE = 34;
 
 const loginForm = document.getElementById("login");
 const tokenInput = document.getElementById("token");
@@ -70,6 +75,8 @@ let expandedDiffKey = null; // "mode:path" of the single currently-open inline d
 let logsSocket = null;
 let logsTerm = null;
 let logsFitAddon = null;
+let terminalWheelHandler = null;
+let wheelLineAccumulator = 0;
 
 // --- Bell notifications (sound + title flash when this tab isn't the one
 // the developer is looking at) --------------------------------------------
@@ -473,6 +480,16 @@ function attachToSession(session) {
     }
   });
 
+  wheelLineAccumulator = 0;
+  terminalWheelHandler = handleTerminalWheel;
+  // Captured on #terminal (an ancestor of whatever xterm.js attaches its own
+  // wheel listener to) so this fires first and stopPropagation() keeps
+  // xterm's own handling -- native viewport scrollback, or forwarding the
+  // wheel as mouse-mode escapes -- from ever running. tmux's own copy-mode
+  // scrollback (driven server-side, see pty-bridge.ts) replaces both: it
+  // works the same way whether or not the user's tmux.conf has `mouse on`.
+  terminalEl.addEventListener("wheel", terminalWheelHandler, { capture: true, passive: false });
+
   window.addEventListener("resize", sendResize);
   highlightActiveSession();
 
@@ -582,6 +599,33 @@ function sendResize() {
   socket.send(JSON.stringify({ type: "resize", cols: term.cols, rows: term.rows }));
 }
 
+// Normalizes a wheel event's deltaY to a signed line count. Browsers report
+// deltaY in different units depending on input device and deltaMode: pixels
+// (0, the common case for mice and trackpads), lines (1), or pages (2).
+function wheelEventToLines(event) {
+  if (event.deltaMode === 1) return event.deltaY;
+  if (event.deltaMode === 2) return event.deltaY * (term ? term.rows : 24);
+  return event.deltaY / SCROLL_PIXELS_PER_LINE;
+}
+
+// Drives tmux's own copy-mode scrollback (see the "scroll" WS message
+// handling in pty-bridge.ts) instead of xterm.js's native wheel handling --
+// see the addEventListener call site in attachToSession for why. Deltas are
+// accumulated across ticks so fast/short wheel notches still add up to whole
+// lines instead of being truncated to zero every time.
+function handleTerminalWheel(event) {
+  event.preventDefault();
+  event.stopPropagation();
+  if (!socket || socket.readyState !== WebSocket.OPEN) return;
+
+  wheelLineAccumulator += wheelEventToLines(event);
+  const lines = Math.trunc(wheelLineAccumulator);
+  if (lines === 0) return;
+  wheelLineAccumulator -= lines;
+
+  socket.send(JSON.stringify({ type: "scroll", direction: lines < 0 ? "up" : "down", lines: Math.abs(lines) }));
+}
+
 function highlightActiveSession() {
   for (const item of sessionListEl.querySelectorAll(".session-item")) {
     item.classList.toggle("active", item.dataset.name === activeSessionName);
@@ -590,6 +634,11 @@ function highlightActiveSession() {
 
 function detachTerminal() {
   window.removeEventListener("resize", sendResize);
+  if (terminalWheelHandler) {
+    terminalEl.removeEventListener("wheel", terminalWheelHandler, { capture: true });
+    terminalWheelHandler = null;
+  }
+  wheelLineAccumulator = 0;
   if (socket) {
     socket.close();
     socket = null;
