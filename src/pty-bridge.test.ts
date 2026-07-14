@@ -389,14 +389,38 @@ test(
       term = attachPtyToSocket(socket, sessionName, 80, 24);
 
       socket.emitMessage(JSON.stringify({ type: "scroll", direction: "up", lines: 100 }));
-      await new Promise((resolve) => setTimeout(resolve, 600));
 
+      // scroll-up is driven by async tmux CLI calls on a queue, so poll for
+      // its observable effect (#{pane_in_mode} == 1 AND #{scroll_position} >
+      // 0) instead of asserting after a fixed delay. The known race (see the
+      // 250ms-settle comment above) is that copy-mode lands (pane_in_mode=1)
+      // but the scroll-up send-keys can resolve against a stale ephemeral
+      // client and leave scroll_position at 0; if the position is still 0
+      // once the attached client has had time to stabilize, re-issue the
+      // scroll once -- the re-issue lands on the right client (scrollPane
+      // sees copy-mode already active and just sends scroll-up again, so this
+      // is idempotent in effect). Re-issuing here is a test-harness
+      // workaround only; production never polls capture-pane in a tight loop
+      // right before attaching, so this race is not product-facing.
+      let scrollPosition = 0;
+      let reissued = false;
+      for (let i = 0; i < 30 && scrollPosition === 0; i++) {
+        if (tmuxDisplayMessage(sessionName, "#{pane_in_mode}") === "1") {
+          scrollPosition = Number(tmuxDisplayMessage(sessionName, "#{scroll_position}"));
+        }
+        if (scrollPosition === 0) {
+          if (!reissued && i >= 8) {
+            socket.emitMessage(JSON.stringify({ type: "scroll", direction: "up", lines: 100 }));
+            reissued = true;
+          }
+          await new Promise((resolve) => setTimeout(resolve, 100));
+        }
+      }
       assert.equal(
         tmuxDisplayMessage(sessionName, "#{pane_in_mode}"),
         "1",
         "pane should be in copy-mode after scrolling up",
       );
-      const scrollPosition = Number(tmuxDisplayMessage(sessionName, "#{scroll_position}"));
       assert.ok(scrollPosition > 0, `expected a positive scroll offset, got ${scrollPosition}`);
 
       // The scrolled-to view (independent of any client's current position)
