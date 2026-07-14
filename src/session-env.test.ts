@@ -29,8 +29,7 @@ const AVAILABLE_CONFIG: EnvConfig = {
   composeFile: `${WORKTREE_PATH}/.tmux-web-env/docker-compose.yml`,
   preRunScript: null,
   postRunScript: null,
-  openService: "web",
-  openPort: 3000,
+  openLinks: [{ label: "Open", service: "web", port: 3000 }],
 };
 
 function makeDeps(overrides: Partial<SessionEnvDeps> = {}): SessionEnvDeps {
@@ -108,7 +107,7 @@ test("getSessionEnvStatus reports 'stopping' while teardown is still in flight",
   await stopPromise;
 });
 
-test("getSessionEnvStatus derives 'running' + openUrl live from docker, without needing a prior start()", async () => {
+test("getSessionEnvStatus derives 'running' + openLinks live from docker, without needing a prior start()", async () => {
   const services: ComposeServiceStatus[] = [{ service: "web", state: "running" }];
   const deps = makeDeps({
     composePs: async () => services,
@@ -119,11 +118,11 @@ test("getSessionEnvStatus derives 'running' + openUrl live from docker, without 
   const status = await getSessionEnvStatus(PROJECT, "feature-x", deps, store);
 
   assert.equal(status.phase, "running");
-  assert.equal(status.openUrl, "http://localhost:54321");
+  assert.deepEqual(status.openLinks, [{ label: "Open", url: "http://localhost:54321" }]);
   assert.deepEqual(status.services, services);
 });
 
-test("getSessionEnvStatus builds openUrl from the given requestHost instead of hardcoded localhost", async () => {
+test("getSessionEnvStatus builds openLinks urls from the given requestHost instead of hardcoded localhost", async () => {
   const services: ComposeServiceStatus[] = [{ service: "web", state: "running" }];
   const deps = makeDeps({
     composePs: async () => services,
@@ -133,7 +132,7 @@ test("getSessionEnvStatus builds openUrl from the given requestHost instead of h
 
   const status = await getSessionEnvStatus(PROJECT, "feature-x", deps, store, "10.8.0.2");
 
-  assert.equal(status.openUrl, "http://10.8.0.2:54321");
+  assert.deepEqual(status.openLinks, [{ label: "Open", url: "http://10.8.0.2:54321" }]);
 });
 
 test("getSessionEnvStatus falls back to deps.openHost, then localhost, when no requestHost is given", async () => {
@@ -147,7 +146,71 @@ test("getSessionEnvStatus falls back to deps.openHost, then localhost, when no r
 
   const status = await getSessionEnvStatus(PROJECT, "feature-x", deps, store);
 
-  assert.equal(status.openUrl, "http://192.168.1.50:54321");
+  assert.deepEqual(status.openLinks, [{ label: "Open", url: "http://192.168.1.50:54321" }]);
+});
+
+test("getSessionEnvStatus resolves multiple openLinks independently, omitting entries whose service hasn't published a port yet", async () => {
+  const services: ComposeServiceStatus[] = [
+    { service: "web", state: "running" },
+    { service: "dbeaver", state: "starting" },
+  ];
+  const config: EnvConfig = {
+    ...AVAILABLE_CONFIG,
+    openLinks: [
+      { label: "Frontend", service: "web", port: 3000 },
+      { label: "DBeaver", service: "dbeaver", port: 8978 },
+    ],
+  };
+  const deps = makeDeps({
+    loadEnvConfig: async () => config,
+    composePs: async () => services,
+    // dbeaver hasn't published its port yet (container still starting)
+    composePort: async (_ctx, service, port) => (service === "web" && port === 3000 ? 54321 : null),
+  });
+  const store = createSessionEnvStore();
+
+  const status = await getSessionEnvStatus(PROJECT, "feature-x", deps, store);
+
+  assert.deepEqual(status.openLinks, [{ label: "Frontend", url: "http://localhost:54321" }]);
+});
+
+test("getSessionEnvStatus resolves every configured openLinks entry once all services have published their ports", async () => {
+  const services: ComposeServiceStatus[] = [
+    { service: "web", state: "running" },
+    { service: "dbeaver", state: "running" },
+  ];
+  const config: EnvConfig = {
+    ...AVAILABLE_CONFIG,
+    openLinks: [
+      { label: "Frontend", service: "web", port: 3000 },
+      { label: "DBeaver", service: "dbeaver", port: 8978 },
+    ],
+  };
+  const ports: Record<string, number> = { web: 54321, dbeaver: 32831 };
+  const deps = makeDeps({
+    loadEnvConfig: async () => config,
+    composePs: async () => services,
+    composePort: async (_ctx, service) => ports[service] ?? null,
+  });
+  const store = createSessionEnvStore();
+
+  const status = await getSessionEnvStatus(PROJECT, "feature-x", deps, store);
+
+  assert.deepEqual(status.openLinks, [
+    { label: "Frontend", url: "http://localhost:54321" },
+    { label: "DBeaver", url: "http://localhost:32831" },
+  ]);
+});
+
+test("getSessionEnvStatus reports no openLinks when the config declares none", async () => {
+  const services: ComposeServiceStatus[] = [{ service: "web", state: "running" }];
+  const config: EnvConfig = { ...AVAILABLE_CONFIG, openLinks: [] };
+  const deps = makeDeps({ loadEnvConfig: async () => config, composePs: async () => services });
+  const store = createSessionEnvStore();
+
+  const status = await getSessionEnvStatus(PROJECT, "feature-x", deps, store);
+
+  assert.equal(status.openLinks, undefined);
 });
 
 test("startSessionEnv throws EnvUnavailableError when the project hasn't opted in", async () => {
@@ -265,7 +328,7 @@ test("startSessionEnv runs pre-run -> compose up -> post-run, then status report
   assert.deepEqual(calls, [`run:${config.preRunScript}`, "up", `run:${config.postRunScript}`]);
   const status = await getSessionEnvStatus(PROJECT, "feature-x", deps, store);
   assert.equal(status.phase, "running");
-  assert.equal(status.openUrl, "http://localhost:54321");
+  assert.deepEqual(status.openLinks, [{ label: "Open", url: "http://localhost:54321" }]);
 });
 
 test("startSessionEnv aborts before compose up when pre-run fails", async () => {
@@ -330,7 +393,7 @@ test("startSessionEnv reports 'error' with services+openUrl still visible when o
   assert.equal(status.phase, "error");
   assert.match(status.message ?? "", /migration failed/);
   assert.deepEqual(status.services, [{ service: "web", state: "running" }]);
-  assert.equal(status.openUrl, "http://localhost:54321");
+  assert.deepEqual(status.openLinks, [{ label: "Open", url: "http://localhost:54321" }]);
 });
 
 test("stopSessionEnv throws EnvNotRunningError when nothing is running", async () => {

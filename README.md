@@ -74,8 +74,11 @@ system rather than adding a client library.
   *that session alone* (its own containers, network, and volumes — a
   second session never shares them), then an optional `post-run.sh`. Once
   containers are up, tmux-web resolves the ephemeral host port docker
-  published for a configured service and shows an **Open ↗** link. A
-  **Logs** button also appears, streaming `docker compose logs -f` for
+  published for each configured service and shows an **Open ↗** link per
+  service — handy when a session runs more than one thing you want to open
+  (e.g. the frontend *and* a database UI like DBeaver's web client for
+  checking the data it just wrote). A **Logs** button also appears,
+  streaming `docker compose logs -f` for
   every container in that session's environment into a single dashboard —
   no more switching terminals to tail one container at a time. See
   [Per-session environments](#per-session-environments-docker-compose)
@@ -277,10 +280,32 @@ versioned like everything else, and can differ per branch):
 .tmux-web-env/
   docker-compose.yml   required -- its presence is what makes the
                         "Setup Environment" button appear at all
-  env.json              optional -- { "openService": "web", "openPort": 3000 }
+  env.json              optional -- { "open": [{ "label": "Frontend", "service": "web", "port": 3000 }] }
   pre-run.sh             optional -- runs before `docker compose up`
   post-run.sh             optional -- runs after `docker compose up`
 ```
+
+`env.json`'s `open` array lists every service you want an **Open ↗** link
+for — not just the main app. Each entry is `{ "label"?, "service", "port" }`
+(`label` defaults to the service name). This is the escape hatch for
+sessions that run more than one browser-facing thing, e.g. a frontend plus
+a database UI for checking the data that frontend just wrote:
+
+```json
+{
+  "open": [
+    { "label": "Frontend", "service": "web", "port": 3000 },
+    { "label": "DBeaver", "service": "dbeaver", "port": 8978 }
+  ]
+}
+```
+
+Each entry resolves independently: a service that isn't up yet (or doesn't
+publish that port) just doesn't show a link yet, without blocking the
+others from appearing. The older single-service shape,
+`{ "openService": "web", "openPort": 3000 }`, still works as a shorthand
+for a one-entry `open` array (labeled "Open") -- if both `open` and
+`openService`/`openPort` are present in the same file, `open` wins.
 
 Clicking **Setup Environment** on a session:
 
@@ -295,9 +320,11 @@ Clicking **Setup Environment** on a session:
    project.
 3. Runs `post-run.sh` (if present) -- e.g. to run migrations or seed data
    once the database container is reachable.
-4. If `env.json` names an `openService`/`openPort`, resolves the ephemeral
-   host port docker published for it (`docker compose port <service>
-   <port>`) and shows an **Open ↗** link to `http://<host>:<port>`.
+4. For each entry in `env.json`'s `open` array, resolves the ephemeral host
+   port docker published for it (`docker compose port <service> <port>`)
+   and shows an **Open ↗** link to `http://<host>:<port>`, labeled per
+   entry. A service whose port isn't published yet just doesn't get a link
+   until it is -- checked again on the next status poll.
 
 Status (`idle` / `starting` / `running` / `error` / `stopping`) is polled
 every 3s and is always re-derived from a live `docker compose ps` rather
