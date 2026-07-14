@@ -46,23 +46,23 @@ struct SessionListView: View {
                 sessions.append(session)
             }
         }
-        .alert("Gagal", isPresented: .constant(errorMessage != nil), presenting: errorMessage) { _ in
+        .alert("Failed", isPresented: .constant(errorMessage != nil), presenting: errorMessage) { _ in
             Button("OK") { errorMessage = nil }
         } message: { message in
             Text(message)
         }
         .alert(
-            "Ada perubahan belum di-commit",
+            "Uncommitted Changes",
             isPresented: .init(
                 get: { pendingForceDelete != nil },
                 set: { if !$0 { pendingForceDelete = nil } }
             ),
             presenting: pendingForceDelete
         ) { pending in
-            Button("Hapus Paksa (buang perubahan)", role: .destructive) {
+            Button("Force Delete (discard changes)", role: .destructive) {
                 Task { await forceDelete(pending.session) }
             }
-            Button("Batal", role: .cancel) {}
+            Button("Cancel", role: .cancel) {}
         } message: { pending in
             Text(pending.message)
         }
@@ -72,7 +72,7 @@ struct SessionListView: View {
             if isLoading && sessions.isEmpty {
                 ProgressView()
             } else if sessions.isEmpty {
-                ContentUnavailableView("Belum ada session", systemImage: "terminal", description: Text("Buat session baru lewat tombol +"))
+                ContentUnavailableView("No sessions yet", systemImage: "terminal", description: Text("Create a new session using the + button"))
             }
         }
     }

@@ -20,9 +20,9 @@ struct ConnectionSettingsView: View {
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
                 } header: {
-                    Text("Server tmux-web")
+                    Text("tmux-web Server")
                 } footer: {
-                    Text("Server ini hanya bisa dicapai lewat VPN Anda (WireGuard/Tailscale/dll) -- lihat README utama tmux-web untuk model keamanannya.")
+                    Text("This server is only reachable over your VPN (WireGuard/Tailscale/etc.) -- see the main tmux-web README for the security model.")
                 }
 
                 if let errorMessage {
@@ -39,7 +39,7 @@ struct ConnectionSettingsView: View {
                         if isTesting {
                             ProgressView()
                         } else {
-                            Text("Hubungkan")
+                            Text("Connect")
                         }
                     }
                     .disabled(isTesting || serverURLText.isEmpty || token.isEmpty)
@@ -52,7 +52,7 @@ struct ConnectionSettingsView: View {
     private func testAndSave() async {
         errorMessage = nil
         guard let url = URL(string: serverURLText), url.scheme != nil, url.host != nil else {
-            errorMessage = "URL server tidak valid."
+            errorMessage = "Invalid server URL."
             return
         }
 

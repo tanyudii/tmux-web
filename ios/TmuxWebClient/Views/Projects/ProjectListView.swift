@@ -41,7 +41,7 @@ struct ProjectListView: View {
                 }
             }
             ToolbarItem(placement: .cancellationAction) {
-                Button("Ganti Server") { settingsStore.clear() }
+                Button("Switch Server") { settingsStore.clear() }
             }
         }
         .sheet(isPresented: $isShowingNewProjectSheet) {
@@ -49,23 +49,23 @@ struct ProjectListView: View {
                 projects.append(project)
             }
         }
-        .alert("Gagal", isPresented: .constant(errorMessage != nil), presenting: errorMessage) { _ in
+        .alert("Failed", isPresented: .constant(errorMessage != nil), presenting: errorMessage) { _ in
             Button("OK") { errorMessage = nil }
         } message: { message in
             Text(message)
         }
         .alert(
-            "Hapus project?",
+            "Delete project?",
             isPresented: .init(
                 get: { pendingForceDelete != nil },
                 set: { if !$0 { pendingForceDelete = nil } }
             ),
             presenting: pendingForceDelete
         ) { pending in
-            Button("Hapus Paksa", role: .destructive) {
+            Button("Force Delete", role: .destructive) {
                 Task { await forceDelete(pending.project) }
             }
-            Button("Batal", role: .cancel) {}
+            Button("Cancel", role: .cancel) {}
         } message: { pending in
             Text(pending.message)
         }
@@ -75,7 +75,7 @@ struct ProjectListView: View {
             if isLoading && projects.isEmpty {
                 ProgressView()
             } else if projects.isEmpty {
-                ContentUnavailableView("Belum ada project", systemImage: "folder", description: Text("Tambahkan project lewat tombol +"))
+                ContentUnavailableView("No projects yet", systemImage: "folder", description: Text("Add a project using the + button"))
             }
         }
     }

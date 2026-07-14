@@ -13,7 +13,7 @@ struct NewSessionSheet: View {
     var body: some View {
         NavigationStack {
             Form {
-                TextField("Nama session (jadi nama branch git)", text: $name)
+                TextField("Session name (becomes the git branch name)", text: $name)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
 
@@ -21,13 +21,13 @@ struct NewSessionSheet: View {
                     Text(errorMessage).foregroundStyle(.red)
                 }
             }
-            .navigationTitle("Session Baru")
+            .navigationTitle("New Session")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Batal") { dismiss() }
+                    Button("Cancel") { dismiss() }
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Buat") {
+                    Button("Create") {
                         Task { await save() }
                     }
                     .disabled(name.isEmpty || isSaving)
