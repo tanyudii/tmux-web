@@ -14,6 +14,7 @@ struct EnvironmentBar: View {
     let sessionName: String
 
     @State private var status: EnvStatus?
+    @State private var pollFailureCount = 0
     @State private var isBusy = false
     @State private var errorMessage: String?
     @State private var isShowingStopConfirm = false
@@ -98,12 +99,22 @@ struct EnvironmentBar: View {
         .background(.thinMaterial)
     }
 
+    // A single failed poll is usually just a transient hiccup (e.g. the
+    // server restarting after a deploy) -- only stop trusting the
+    // last-rendered status after several consecutive failures, so the bar
+    // doesn't flicker on every blip but also doesn't freeze on stale data
+    // forever if the server stays unreachable.
+    private static let pollFailureThreshold = 3
+
     private func refresh() async {
         do {
             status = try await client.envStatus(projectId: projectId, sessionName: sessionName)
+            pollFailureCount = 0
         } catch {
-            // Silent on poll -- avoid popping an alert every 3s on a
-            // transient hiccup; the badge just keeps its last known state.
+            pollFailureCount += 1
+            if pollFailureCount >= Self.pollFailureThreshold {
+                status = nil
+            }
         }
     }
 
