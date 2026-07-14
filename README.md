@@ -44,6 +44,17 @@ system rather than adding a client library.
   exactly like a tmux detach (`Ctrl-b d`): nothing inside the session
   dies. Restarting this Node process doesn't touch tmux either — reopen
   the browser and reattach.
+- **Mouse-wheel scroll works out of the box, independent of your
+  `tmux.conf`.** tmux repaints its pane via cursor positioning rather than
+  emitting new lines, so a browser terminal's own native scrollback is
+  mostly useless for a tmux session — the real scrollback lives inside
+  tmux's own copy-mode. Scrolling over the terminal sends a small `scroll`
+  message over the existing WebSocket, and the server drives that
+  copy-mode directly via the `tmux` CLI (`copy-mode` + `send-keys -X
+  scroll-up`/`scroll-down`) — the same "shell out to `tmux`" approach used
+  everywhere else in this tool. This works whether or not you have `set -g
+  mouse on` yourself; typing again automatically cancels copy-mode and
+  hands the keystroke back to the shell.
 - **Uncommitted changes are protected.** If a worktree has uncommitted
   changes, killing its session is refused (409) until you explicitly
   confirm force-delete in the UI — this tool never silently discards
