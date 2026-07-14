@@ -152,23 +152,35 @@ accordingly:
   Everything else works fine without Docker installed at all.
 - **For a global install from the private repo**: SSH access to
   `git@github.com:tanyudii/tmux-web` on the server (a deploy key with
-  read-only access works well) — `npm install -g github:...` shells out to
-  `git` under the hood and needs this to clone a private repo.
+  read-only access works well) — both the bootstrap clone below and
+  `tmuxweb upgrade` use `git clone`/`git fetch` over SSH directly.
 
 ## Installation (global CLI, production)
 
-Install a specific release tag — recommended for servers, since it pins
-exactly what's running:
+`npm install -g github:tanyudii/tmux-web#<tag>` does **not** work on Node 22
+for this package, and never will — don't reintroduce it. Two independent
+reasons: (1) npm/pacote tries an HTTPS tarball shortcut via
+`codeload.github.com` before falling back to git, which 404s for a private
+repo and doesn't fall back correctly; (2) even when a global npm install
+*does* land the package under `node_modules`, Node 22 refuses to
+type-strip any `.ts` file that lives inside a directory literally named
+`node_modules` (`ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING`, no override
+flag) — and this package ships raw `.ts`, by design (see above). So instead,
+install by cloning tmux-web's own code to a fixed location *outside*
+`node_modules`, then linking it:
 
 ```bash
-npm install -g github:tanyudii/tmux-web#v1.0.0
+git clone --branch v1.0.2 --depth 1 git@github.com:tanyudii/tmux-web.git ~/.local/share/tmux-web
+cd ~/.local/share/tmux-web
+npm ci --omit=dev
+npm link
 ```
 
-Or track whatever's on the default branch:
-
-```bash
-npm install -g github:tanyudii/tmux-web
-```
+`~/.local/share/tmux-web` (the XDG convention for installed application
+code) is deliberately separate from `~/.tmux-web`, which holds runtime data
+only — token, port, host, projects, worktrees (see "Data directory" below).
+This is the same clone-and-install shape as **Local development** below,
+minus dev dependencies and plus the global `npm link`.
 
 Either way this puts a `tmuxweb` binary on your `PATH`. Then:
 
@@ -202,12 +214,18 @@ afterward so the running process picks it up.
 ### Upgrading
 
 ```bash
-tmuxweb upgrade                 # resolves and installs the latest tag
-tmuxweb upgrade --tag v1.2.0    # pin to a specific tag
+tmuxweb upgrade                          # resolves and installs the latest tag
+tmuxweb upgrade --tag v1.2.0             # pin to a specific tag
+tmuxweb upgrade --app-dir /other/path    # if you installed somewhere other than ~/.local/share/tmux-web
 ```
 
-Re-runs the same `npm install -g` from above against the resolved tag, then
-restarts the systemd service automatically if it was already running.
+Internally this is the same clone-or-update + `npm ci --omit=dev` +
+`npm link` flow described above, run again against the resolved tag. If
+`~/.local/share/tmux-web` is already a clone of this repo, it fetches the
+target tag and checks it out in place; if it's missing (or looks like
+leftover junk from an interrupted install), it clones fresh — `tmuxweb
+upgrade` is self-healing either way. It finishes by restarting the systemd
+service automatically if it was already running.
 
 ## Local development
 
@@ -217,11 +235,14 @@ cd tmux-web
 npm install                 # also copies xterm.js into public/vendor/
 npm run init                 # creates ~/.tmux-web/config.json with a generated token
 
-npm test                    # includes real-tmux and real-git integration tests
+npm test                    # includes real-tmux, real-git and real-npm integration tests
 npm run typecheck
 
 npm run dev                 # watch mode, or `npm start` for a plain foreground run
 ```
+
+Same underlying shape as the production install above (`git clone` +
+`npm install`), minus `--omit=dev` and `npm link`.
 
 Open `http://<host>:<port>` (`http://127.0.0.1:5309` by default — see
 `~/.tmux-web/config.json`), paste the token, click **+ Add project** and
