@@ -358,6 +358,10 @@ button:disabled {
 .env-action-danger {
   background: var(--danger);
 }
+.env-open-links {
+  display: inline-flex;
+  gap: 0.4rem;
+}
 
 /* --- Logs modal (docker compose logs -f, all/selected services) --- */
 .modal-overlay {

@@ -685,7 +685,7 @@ test("GET /api/projects/:id/sessions/:name/env without a token returns 401", asy
 });
 
 test("GET /api/projects/:id/sessions/:name/env returns the current status", async () => {
-  const status: EnvStatus = { phase: "running", openUrl: "http://localhost:54321" };
+  const status: EnvStatus = { phase: "running", openLinks: [{ label: "Open", url: "http://localhost:54321" }] };
   const deps = makeDeps({ getProjectSessionEnvStatus: async () => status });
   await withServer(deps, async (baseUrl) => {
     const res = await fetch(`${baseUrl}/api/projects/${SAMPLE_PROJECT.id}/sessions/feature-x/env`, {
@@ -703,7 +703,7 @@ test("GET /api/projects/:id/sessions/:name/env passes the request's own Host hea
   // incoming request is the one signal that tells us which address the
   // browser is CURRENTLY using, so it must be threaded through untouched.
   let capturedHost: string | undefined;
-  const status: EnvStatus = { phase: "running", openUrl: "http://10.8.0.2:54321" };
+  const status: EnvStatus = { phase: "running", openLinks: [{ label: "Open", url: "http://10.8.0.2:54321" }] };
   const deps = makeDeps({
     getProjectSessionEnvStatus: async (_project: Project, _slug: string, requestHost?: string) => {
       capturedHost = requestHost;
