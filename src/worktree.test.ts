@@ -86,7 +86,7 @@ test("addWorktree prunes, resolves origin's default branch, fetches it, then add
     return { stdout: "" };
   };
 
-  await addWorktree("/repo", "/repo-worktrees/proj1/feature-x", "feature-x", fakeExec);
+  await addWorktree("/repo", "/repo-worktrees/proj1/feature-x", "feature-x", undefined, fakeExec);
 
   assert.deepEqual(calls[0], ["-C", "/repo", "worktree", "prune"]);
   assert.deepEqual(calls[1], ["-C", "/repo", "ls-remote", "--symref", "origin", "HEAD"]);
@@ -107,7 +107,7 @@ test("addWorktree throws WorktreeError when it cannot resolve origin's default b
   };
 
   await assert.rejects(
-    () => addWorktree("/repo", "/repo-worktrees/proj1/feature-x", "feature-x", fakeExec),
+    () => addWorktree("/repo", "/repo-worktrees/proj1/feature-x", "feature-x", undefined, fakeExec),
     WorktreeError,
   );
 });
@@ -120,7 +120,7 @@ test("addWorktree throws WorktreeError when fetching origin's default branch fai
   };
 
   await assert.rejects(
-    () => addWorktree("/repo", "/repo-worktrees/proj1/feature-x", "feature-x", fakeExec),
+    () => addWorktree("/repo", "/repo-worktrees/proj1/feature-x", "feature-x", undefined, fakeExec),
     WorktreeError,
   );
 });
@@ -137,7 +137,7 @@ test("addWorktree throws WorktreeError for a worktree-add failure that isn't a b
   };
 
   await assert.rejects(
-    () => addWorktree("/repo", "/repo-worktrees/proj1/feature-x", "feature-x", fakeExec),
+    () => addWorktree("/repo", "/repo-worktrees/proj1/feature-x", "feature-x", undefined, fakeExec),
     (error: unknown) => error instanceof WorktreeError && !(error instanceof WorktreeConflictError),
   );
 });
@@ -154,9 +154,28 @@ test("addWorktree throws WorktreeConflictError when the branch already exists", 
   };
 
   await assert.rejects(
-    () => addWorktree("/repo", "/repo-worktrees/proj1/feature-x", "feature-x", fakeExec),
+    () => addWorktree("/repo", "/repo-worktrees/proj1/feature-x", "feature-x", undefined, fakeExec),
     WorktreeConflictError,
   );
+});
+
+test("addWorktree calls onProgress with each step's message in order", async () => {
+  const fakeExec = async (_file: string, args: string[]) => {
+    if (args.includes("ls-remote")) {
+      return { stdout: "ref: refs/heads/main\tHEAD\nabc123\tHEAD\n" };
+    }
+    return { stdout: "" };
+  };
+  const progressMessages: string[] = [];
+  const onProgress = (message: string) => progressMessages.push(message);
+
+  await addWorktree("/repo", "/repo-worktrees/proj1/feature-x", "feature-x", onProgress, fakeExec);
+
+  assert.equal(progressMessages.length, 4);
+  assert.equal(progressMessages[0], "Pruning stale worktrees…");
+  assert.equal(progressMessages[1], "Resolving default branch from origin…");
+  assert.match(progressMessages[2], /Fetching origin\/main/);
+  assert.equal(progressMessages[3], "Creating worktree…");
 });
 
 test("removeWorktree throws DirtyWorktreeError without --force when the worktree has uncommitted changes", async () => {
