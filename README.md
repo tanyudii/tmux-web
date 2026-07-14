@@ -1,5 +1,7 @@
 # tmux-web
 
+[![CI](https://github.com/tanyudii/tmux-web/actions/workflows/ci.yml/badge.svg)](https://github.com/tanyudii/tmux-web/actions/workflows/ci.yml)
+
 A small, self-hosted browser GUI for working across projects and tmux
 sessions. No cloud account, no relay, no external dependency of any kind —
 just your server, git, tmux, and a browser.
