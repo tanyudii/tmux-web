@@ -1,0 +1,72 @@
+name: KMP CI
+
+on:
+  push:
+    branches: [main]
+    paths: ["kmp/**", ".github/workflows/kmp-ci.yml"]
+  pull_request:
+    branches: [main]
+    paths: ["kmp/**", ".github/workflows/kmp-ci.yml"]
+
+defaults:
+  run:
+    working-directory: kmp
+
+jobs:
+  # Everything buildable without Xcode: commonMain/wasmJsMain compile + test,
+  # static analysis. Runs on a plain Linux runner.
+  web-and-common:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Detekt
+        run: ./gradlew detekt
+
+      # ubuntu-latest ships a system Chrome; CHROME_BIN + the no-sandbox Karma
+      # launcher in composeApp/karma.config.d/ make it usable in this sandboxed runner.
+      - name: Common + Web (wasmJs) tests
+        env:
+          CHROME_BIN: /usr/bin/google-chrome
+        run: ./gradlew :composeApp:wasmJsTest
+
+      - name: Web production bundle
+        run: ./gradlew :composeApp:wasmJsBrowserDistribution
+
+      - name: Coverage report
+        run: ./gradlew koverHtmlReport koverVerify
+
+  # iOS build+test — requires Xcode, so this is the only verification path for
+  # the iOS target while local development happens on Linux (see ADR 0001).
+  ios:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: iOS (simulator) unit tests
+        run: ./gradlew :composeApp:iosSimulatorArm64Test
+
+      - name: Generate Xcode project
+        run: |
+          brew install xcodegen
+          cd iosApp && xcodegen generate
+
+      - name: Build iosApp for simulator
+        run: |
+          cd iosApp
+          xcodebuild -project iosApp.xcodeproj -scheme iosApp \
+            -destination "generic/platform=iOS Simulator" build

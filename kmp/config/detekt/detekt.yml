@@ -1,0 +1,23 @@
+naming:
+  FunctionNaming:
+    active: true
+    # @Composable functions are conventionally PascalCase (they read as
+    # components, not verbs) — this is the Compose team's own convention,
+    # not a style violation.
+    ignoreAnnotated: ["Composable"]
+  MatchingDeclarationName:
+    # KMP's own convention for expect/actual pairs is `Foo.ios.kt`/
+    # `Foo.wasmJs.kt` (platform-suffixed filenames for an `actual class Foo`)
+    # — this recurs throughout the project and the rule has no built-in way
+    # to recognize that suffix as still "matching."
+    active: false
+
+style:
+  ReturnCount:
+    active: true
+    # Early-return guard clauses for field-by-field validation (e.g. parsing
+    # untrusted JSON) are this project's preferred style over nested ifs —
+    # see the user's global coding-style.md ("prefer early returns over
+    # nested conditionals"). Counting each guard clause against a low fixed
+    # limit fights that style rather than enforcing it.
+    excludeGuardClauses: true
