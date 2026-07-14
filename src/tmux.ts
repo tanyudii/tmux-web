@@ -80,3 +80,59 @@ export async function killSession(name: string, exec: ExecFn = defaultExec): Pro
   }
   await exec("tmux", ["kill-session", "-t", name]);
 }
+
+export type ScrollDirection = "up" | "down";
+
+// Whether the session's active pane is currently in a tmux "mode" (copy-mode
+// being the one this app cares about). Re-entering copy-mode while already
+// in it resets the scroll position back to the bottom, so callers must check
+// this before deciding whether to send the `copy-mode` command.
+export async function getPaneMode(name: string, exec: ExecFn = defaultExec): Promise<boolean> {
+  if (!isValidSessionName(name)) {
+    throw new ValidationError(`Invalid session name: ${name}`);
+  }
+  const { stdout } = await exec("tmux", ["display-message", "-p", "-t", name, "#{pane_in_mode}"]);
+  return stdout.trim() === "1";
+}
+
+// Drives tmux's own copy-mode scrollback rather than relying on the user's
+// tmux.conf having `set -g mouse on` -- see README for why this app owns
+// scroll instead of delegating to xterm.js's native (and largely useless,
+// since tmux repaints via cursor positioning rather than newlines)
+// scrollback. Scrolling up enters copy-mode on demand; scrolling down only
+// acts while already in copy-mode (there's nothing to scroll down to
+// otherwise -- the pane is already live).
+export async function scrollPane(
+  name: string,
+  direction: ScrollDirection,
+  lines: number,
+  exec: ExecFn = defaultExec,
+): Promise<void> {
+  if (!isValidSessionName(name)) {
+    throw new ValidationError(`Invalid session name: ${name}`);
+  }
+
+  const inMode = await getPaneMode(name, exec);
+
+  if (direction === "up") {
+    if (!inMode) await exec("tmux", ["copy-mode", "-t", name]);
+    await exec("tmux", ["send-keys", "-X", "-t", name, "-N", String(lines), "scroll-up"]);
+    return;
+  }
+
+  if (!inMode) return;
+  await exec("tmux", ["send-keys", "-X", "-t", name, "-N", String(lines), "scroll-down"]);
+}
+
+// Exits copy-mode, snapping the pane back to live output. Called when the
+// user resumes typing after scrolling, so keystrokes reach the shell instead
+// of being swallowed by copy-mode's own keytable.
+export async function cancelCopyMode(name: string, exec: ExecFn = defaultExec): Promise<void> {
+  if (!isValidSessionName(name)) {
+    throw new ValidationError(`Invalid session name: ${name}`);
+  }
+
+  const inMode = await getPaneMode(name, exec);
+  if (!inMode) return;
+  await exec("tmux", ["send-keys", "-X", "-t", name, "cancel"]);
+}
