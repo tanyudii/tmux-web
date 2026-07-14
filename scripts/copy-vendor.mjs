@@ -4,14 +4,12 @@
 // @xterm/* version package.json currently declares.
 //
 // public/vendor/ is committed to git (not generated-and-gitignored) so a
-// package installed straight from a git tag (`npm install -g
-// github:...#tag`) already has correct vendor files without depending on
-// this script running. npm's git-dependency install clones the repo into a
-// throwaway temp dir and runs `npm install` there to fire this same
-// postinstall hook -- but that nested install doesn't reliably finish
-// populating node_modules first (a known-flaky corner of npm's git-install
-// handling), so this script must degrade gracefully instead of failing the
-// whole `npm install` when its source files aren't there yet.
+// tagged checkout already has correct vendor files without depending on
+// this script running -- cheap defense-in-depth against `npm ci
+// --ignore-scripts` or an install that's interrupted before postinstall
+// runs. This script still degrades gracefully (warns and exits 0) instead
+// of failing the whole `npm install`/`npm ci` if node_modules isn't fully
+// populated yet when it runs.
 import { copyFileSync, existsSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
