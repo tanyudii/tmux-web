@@ -21,14 +21,14 @@ ExecStart=/usr/bin/env -S node --experimental-strip-types /path/to/tmuxweb/bin/t
 Restart=on-failure
 RestartSec=2
 
-# Defense in depth: filesystem access is scoped to this service, and the
-# service still runs as the systemd --user account (not root). /tmp must
-# stay writable because that's where tmux keeps its server socket
-# (/tmp/tmux-$UID/); without it the tmux server can't even start. Config
-# and project data live under %h/.tmux-web (JSON, not env vars).
+# ProtectSystem=strict was removed: as a systemd --user unit (non-root),
+# enforcing it requires an unprivileged user namespace where every UID
+# other than the service's own (including root) collapses to
+# nobody:nogroup. That broke ownership checks on root-owned files like
+# /etc/ssh/ssh_config.d/*.conf, causing "Bad owner or permissions" errors
+# for any ssh-based command (ssh, git over ssh, scp) run inside tmux
+# sessions spawned by this service.
 NoNewPrivileges=true
-ProtectSystem=strict
-ReadWritePaths=%h/.tmux-web /tmp
 
 [Install]
 WantedBy=default.target
