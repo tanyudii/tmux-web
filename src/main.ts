@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { createServer } from "./server.ts";
 import { readConfig, ConfigError, defaultConfigDir } from "./config.ts";
 import { resolveWebBuildDir } from "./web-build.ts";
-import { listSessions, createSession, killSession, isValidSessionName } from "./tmux.ts";
+import { listSessions, listWindows, createSession, killSession, isValidSessionName } from "./tmux.ts";
 import { extractQueryToken, verifyToken } from "./auth.ts";
 import { attachPtyToSocket, type SocketLike } from "./pty-bridge.ts";
 import {
@@ -92,6 +92,7 @@ export async function main(): Promise<void> {
 
   const projectSessionsDeps: ProjectSessionsDeps = {
     listSessions,
+    listWindows,
     createSession,
     killSession,
     addWorktree,
@@ -111,6 +112,8 @@ export async function main(): Promise<void> {
     );
   }
 
+  const browseRoot = process.env.TMUX_WEB_BROWSE_ROOT;
+
   const httpServer = createServer({
     token: config.token,
     publicDir: webBuildDir,
@@ -120,7 +123,12 @@ export async function main(): Promise<void> {
       registerProjectImpl(projectsFile, name, repoPath, { isGitRepo }),
     getProject: (id) => getProjectImpl(projectsFile, id),
     removeProject: (id) => removeProjectImpl(projectsFile, id),
-    browseDirectory: (path) => listDirectoryImpl(path, {}),
+    // Directory browser's default starting point is os.homedir() unless
+    // overridden -- useful when the service account's $HOME isn't where
+    // repos actually live (or, as here, when $HOME is repurposed for an
+    // isolated config dir, e.g. a throwaway dev/preview instance).
+    browseDirectory: (path) =>
+      listDirectoryImpl(path, browseRoot ? { homedir: () => browseRoot } : {}),
 
     listProjectSessions: (project) => listProjectSessionsImpl(project, projectSessionsDeps),
     startProjectSessionCreation: (project, name) =>

@@ -28,6 +28,7 @@ const PROJECT: Project = {
 function makeDeps(overrides: Partial<ProjectSessionsDeps> = {}): ProjectSessionsDeps {
   return {
     listSessions: async () => [],
+    listWindows: async () => [],
     createSession: async () => {},
     killSession: async () => {},
     addWorktree: async () => {},
@@ -57,14 +58,44 @@ test("listProjectSessions returns only sessions belonging to the project, with t
   const result = await listProjectSessions(PROJECT, deps);
 
   assert.deepEqual(result, [
-    { name: "feature-x", fullName: "proj1-ab12cd__feature-x", windows: 2, attached: true },
-    { name: "bugfix", fullName: "proj1-ab12cd__bugfix", windows: 1, attached: false },
+    { name: "feature-x", fullName: "proj1-ab12cd__feature-x", windows: 2, windowNames: [], attached: true },
+    { name: "bugfix", fullName: "proj1-ab12cd__bugfix", windows: 1, windowNames: [], attached: false },
   ]);
 });
 
 test("listProjectSessions returns an empty array when nothing belongs to the project", async () => {
   const deps = makeDeps({ listSessions: async () => [{ name: "other__x", windows: 1, attached: false }] });
   assert.deepEqual(await listProjectSessions(PROJECT, deps), []);
+});
+
+test("listProjectSessions fills in each session's real per-window tmux names, ordered by index", async () => {
+  const deps = makeDeps({
+    listSessions: async () => [{ name: "proj1-ab12cd__feature-x", windows: 2, attached: true }],
+    listWindows: async (fullName) => {
+      assert.equal(fullName, "proj1-ab12cd__feature-x");
+      return [
+        { index: 0, name: "editor" },
+        { index: 1, name: "server" },
+      ];
+    },
+  });
+
+  const result = await listProjectSessions(PROJECT, deps);
+
+  assert.deepEqual(result[0].windowNames, ["editor", "server"]);
+});
+
+test("listProjectSessions omits windowNames for a session whose window list can't be fetched", async () => {
+  const deps = makeDeps({
+    listSessions: async () => [{ name: "proj1-ab12cd__feature-x", windows: 1, attached: true }],
+    listWindows: async () => {
+      throw new Error("can't find session");
+    },
+  });
+
+  const result = await listProjectSessions(PROJECT, deps);
+
+  assert.equal(result[0].windowNames, undefined);
 });
 
 test("createProjectSession slugifies the name, creates the worktree, then the tmux session with cwd set", async () => {
