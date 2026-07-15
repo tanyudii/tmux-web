@@ -2,6 +2,7 @@ package com.tanyudii.tmuxweb.presentation
 
 import com.tanyudii.tmuxweb.domain.FileTreeNode
 import com.tanyudii.tmuxweb.domain.buildFileTree
+import com.tanyudii.tmuxweb.domain.model.ChangedFile
 import com.tanyudii.tmuxweb.domain.model.DiffMode
 import com.tanyudii.tmuxweb.domain.model.GroupedChanges
 
@@ -16,10 +17,12 @@ sealed interface ChangeRow {
     data class Node(val node: FileTreeNode, val mode: DiffMode, val depth: Int, override val key: String) : ChangeRow
 }
 
+private class ChangeSection(val label: String, val mode: DiffMode, val filesOf: (GroupedChanges) -> List<ChangedFile>)
+
 private val SECTIONS = listOf(
-    Triple("Staged", DiffMode.STAGED) { changes: GroupedChanges -> changes.staged },
-    Triple("Changes", DiffMode.UNSTAGED) { changes: GroupedChanges -> changes.unstaged },
-    Triple("Untracked", DiffMode.UNTRACKED) { changes: GroupedChanges -> changes.untracked },
+    ChangeSection("Staged", DiffMode.STAGED) { it.staged },
+    ChangeSection("Changes", DiffMode.UNSTAGED) { it.unstaged },
+    ChangeSection("Untracked", DiffMode.UNTRACKED) { it.untracked },
 )
 
 /**
@@ -35,11 +38,12 @@ private val SECTIONS = listOf(
  */
 fun buildChangeRows(changes: GroupedChanges?, collapsedKeys: Set<String>): List<ChangeRow> {
     if (changes == null) return emptyList()
-    return SECTIONS.flatMap { (label, mode, filesOf) ->
-        val files = filesOf(changes)
+    return SECTIONS.flatMap { section ->
+        val files = section.filesOf(changes)
         if (files.isEmpty()) return@flatMap emptyList()
+        val mode = section.mode
         val groupKey = groupKey(mode)
-        val header = ChangeRow.GroupHeader(mode = mode, label = label, count = files.size, key = groupKey)
+        val header = ChangeRow.GroupHeader(mode = mode, label = section.label, count = files.size, key = groupKey)
         if (groupKey in collapsedKeys) {
             listOf(header)
         } else {
