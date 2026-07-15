@@ -102,11 +102,13 @@ fun WebShellScreen(onSwitchServer: () -> Unit) {
                 railOpen = railOpen,
                 activeWindow = activeWindow,
                 onSelectWindow = { activeWindow = it },
+                onWindowsChanged = { state.selectedProjectId?.let(viewModel::refreshSessions) },
                 onToggleRail = { railOpen = !railOpen },
                 onNewSession = { state.selectedProjectId?.let(viewModel::showNewSessionDialog) },
                 onEnvironmentRun = { environmentState?.viewModel?.setup() },
                 onEnvironmentStop = { environmentState?.viewModel?.stop() },
                 modifier = Modifier.weight(1f),
+                isTerminalVisible = !state.hasOpenDialog,
             )
         }
     }
@@ -203,6 +205,8 @@ private fun NewProjectDialog(
 ) {
     var name by remember { mutableStateOf("") }
     var repoPath by remember { mutableStateOf("") }
+    var pickerOpen by remember { mutableStateOf(false) }
+
     CenterDialog(
         title = "New project",
         onCancel = onCancel,
@@ -213,19 +217,23 @@ private fun NewProjectDialog(
                 text = "Create project",
                 variant = TmuxButtonVariant.PRIMARY,
                 loading = isSaving,
-                enabled = name.isNotBlank(),
+                enabled = name.isNotBlank() && repoPath.isNotBlank(),
             )
         },
     ) {
         TmuxTextField(value = name, onValueChange = { name = it }, label = "Name", placeholder = "api-gateway")
-        TmuxTextField(
-            value = repoPath,
-            onValueChange = { repoPath = it },
-            label = "Repo path",
-            placeholder = "~/srv/api-gateway",
-            mono = true,
-        )
+        RepoPathField(repoPath = repoPath, onClick = { pickerOpen = true })
         errorMessage?.let { ErrorText(it) }
+    }
+
+    if (pickerOpen) {
+        RepoPathPicker(
+            onPicked = { path ->
+                repoPath = path
+                pickerOpen = false
+            },
+            onCancel = { pickerOpen = false },
+        )
     }
 }
 
