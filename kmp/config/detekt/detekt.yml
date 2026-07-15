@@ -12,6 +12,17 @@ naming:
     # to recognize that suffix as still "matching."
     active: false
 
+complexity:
+  TooManyFunctions:
+    active: true
+    # The architecture deliberately has no use-case layer (plan §3.2: "thin
+    # enough that a use-case indirection would just be ceremony (YAGNI)") —
+    # ViewModels own every mutation for their screen directly, so a
+    # CRUD-plus-create-plus-force-delete screen like ProjectListViewModel
+    # legitimately runs a bit past the generic 11-function default without
+    # that being a real cohesion smell.
+    thresholdInClasses: 15
+
 style:
   ReturnCount:
     active: true

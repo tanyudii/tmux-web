@@ -7,22 +7,28 @@ import ComposeApp
 // composeApp/src/iosMain/kotlin/.../terminal/TerminalViewFactory.kt for the
 // Kotlin side of this contract, and docs/adr/0001-ios-terminal-embedding.md).
 //
-// UNVERIFIED — written without a local Xcode toolchain (this dev environment is
-// Linux only; see .github/workflows/kmp-ci.yml's `ios` job for where this
-// actually gets compiled and checked for the first time). Things flagged below
-// with "VERIFY ON CI" are the specific spots most likely to need a one-line fix
-// once a real Kotlin/Native-generated Objective-C header exists to check against:
-// - Kotlin `interface Foo` is exported as an Obj-C `@protocol FooProtocol`, so
-//   Swift sees `FooProtocol`, not `Foo` — used correctly below, but the exact
-//   name depends on the ComposeApp.framework's generated header.
-// - Kotlin `Int` bridges to Swift `Int32`.
-final class TerminalViewWrapper: TerminalView, TerminalViewHandleProtocol, TerminalViewDelegate {
+// Verified against the real ComposeApp.framework generated header (Kotlin
+// 2.3.20 / Compose Multiplatform 1.11.1): the Kotlin interfaces carry an
+// explicit swift_name of `TerminalViewFactory`/`TerminalViewHandle` — no
+// `Protocol` suffix, unlike the default Kotlin/Native Obj-C export
+// convention assumed when this file was first written. `Int` does bridge to
+// `Int32` as expected (see `resize(cols:rows:)` below).
+final class TerminalViewWrapper: TerminalView, TerminalViewHandle, TerminalViewDelegate {
     private let onInputCallback: (String) -> Void
     private let onBellCallback: () -> Void
+    // Kotlin (Int, Int) -> Unit bridges to (KotlinInt, KotlinInt) -> Void in
+    // Swift closure position — boxed, unlike the plain Int32 a direct method
+    // parameter like resize(cols:rows:) above bridges to.
+    private let onResizeCallback: (KotlinInt, KotlinInt) -> Void
 
-    init(onInput: @escaping (String) -> Void, onBell: @escaping () -> Void) {
+    init(
+        onInput: @escaping (String) -> Void,
+        onBell: @escaping () -> Void,
+        onResize: @escaping (KotlinInt, KotlinInt) -> Void
+    ) {
         self.onInputCallback = onInput
         self.onBellCallback = onBell
+        self.onResizeCallback = onResize
         super.init(frame: .zero)
         self.terminalDelegate = self
     }
@@ -31,7 +37,7 @@ final class TerminalViewWrapper: TerminalView, TerminalViewHandleProtocol, Termi
         fatalError("init(coder:) has not been implemented")
     }
 
-    // MARK: TerminalViewHandleProtocol (Kotlin calls these to push PTY bytes)
+    // MARK: TerminalViewHandle (Kotlin calls these to push PTY bytes)
 
     func write(data: String) {
         let bytes = Array(data.utf8)
@@ -39,10 +45,10 @@ final class TerminalViewWrapper: TerminalView, TerminalViewHandleProtocol, Termi
     }
 
     func resize(cols: Int32, rows: Int32) {
-        // VERIFY ON CI: confirm SwiftTerm's exact resize entry point — likely
-        // `getTerminal().resize(cols:rows:)` followed by a layout pass, mirroring
-        // how TerminalSocket.swift's sizeChanged delegate callback currently
-        // triggers a resize in the existing (pre-KMP) iOS app.
+        // Confirmed against SwiftTerm 1.2.4's real API (resolved via
+        // xcodegen's SPM package): getTerminal().resize(cols:rows:) followed
+        // by a layout pass, mirroring TerminalSocket.swift's sizeChanged
+        // delegate callback in the existing (pre-KMP) iOS app.
         getTerminal().resize(cols: Int(cols), rows: Int(rows))
         setNeedsLayout()
     }
@@ -57,17 +63,27 @@ final class TerminalViewWrapper: TerminalView, TerminalViewHandleProtocol, Termi
         onBellCallback()
     }
 
-    // Required by TerminalViewDelegate — no-ops for this spike; real
-    // implementations (title updates, scroll-driven copy-mode, cwd tracking)
-    // land in Phase 4/5, not Phase 0.
+    func sizeChanged(source: TerminalView, newCols: Int, newRows: Int) {
+        onResizeCallback(KotlinInt(int: Int32(newCols)), KotlinInt(int: Int32(newRows)))
+    }
+
+    // Required by TerminalViewDelegate — no-ops; real implementations (title
+    // updates, scroll-driven copy-mode, cwd tracking, link opening) are out
+    // of this rebuild's scope (see plan §2.6 for the ones that were deliberate
+    // scope calls, not oversights).
     func scrolled(source: TerminalView, position: Double) {}
     func setTerminalTitle(source: TerminalView, title: String) {}
-    func sizeChanged(source: TerminalView, newCols: Int, newRows: Int) {}
     func hostCurrentDirectoryUpdate(source: TerminalView, directory: String?) {}
+    func requestOpenLink(source: TerminalView, link: String, params: [String: String]) {}
+    func rangeChanged(source: TerminalView, startY: Int, endY: Int) {}
 }
 
-final class SwiftTermViewFactory: NSObject, TerminalViewFactoryProtocol {
-    func createTerminalView(onInput: @escaping (String) -> Void, onBell: @escaping () -> Void) -> UIView {
-        TerminalViewWrapper(onInput: onInput, onBell: onBell)
+final class SwiftTermViewFactory: NSObject, TerminalViewFactory {
+    func createTerminalView(
+        onInput: @escaping (String) -> Void,
+        onBell: @escaping () -> Void,
+        onResize: @escaping (KotlinInt, KotlinInt) -> Void
+    ) -> UIView {
+        TerminalViewWrapper(onInput: onInput, onBell: onBell, onResize: onResize)
     }
 }

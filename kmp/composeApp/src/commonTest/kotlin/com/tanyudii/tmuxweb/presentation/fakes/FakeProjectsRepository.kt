@@ -7,6 +7,7 @@ class FakeProjectsRepository(initialProjects: List<Project> = emptyList()) : Pro
     val projects = initialProjects.toMutableList()
     var listError: Throwable? = null
     var deleteError: Throwable? = null
+    var createError: Throwable? = null
 
     override suspend fun listProjects(): List<Project> {
         listError?.let { throw it }
@@ -14,6 +15,7 @@ class FakeProjectsRepository(initialProjects: List<Project> = emptyList()) : Pro
     }
 
     override suspend fun createProject(name: String, repoPath: String): Project {
+        createError?.let { throw it }
         val project = Project(id = "new-${projects.size}", name = name, repoPath = repoPath, createdAt = "now")
         projects.add(project)
         return project

@@ -25,6 +25,10 @@ targets:
         UIApplicationSceneManifest:
           UIApplicationSupportsMultipleScenes: false
         UILaunchScreen: {}
+        # Required by Compose Multiplatform's PlistSanityCheck (runs at
+        # launch) — without it, ProMotion displays get throttled to 60Hz and
+        # CMP intentionally crashes in debug to force this to be set.
+        CADisableMinimumFrameDurationOnPhone: true
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
           - UIInterfaceOrientationLandscapeLeft
@@ -46,11 +50,6 @@ targets:
           cd "$SRCROOT/.."
           ./gradlew :composeApp:embedAndSignAppleFrameworkForXcode
         basedOnDependencyAnalysis: false
-    scheme:
-      testTargets: []
-      configVariants:
-        - Debug
-        - Release
 
 schemes:
   iosApp:

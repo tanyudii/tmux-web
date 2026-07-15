@@ -33,6 +33,13 @@ class ConnectionSettingsViewModelTest {
     }
 
     @Test
+    fun `isLoaded is true after init resolves`() = runTest {
+        val state = viewModel().state.value
+
+        assertTrue(state.isLoaded)
+    }
+
+    @Test
     fun `invalid server URL surfaces an error without calling the tester`() = runTest {
         var testerCalled = false
         val viewModel = viewModel(tester = ConnectionTester { _, _ -> testerCalled = true })
@@ -90,6 +97,7 @@ class ConnectionSettingsViewModelTest {
         assertEquals(1, store.clearCallCount)
         assertNull(viewModel.state.value.current)
         assertEquals("http://", viewModel.state.value.serverUrlText)
+        assertTrue(viewModel.state.value.isLoaded)
     }
 
     @Test

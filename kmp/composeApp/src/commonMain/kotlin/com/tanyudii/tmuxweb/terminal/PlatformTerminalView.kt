@@ -16,6 +16,7 @@ expect fun PlatformTerminalView(
     modifier: Modifier,
     onInput: (String) -> Unit,
     onBell: () -> Unit,
+    onResize: (cols: Int, rows: Int) -> Unit,
     handleReady: (PlatformTerminalHandle) -> Unit,
 )
 

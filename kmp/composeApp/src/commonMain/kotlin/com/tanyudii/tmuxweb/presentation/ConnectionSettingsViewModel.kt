@@ -18,6 +18,10 @@ data class ConnectionSettingsUiState(
     val isTesting: Boolean = false,
     val errorMessage: String? = null,
     val current: ConnectionSettings? = null,
+    // Distinguishes "not loaded yet" from "loaded, nothing saved" — App()
+    // needs this to avoid flashing the Settings screen for a frame while
+    // settingsStore.load() is still resolving.
+    val isLoaded: Boolean = false,
 ) {
     val canSubmit: Boolean get() = !isTesting && serverUrlText.isNotEmpty() && token.isNotEmpty()
 }
@@ -33,7 +37,7 @@ class ConnectionSettingsViewModel(
     init {
         scope.launch {
             val current = settingsStore.load()
-            _state.update { it.copy(current = current) }
+            _state.update { it.copy(current = current, isLoaded = true) }
         }
     }
 
@@ -68,7 +72,9 @@ class ConnectionSettingsViewModel(
     fun clear() {
         scope.launch {
             settingsStore.clear()
-            _state.update { ConnectionSettingsUiState() }
+            // isLoaded stays true: "Switch Server" should land straight on
+            // the Settings screen, not flash App()'s not-loaded-yet spinner.
+            _state.update { ConnectionSettingsUiState(isLoaded = true) }
         }
     }
 }
