@@ -1,11 +1,9 @@
 package com.tanyudii.tmuxweb.ui.web
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
@@ -13,15 +11,13 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -34,7 +30,6 @@ import androidx.compose.ui.unit.dp
 import com.tanyudii.tmuxweb.domain.model.ChangedFile
 import com.tanyudii.tmuxweb.domain.model.DiffMode
 import com.tanyudii.tmuxweb.domain.model.EnvStatus
-import com.tanyudii.tmuxweb.domain.model.FileStatus
 import com.tanyudii.tmuxweb.domain.model.GroupedChanges
 import com.tanyudii.tmuxweb.domain.model.Project
 import com.tanyudii.tmuxweb.domain.model.ProjectSession
@@ -103,48 +98,33 @@ fun WebMainPane(
             return@Column
         }
 
-        TopBar(
-            project = project,
-            session = session,
-            environment = environment,
-            environmentBusy = environmentBusy,
-            railOpen = railOpen,
-            onToggleRail = onToggleRail,
-            onEnvironmentRun = onEnvironmentRun,
-            onEnvironmentStop = onEnvironmentStop,
-            onEnvironmentMenuOpenChanged = { environmentMenuOpen = it },
-        )
-        WindowTabs(
-            windowCount = session.windows,
-            activeWindow = activeWindow,
-            serverWindowNames = session.windowNames,
-            onSelectWindow = onSelectWindow,
-            onWindowsChanged = onWindowsChanged,
-            terminal = terminal,
-            onDialogOpenChanged = { windowDialogOpen = it },
-        )
-
-        if (!terminal.isConnected) {
-            TmuxConnectionBanner(status = TmuxConnectionStatus.RECONNECTING, message = "Reconnecting to the server…")
-        }
-
+        // ChangesRail is a full-height sibling of this column -- not stacked
+        // below WindowTabs -- so it starts flush at the very top (aligned
+        // with TopBar) instead of hanging below a tab row that's mostly
+        // empty once only a couple of tmux windows are open.
         Row(modifier = Modifier.weight(1f).fillMaxWidth()) {
-            Box(modifier = Modifier.weight(1f).fillMaxHeight()) {
-                PlatformTerminalView(
-                    modifier = Modifier.fillMaxSize(),
-                    onInput = terminal::onInput,
-                    onBell = terminal::onBell,
-                    onResize = terminal::onResize,
-                    handleReady = terminal.onHandleReady,
-                    isVisible = isTerminalVisible && !environmentMenuOpen && !windowDialogOpen && diffTarget == null,
-                )
-            }
+            MainContent(
+                project = project,
+                session = session,
+                terminal = terminal,
+                environment = environment,
+                environmentBusy = environmentBusy,
+                railOpen = railOpen,
+                activeWindow = activeWindow,
+                onSelectWindow = onSelectWindow,
+                onWindowsChanged = onWindowsChanged,
+                onToggleRail = onToggleRail,
+                onEnvironmentRun = onEnvironmentRun,
+                onEnvironmentStop = onEnvironmentStop,
+                terminalVisible = isTerminalVisible && !environmentMenuOpen && !windowDialogOpen && diffTarget == null,
+                onEnvironmentMenuOpenChanged = { environmentMenuOpen = it },
+                onDialogOpenChanged = { windowDialogOpen = it },
+                modifier = Modifier.weight(1f).fillMaxHeight(),
+            )
             if (railOpen) {
                 ChangesRail(changes = changes, onFileClick = { file, mode -> diffTarget = DiffTarget(file, mode) })
             }
         }
-
-        StatusFooter(session = session)
 
         MainPaneDiffDialog(
             projectId = project?.id,
@@ -156,6 +136,80 @@ fun WebMainPane(
 }
 
 private data class DiffTarget(val file: ChangedFile, val mode: DiffMode)
+
+/**
+ * Top bar, tmux window tabs, terminal viewport, and status footer -- the
+ * left side of [WebMainPane]'s main Row, sized independently of
+ * [ChangesRail]. Split out purely to keep [WebMainPane] under the project's
+ * detekt line-count threshold -- no behavior change.
+ */
+@Composable
+private fun MainContent(
+    project: Project?,
+    session: ProjectSession,
+    terminal: TerminalSession,
+    environment: EnvStatus?,
+    environmentBusy: Boolean,
+    railOpen: Boolean,
+    activeWindow: Int,
+    onSelectWindow: (Int) -> Unit,
+    onWindowsChanged: () -> Unit,
+    onToggleRail: () -> Unit,
+    onEnvironmentRun: () -> Unit,
+    onEnvironmentStop: () -> Unit,
+    terminalVisible: Boolean,
+    onEnvironmentMenuOpenChanged: (Boolean) -> Unit,
+    onDialogOpenChanged: (Boolean) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Column(modifier = modifier) {
+        TopBar(
+            project = project,
+            session = session,
+            environment = environment,
+            environmentBusy = environmentBusy,
+            railOpen = railOpen,
+            onToggleRail = onToggleRail,
+            onEnvironmentRun = onEnvironmentRun,
+            onEnvironmentStop = onEnvironmentStop,
+            onEnvironmentMenuOpenChanged = onEnvironmentMenuOpenChanged,
+        )
+        WindowTabs(
+            windowCount = session.windows,
+            activeWindow = activeWindow,
+            serverWindowNames = session.windowNames,
+            onSelectWindow = onSelectWindow,
+            onWindowsChanged = onWindowsChanged,
+            terminal = terminal,
+            onDialogOpenChanged = onDialogOpenChanged,
+        )
+
+        if (!terminal.isConnected) {
+            TmuxConnectionBanner(
+                status = TmuxConnectionStatus.RECONNECTING,
+                message = "Reconnecting to the server…",
+            )
+        }
+
+        Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
+            // Keyed by session identity -- without this, switching sessions
+            // directly (no intermediate null selection) reuses the xterm.js
+            // instance instead of recreating it.
+            key(session.fullName) {
+                PlatformTerminalView(
+                    modifier = Modifier.fillMaxSize(),
+                    onInput = terminal::onInput,
+                    onBell = terminal::onBell,
+                    onResize = terminal::onResize,
+                    handleReady = terminal.onHandleReady,
+                    isVisible = terminalVisible,
+                )
+            }
+        }
+
+        StatusFooter(session = session)
+    }
+}
 
 /** Hosts [DiffDialogHost] once a [DiffTarget] is picked -- split out purely to keep [WebMainPane] short. */
 @Composable
@@ -257,86 +311,6 @@ private fun TopBar(
             "Changes",
             onToggleRail,
             variant = if (railOpen) TmuxIconButtonVariant.FILLED else TmuxIconButtonVariant.GHOST,
-        )
-    }
-}
-
-@Composable
-private fun ChangesRail(changes: GroupedChanges?, onFileClick: (ChangedFile, DiffMode) -> Unit) {
-    Column(
-        modifier = Modifier
-            .width(290.dp)
-            .fillMaxHeight()
-            .background(TmuxColors.bgSurface),
-    ) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.fillMaxWidth().height(40.dp).padding(horizontal = 14.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            Icon(
-                TmuxIcons.GitBranch,
-                contentDescription = null,
-                tint = TmuxColors.textTertiary,
-                modifier = Modifier.size(15.dp),
-            )
-            Text(
-                "Changes",
-                color = TmuxColors.textPrimary,
-                fontFamily = TmuxFonts.sans,
-                fontSize = TmuxTextSize.sm,
-                fontWeight = TmuxWeight.semibold,
-            )
-        }
-        val entries = changes?.let {
-            it.staged.map { file -> file to DiffMode.STAGED } +
-                it.unstaged.map { file -> file to DiffMode.UNSTAGED } +
-                it.untracked.map { file -> file to DiffMode.UNTRACKED }
-        }.orEmpty()
-        LazyColumn(modifier = Modifier.weight(1f), contentPadding = PaddingValues(vertical = 6.dp)) {
-            items(entries) { (file, mode) -> ChangedFileRow(file, onClick = { onFileClick(file, mode) }) }
-        }
-        Box(modifier = Modifier.fillMaxWidth().padding(12.dp)) {
-            TmuxButton(
-                onClick = {},
-                text = "Stage all · commit",
-                variant = TmuxButtonVariant.SECONDARY,
-                icon = TmuxIcons.GitBranch,
-                fillWidth = true,
-            )
-        }
-    }
-}
-
-@Composable
-private fun ChangedFileRow(file: ChangedFile, onClick: () -> Unit) {
-    val (marker, color) = when (file.status) {
-        FileStatus.ADDED -> "A" to TmuxColors.gitAdded
-        FileStatus.MODIFIED -> "M" to TmuxColors.gitUnstaged
-        FileStatus.DELETED -> "D" to TmuxColors.gitRemoved
-        FileStatus.RENAMED -> "R" to TmuxColors.gitUntracked
-        FileStatus.UNTRACKED -> "U" to TmuxColors.gitUntracked
-    }
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 14.dp, vertical = 6.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        Text(
-            marker,
-            color = color,
-            fontFamily = TmuxFonts.mono,
-            fontWeight = TmuxWeight.semibold,
-            fontSize = TmuxTextSize.sm,
-        )
-        Text(
-            file.path,
-            color = TmuxColors.textSecondary,
-            fontFamily = TmuxFonts.mono,
-            fontSize = TmuxTextSize.xs,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f),
         )
     }
 }

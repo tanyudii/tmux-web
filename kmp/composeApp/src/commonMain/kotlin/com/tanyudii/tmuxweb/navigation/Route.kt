@@ -12,8 +12,13 @@ sealed interface Route {
     data object Projects : Route
 
     @Serializable
-    data class Sessions(val projectId: String, val projectName: String) : Route
+    data class Sessions(val projectId: String, val projectName: String, val projectRepoPath: String) : Route
 
     @Serializable
-    data class Terminal(val sessionFullName: String, val sessionName: String) : Route
+    data class Terminal(
+        val sessionFullName: String,
+        val sessionName: String,
+        val projectId: String,
+        val projectName: String,
+    ) : Route
 }
