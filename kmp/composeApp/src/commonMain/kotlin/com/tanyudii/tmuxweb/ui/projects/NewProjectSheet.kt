@@ -2,22 +2,22 @@ package com.tanyudii.tmuxweb.ui.projects
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.tanyudii.tmuxweb.presentation.ProjectListUiState
+import com.tanyudii.tmuxweb.ui.components.TmuxSheet
+import com.tanyudii.tmuxweb.ui.components.TmuxTextField
+import com.tanyudii.tmuxweb.ui.theme.TmuxColors
+import com.tanyudii.tmuxweb.ui.theme.TmuxFonts
+import com.tanyudii.tmuxweb.ui.theme.TmuxIcons
+import com.tanyudii.tmuxweb.ui.theme.TmuxTextSize
 
+/** "New Project" form sheet — ports `ui_kits/ios/app.jsx`'s `addProject` sheet. */
 @Composable
 fun NewProjectSheet(
     state: ProjectListUiState.NewProjectUiState,
@@ -27,47 +27,33 @@ fun NewProjectSheet(
     var name by remember { mutableStateOf("") }
     var repoPath by remember { mutableStateOf("") }
 
-    AlertDialog(
-        onDismissRequest = onCancel,
-        title = { Text("New Project") },
-        text = {
-            Column(
-                modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
-                OutlinedTextField(
-                    value = name,
-                    onValueChange = { name = it },
-                    label = { Text("Name") },
-                    singleLine = true,
-                    enabled = !state.isSaving,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                OutlinedTextField(
-                    value = repoPath,
-                    onValueChange = { repoPath = it },
-                    label = { Text("Repo Path") },
-                    singleLine = true,
-                    enabled = !state.isSaving,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                if (state.errorMessage != null) {
-                    Text(state.errorMessage, color = MaterialTheme.colorScheme.error)
-                }
+    TmuxSheet(
+        title = "New Project",
+        actionLabel = "Add",
+        actionEnabled = !state.isSaving && name.isNotBlank(),
+        onDismiss = onCancel,
+        onAction = { onSave(name, repoPath) },
+    ) {
+        Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+            TmuxTextField(
+                value = name,
+                onValueChange = { name = it },
+                label = "Name",
+                placeholder = "api-gateway",
+                enabled = !state.isSaving,
+            )
+            TmuxTextField(
+                value = repoPath,
+                onValueChange = { repoPath = it },
+                label = "Repo path",
+                placeholder = "~/srv/api-gateway",
+                mono = true,
+                icon = TmuxIcons.Folder,
+                enabled = !state.isSaving,
+            )
+            state.errorMessage?.let { message ->
+                Text(message, color = TmuxColors.red500, fontFamily = TmuxFonts.sans, fontSize = TmuxTextSize.sm)
             }
-        },
-        confirmButton = {
-            TextButton(
-                onClick = { onSave(name, repoPath) },
-                enabled = !state.isSaving && name.isNotBlank() && repoPath.isNotBlank(),
-            ) {
-                Text("Save")
-            }
-        },
-        dismissButton = {
-            TextButton(onClick = onCancel, enabled = !state.isSaving) {
-                Text("Cancel")
-            }
-        },
-    )
+        }
+    }
 }

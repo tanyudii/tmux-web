@@ -2,30 +2,27 @@ package com.tanyudii.tmuxweb.ui.sessions
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.tanyudii.tmuxweb.presentation.SessionCreationUiState
+import com.tanyudii.tmuxweb.ui.components.TmuxProgressBar
+import com.tanyudii.tmuxweb.ui.components.TmuxSheet
+import com.tanyudii.tmuxweb.ui.components.TmuxTextField
+import com.tanyudii.tmuxweb.ui.theme.TmuxColors
+import com.tanyudii.tmuxweb.ui.theme.TmuxFonts
+import com.tanyudii.tmuxweb.ui.theme.TmuxIcons
+import com.tanyudii.tmuxweb.ui.theme.TmuxTextSize
 
 /**
- * [creationState] is null before the user submits — SessionListViewModel has
- * no "form open, not yet saving" state of its own (only isSaving/progress/
- * error once createSession() is called), so that phase is local UI state.
+ * "New Session" form sheet — ports `ui_kits/ios/app.jsx`'s `addSession`
+ * sheet. [creationState] is null before the user submits — same
+ * before-submit/local-form-state split documented on the previous
+ * AlertDialog-based version of this file.
  */
 @Composable
 fun NewSessionSheet(
@@ -36,43 +33,29 @@ fun NewSessionSheet(
     var name by remember { mutableStateOf("") }
     val isSaving = creationState?.isSaving == true
 
-    AlertDialog(
-        onDismissRequest = onCancel,
-        title = { Text("New Session") },
-        text = {
-            Column(
-                modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
-                OutlinedTextField(
-                    value = name,
-                    onValueChange = { name = it },
-                    label = { Text("Name") },
-                    singleLine = true,
-                    enabled = !isSaving,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                if (isSaving) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        CircularProgressIndicator(modifier = Modifier.size(16.dp))
-                        Text(
-                            creationState.progressMessage ?: "Creating…",
-                            modifier = Modifier.padding(start = 8.dp),
-                        )
-                    }
-                }
-                if (creationState?.errorMessage != null) {
-                    Text(creationState.errorMessage, color = MaterialTheme.colorScheme.error)
-                }
+    TmuxSheet(
+        title = "New Session",
+        actionLabel = if (isSaving) "…" else "Create",
+        actionEnabled = !isSaving,
+        onDismiss = { if (!isSaving) onCancel() },
+        onAction = { onCreate(name) },
+    ) {
+        Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+            TmuxTextField(
+                value = name,
+                onValueChange = { name = it },
+                label = "Session name",
+                placeholder = "build",
+                mono = true,
+                icon = TmuxIcons.Terminal,
+                enabled = !isSaving,
+            )
+            if (isSaving) {
+                TmuxProgressBar(label = creationState.progressMessage ?: "Creating session…")
             }
-        },
-        confirmButton = {
-            TextButton(onClick = { onCreate(name) }, enabled = !isSaving && name.isNotBlank()) {
-                Text("Create")
+            creationState?.errorMessage?.let { message ->
+                Text(message, color = TmuxColors.red500, fontFamily = TmuxFonts.sans, fontSize = TmuxTextSize.sm)
             }
-        },
-        dismissButton = {
-            TextButton(onClick = onCancel) { Text("Cancel") }
-        },
-    )
+        }
+    }
 }
