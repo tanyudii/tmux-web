@@ -13,6 +13,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -210,21 +211,27 @@ private fun SessionsGroup(
     TmuxGroup {
         sessions.forEachIndexed { index, session ->
             if (index > 0) TmuxGroupDivider()
-            TmuxSwipeToDeleteRow(onDelete = { viewModel.delete(session) }) {
-                TmuxListRow(
-                    title = session.name,
-                    icon = TmuxIcons.Terminal,
-                    subtitle = sessionSubtitle(session),
-                    trailing = {
-                        TmuxStatusBadge(
-                            text = if (session.attached) "attached" else "detached",
-                            tone = if (session.attached) TmuxStatusTone.ATTACHED else TmuxStatusTone.IDLE,
-                            dot = session.attached,
-                        )
-                        Icon(TmuxIcons.ChevronRight, contentDescription = null, tint = TmuxColors.textTertiary)
-                    },
-                    onClick = { onOpenSession(session) },
-                )
+            // Keyed by identity, not loop position: without this, deleting a
+            // row shifts every row below it up by one slot, and
+            // TmuxSwipeToDeleteRow's remembered `hasFired`/dismiss-animation
+            // state (bound to the slot) leaks onto the session that now
+            // occupies it -- its next swipe is silently vetoed.
+            key(session.fullName) {
+                TmuxSwipeToDeleteRow(onDelete = { viewModel.delete(session) }) {
+                    TmuxListRow(
+                        title = session.name,
+                        icon = TmuxIcons.Terminal,
+                        subtitle = sessionSubtitle(session),
+                        trailing = {
+                            TmuxStatusBadge(
+                                text = if (session.attached) "attached" else "detached",
+                                tone = if (session.attached) TmuxStatusTone.ATTACHED else TmuxStatusTone.IDLE,
+                                dot = session.attached,
+                            )
+                        },
+                        onClick = { onOpenSession(session) },
+                    )
+                }
             }
         }
     }

@@ -7,8 +7,10 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import com.tanyudii.tmuxweb.domain.repository.EnvironmentRepository
 import com.tanyudii.tmuxweb.presentation.EnvironmentViewModel
@@ -60,6 +62,13 @@ private fun TerminalScreen(
     onBack: () -> Unit,
 ) {
     val envState by environment.state.collectAsState()
+    // The terminal's native DOM element must be hidden for the duration of any
+    // Popup/Dialog rendered over it (environment dropdown, stop-confirm) --
+    // see PlatformTerminalView's `isVisible` kdoc and WebMainPane.kt's mirror
+    // of this same gating. Omitting it here left this screen's terminal
+    // always-visible, letting its DOM overlay swallow clicks/keystrokes meant
+    // for the dialog on top of it (CLAUDE.md's flagged incident class).
+    var environmentMenuOpen by remember { mutableStateOf(false) }
 
     Column(modifier = Modifier.fillMaxSize().background(TmuxColors.bgTerminal)) {
         TmuxNavBar(
@@ -72,6 +81,7 @@ private fun TerminalScreen(
                     isBusy = envState.isBusy,
                     onRun = environment::setup,
                     onStop = environment::requestStop,
+                    onOpenChanged = { environmentMenuOpen = it },
                 )
             },
         )
@@ -84,6 +94,7 @@ private fun TerminalScreen(
             onBell = onBell,
             onResize = onResize,
             handleReady = onHandleReady,
+            isVisible = !environmentMenuOpen && !envState.isShowingStopConfirm,
         )
         QuickKeysBar(onKeyTap = onInput)
     }
