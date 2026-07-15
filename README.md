@@ -161,6 +161,15 @@ accordingly:
   `git@github.com:tanyudii/tmux-web` on the server (a deploy key with
   read-only access works well) — both the bootstrap clone below and
   `tmuxweb upgrade` use `git clone`/`git fetch` over SSH directly.
+- **`gh` (GitHub CLI), installed and authenticated** — `tmuxweb upgrade`
+  shells out to `gh release download` to fetch the prebuilt web UI bundle
+  from this repo's GitHub Releases. Install per <https://cli.github.com/>,
+  then run `gh auth login` once (or set `GH_TOKEN`/`GITHUB_TOKEN` in the
+  environment the service runs under) — a one-time setup, analogous to the
+  SSH deploy key above. Not strictly required: if `gh` isn't set up,
+  `tmuxweb upgrade` still succeeds and the server still runs, it just
+  serves the API only (no web UI) until `gh` is configured and you
+  upgrade again.
 
 ## Installation (global CLI, production)
 
@@ -181,6 +190,7 @@ git clone --branch v1.0.2 --depth 1 git@github.com:tanyudii/tmux-web.git ~/.loca
 cd ~/.local/share/tmux-web
 npm ci --omit=dev
 npm link
+tmuxweb upgrade --tag v1.0.2
 ```
 
 `~/.local/share/tmux-web` (the XDG convention for installed application
@@ -188,6 +198,17 @@ code) is deliberately separate from `~/.tmux-web`, which holds runtime data
 only — token, port, host, projects, worktrees (see "Data directory" below).
 This is the same clone-and-install shape as **Local development** below,
 minus dev dependencies and plus the global `npm link`.
+
+The final `tmuxweb upgrade --tag v1.0.2` re-targets the exact tag you just
+cloned. On the code itself it's a no-op (already checked out; `npm
+ci`/`npm link` just re-run harmlessly) — its real job here is fetching and
+installing that tag's prebuilt web UI bundle from its GitHub Release (see
+"Upgrading" below), which the bootstrap clone above doesn't include
+(`kmp/composeApp/build/` is gitignored, by design). This reuses the same,
+already-tested code path as every later `tmuxweb upgrade` rather than
+documenting a separate manual `gh release download` command here. Skipping
+this step still leaves you with a fully working install — just API-only, no
+web UI — until the next `tmuxweb upgrade`.
 
 Either way this puts a `tmuxweb` binary on your `PATH`. Then:
 
@@ -227,7 +248,16 @@ tmuxweb upgrade --app-dir /other/path    # if you installed somewhere other than
 ```
 
 Internally this is the same clone-or-update + `npm ci --omit=dev` +
-`npm link` flow described above, run again against the resolved tag. If
+`npm link` flow described above, run again against the resolved tag, plus
+one more step: it downloads that tag's prebuilt web UI bundle from this
+repo's GitHub Release (via the `gh` CLI — see "Requirements on the host
+machine" above) and extracts it to
+`~/.local/share/tmux-web/kmp/composeApp/build/dist/wasmJs/productionExecutable`,
+where the running server looks for it. That step is best-effort: if `gh`
+isn't installed/authenticated, or a given release has no web UI asset (e.g.
+an old tag cut before this mechanism existed), `tmuxweb upgrade` logs a
+warning and continues — you still end up with a working install, serving
+the API only, until it's fixed and you upgrade again. If
 `~/.local/share/tmux-web` is already a clone of this repo, it fetches the
 target tag and checks it out in place; if it's missing (or looks like
 leftover junk from an interrupted install), it clones fresh — `tmuxweb

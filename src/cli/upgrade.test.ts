@@ -12,9 +12,11 @@ import {
   runUpgrade,
   cloneOrUpdateAppDir,
   npmInstallAndLink,
+  downloadWebBuild,
   defaultExec,
 } from "./upgrade.ts";
 import type { ExecFn } from "./upgrade.ts";
+import { resolveWebBuildDir } from "../web-build.ts";
 
 const execFileAsync = promisify(execFileCb);
 
@@ -33,6 +35,19 @@ function recordingExec(
 }
 
 const noopMkdir = async (): Promise<void> => {};
+
+const FAKE_DOWNLOAD_DIR = "/fake/download/dir";
+const noopMkdtemp = async (): Promise<string> => FAKE_DOWNLOAD_DIR;
+
+// Every runUpgrade test that reaches past `npm link` now also triggers a
+// downloadWebBuild attempt -- give it a working gh/tar pair by default so
+// tests that aren't specifically about the web-build step don't have to
+// special-case it themselves.
+function withWebBuildOk(
+  handlers: Record<string, (args: string[]) => { stdout: string; stderr: string }>,
+): Record<string, (args: string[]) => { stdout: string; stderr: string }> {
+  return { gh: () => ({ stdout: "", stderr: "" }), tar: () => ({ stdout: "", stderr: "" }), ...handlers };
+}
 
 const LS_REMOTE_OUTPUT = [
   "abc123\trefs/tags/v1.3.0",
@@ -63,39 +78,47 @@ test("resolveLatestTag throws UpgradeError when the repo has no tags", async () 
 
 test("runUpgrade clones fresh when appDir is not an existing git repo", async () => {
   const appDir = "/fake/app/dir";
-  const { exec, calls } = recordingExec({
-    git: (args) => {
-      if (args.includes("rev-parse")) throw new Error("fatal: not a git repository");
-      return { stdout: "", stderr: "" };
-    },
-    npm: () => ({ stdout: "", stderr: "" }),
-    systemctl: (args) => (args.includes("is-active") ? { stdout: "inactive", stderr: "" } : { stdout: "", stderr: "" }),
-  });
+  const { exec, calls } = recordingExec(
+    withWebBuildOk({
+      git: (args) => {
+        if (args.includes("rev-parse")) throw new Error("fatal: not a git repository");
+        return { stdout: "", stderr: "" };
+      },
+      npm: () => ({ stdout: "", stderr: "" }),
+      systemctl: (args) =>
+        args.includes("is-active") ? { stdout: "inactive", stderr: "" } : { stdout: "", stderr: "" },
+    }),
+  );
 
-  await runUpgrade(["--tag", "v1.0.0"], { exec, appDir, mkdirRecursive: noopMkdir });
+  await runUpgrade(["--tag", "v1.0.0"], { exec, appDir, mkdirRecursive: noopMkdir, mkdtemp: noopMkdtemp });
 
   assert.deepEqual(calls, [
     `git -C ${appDir} rev-parse --is-inside-work-tree`,
     `git clone --branch v1.0.0 --depth 1 git@github.com:tanyudii/tmux-web ${appDir}`,
     `npm ci --omit=dev (cwd=${appDir})`,
     `npm link (cwd=${appDir})`,
+    `gh release download v1.0.0 --repo tanyudii/tmux-web --pattern kmp-web.tar.gz --dir ${FAKE_DOWNLOAD_DIR} --clobber`,
+    `tar -xzf ${FAKE_DOWNLOAD_DIR}/kmp-web.tar.gz -C ${appDir}/kmp/composeApp/build/dist/wasmJs/productionExecutable`,
     "systemctl --user is-active tmux-web",
   ]);
 });
 
 test("runUpgrade installs the explicitly requested tag without calling git ls-remote", async () => {
   const appDir = "/existing/app/dir";
-  const { exec, calls } = recordingExec({
-    git: (args) => {
-      if (args.includes("rev-parse")) return { stdout: "true", stderr: "" };
-      if (args.includes("get-url")) return { stdout: "git@github.com:tanyudii/tmux-web\n", stderr: "" };
-      return { stdout: "", stderr: "" };
-    },
-    npm: () => ({ stdout: "", stderr: "" }),
-    systemctl: (args) => (args.includes("is-active") ? { stdout: "inactive", stderr: "" } : { stdout: "", stderr: "" }),
-  });
+  const { exec, calls } = recordingExec(
+    withWebBuildOk({
+      git: (args) => {
+        if (args.includes("rev-parse")) return { stdout: "true", stderr: "" };
+        if (args.includes("get-url")) return { stdout: "git@github.com:tanyudii/tmux-web\n", stderr: "" };
+        return { stdout: "", stderr: "" };
+      },
+      npm: () => ({ stdout: "", stderr: "" }),
+      systemctl: (args) =>
+        args.includes("is-active") ? { stdout: "inactive", stderr: "" } : { stdout: "", stderr: "" },
+    }),
+  );
 
-  await runUpgrade(["--tag", "v1.0.0"], { exec, appDir });
+  await runUpgrade(["--tag", "v1.0.0"], { exec, appDir, mkdirRecursive: noopMkdir, mkdtemp: noopMkdtemp });
 
   assert.deepEqual(calls, [
     `git -C ${appDir} rev-parse --is-inside-work-tree`,
@@ -104,24 +127,29 @@ test("runUpgrade installs the explicitly requested tag without calling git ls-re
     `git -C ${appDir} checkout --force v1.0.0`,
     `npm ci --omit=dev (cwd=${appDir})`,
     `npm link (cwd=${appDir})`,
+    `gh release download v1.0.0 --repo tanyudii/tmux-web --pattern kmp-web.tar.gz --dir ${FAKE_DOWNLOAD_DIR} --clobber`,
+    `tar -xzf ${FAKE_DOWNLOAD_DIR}/kmp-web.tar.gz -C ${appDir}/kmp/composeApp/build/dist/wasmJs/productionExecutable`,
     "systemctl --user is-active tmux-web",
   ]);
 });
 
 test("runUpgrade resolves the latest tag when --tag is omitted", async () => {
   const appDir = "/existing/app/dir";
-  const { exec, calls } = recordingExec({
-    git: (args) => {
-      if (args.includes("ls-remote")) return { stdout: LS_REMOTE_OUTPUT, stderr: "" };
-      if (args.includes("rev-parse")) return { stdout: "true", stderr: "" };
-      if (args.includes("get-url")) return { stdout: "git@github.com:tanyudii/tmux-web\n", stderr: "" };
-      return { stdout: "", stderr: "" };
-    },
-    npm: () => ({ stdout: "", stderr: "" }),
-    systemctl: (args) => (args.includes("is-active") ? { stdout: "inactive", stderr: "" } : { stdout: "", stderr: "" }),
-  });
+  const { exec, calls } = recordingExec(
+    withWebBuildOk({
+      git: (args) => {
+        if (args.includes("ls-remote")) return { stdout: LS_REMOTE_OUTPUT, stderr: "" };
+        if (args.includes("rev-parse")) return { stdout: "true", stderr: "" };
+        if (args.includes("get-url")) return { stdout: "git@github.com:tanyudii/tmux-web\n", stderr: "" };
+        return { stdout: "", stderr: "" };
+      },
+      npm: () => ({ stdout: "", stderr: "" }),
+      systemctl: (args) =>
+        args.includes("is-active") ? { stdout: "inactive", stderr: "" } : { stdout: "", stderr: "" },
+    }),
+  );
 
-  await runUpgrade([], { exec, appDir });
+  await runUpgrade([], { exec, appDir, mkdirRecursive: noopMkdir, mkdtemp: noopMkdtemp });
 
   assert.deepEqual(calls, [
     "git ls-remote --sort=-v:refname --tags git@github.com:tanyudii/tmux-web",
@@ -131,23 +159,28 @@ test("runUpgrade resolves the latest tag when --tag is omitted", async () => {
     `git -C ${appDir} checkout --force v1.3.0`,
     `npm ci --omit=dev (cwd=${appDir})`,
     `npm link (cwd=${appDir})`,
+    `gh release download v1.3.0 --repo tanyudii/tmux-web --pattern kmp-web.tar.gz --dir ${FAKE_DOWNLOAD_DIR} --clobber`,
+    `tar -xzf ${FAKE_DOWNLOAD_DIR}/kmp-web.tar.gz -C ${appDir}/kmp/composeApp/build/dist/wasmJs/productionExecutable`,
     "systemctl --user is-active tmux-web",
   ]);
 });
 
 test("runUpgrade fetches and checks out the tag when appDir is already a matching clone (no re-clone)", async () => {
   const appDir = "/existing/app/dir";
-  const { exec, calls } = recordingExec({
-    git: (args) => {
-      if (args.includes("rev-parse")) return { stdout: "true", stderr: "" };
-      if (args.includes("get-url")) return { stdout: "git@github.com:tanyudii/tmux-web\n", stderr: "" };
-      return { stdout: "", stderr: "" };
-    },
-    npm: () => ({ stdout: "", stderr: "" }),
-    systemctl: (args) => (args.includes("is-active") ? { stdout: "inactive", stderr: "" } : { stdout: "", stderr: "" }),
-  });
+  const { exec, calls } = recordingExec(
+    withWebBuildOk({
+      git: (args) => {
+        if (args.includes("rev-parse")) return { stdout: "true", stderr: "" };
+        if (args.includes("get-url")) return { stdout: "git@github.com:tanyudii/tmux-web\n", stderr: "" };
+        return { stdout: "", stderr: "" };
+      },
+      npm: () => ({ stdout: "", stderr: "" }),
+      systemctl: (args) =>
+        args.includes("is-active") ? { stdout: "inactive", stderr: "" } : { stdout: "", stderr: "" },
+    }),
+  );
 
-  await runUpgrade(["--tag", "v2.0.0"], { exec, appDir });
+  await runUpgrade(["--tag", "v2.0.0"], { exec, appDir, mkdirRecursive: noopMkdir, mkdtemp: noopMkdtemp });
 
   assert.ok(!calls.some((c) => c.includes("clone --branch")), "must not re-clone an existing matching checkout");
   assert.deepEqual(calls, [
@@ -157,25 +190,33 @@ test("runUpgrade fetches and checks out the tag when appDir is already a matchin
     `git -C ${appDir} checkout --force v2.0.0`,
     `npm ci --omit=dev (cwd=${appDir})`,
     `npm link (cwd=${appDir})`,
+    `gh release download v2.0.0 --repo tanyudii/tmux-web --pattern kmp-web.tar.gz --dir ${FAKE_DOWNLOAD_DIR} --clobber`,
+    `tar -xzf ${FAKE_DOWNLOAD_DIR}/kmp-web.tar.gz -C ${appDir}/kmp/composeApp/build/dist/wasmJs/productionExecutable`,
     "systemctl --user is-active tmux-web",
   ]);
 });
 
 test("runUpgrade treats an origin remote with a trailing .git as matching (no re-clone)", async () => {
   const appDir = "/existing/app/dir";
-  const { exec, calls } = recordingExec({
-    git: (args) => {
-      if (args.includes("rev-parse")) return { stdout: "true", stderr: "" };
-      if (args.includes("get-url")) return { stdout: "git@github.com:tanyudii/tmux-web.git\n", stderr: "" };
-      return { stdout: "", stderr: "" };
-    },
-    npm: () => ({ stdout: "", stderr: "" }),
-    systemctl: (args) => (args.includes("is-active") ? { stdout: "inactive", stderr: "" } : { stdout: "", stderr: "" }),
-  });
+  const { exec, calls } = recordingExec(
+    withWebBuildOk({
+      git: (args) => {
+        if (args.includes("rev-parse")) return { stdout: "true", stderr: "" };
+        if (args.includes("get-url")) return { stdout: "git@github.com:tanyudii/tmux-web.git\n", stderr: "" };
+        return { stdout: "", stderr: "" };
+      },
+      npm: () => ({ stdout: "", stderr: "" }),
+      systemctl: (args) =>
+        args.includes("is-active") ? { stdout: "inactive", stderr: "" } : { stdout: "", stderr: "" },
+    }),
+  );
 
-  await runUpgrade(["--tag", "v1.0.0"], { exec, appDir });
+  await runUpgrade(["--tag", "v1.0.0"], { exec, appDir, mkdirRecursive: noopMkdir, mkdtemp: noopMkdtemp });
 
-  assert.ok(!calls.some((c) => c.includes("clone --branch")), "must not re-clone a clone made with a .git-suffixed URL");
+  assert.ok(
+    !calls.some((c) => c.includes("clone --branch")),
+    "must not re-clone a clone made with a .git-suffixed URL",
+  );
   assert.deepEqual(calls, [
     `git -C ${appDir} rev-parse --is-inside-work-tree`,
     `git -C ${appDir} remote get-url origin`,
@@ -183,6 +224,8 @@ test("runUpgrade treats an origin remote with a trailing .git as matching (no re
     `git -C ${appDir} checkout --force v1.0.0`,
     `npm ci --omit=dev (cwd=${appDir})`,
     `npm link (cwd=${appDir})`,
+    `gh release download v1.0.0 --repo tanyudii/tmux-web --pattern kmp-web.tar.gz --dir ${FAKE_DOWNLOAD_DIR} --clobber`,
+    `tar -xzf ${FAKE_DOWNLOAD_DIR}/kmp-web.tar.gz -C ${appDir}/kmp/composeApp/build/dist/wasmJs/productionExecutable`,
     "systemctl --user is-active tmux-web",
   ]);
 });
@@ -256,21 +299,30 @@ test("runUpgrade wraps an npm link failure in UpgradeError", async () => {
 
 test("runUpgrade refreshes the systemd unit and restarts when the service was active before upgrading", async () => {
   const appDir = "/existing/app/dir";
-  const { exec, calls } = recordingExec({
-    git: (args) => {
-      if (args.includes("rev-parse")) return { stdout: "true", stderr: "" };
-      if (args.includes("get-url")) return { stdout: "git@github.com:tanyudii/tmux-web\n", stderr: "" };
-      return { stdout: "", stderr: "" };
-    },
-    npm: () => ({ stdout: "", stderr: "" }),
-    systemctl: (args) => (args.includes("is-active") ? { stdout: "active", stderr: "" } : { stdout: "", stderr: "" }),
-  });
+  const { exec, calls } = recordingExec(
+    withWebBuildOk({
+      git: (args) => {
+        if (args.includes("rev-parse")) return { stdout: "true", stderr: "" };
+        if (args.includes("get-url")) return { stdout: "git@github.com:tanyudii/tmux-web\n", stderr: "" };
+        return { stdout: "", stderr: "" };
+      },
+      npm: () => ({ stdout: "", stderr: "" }),
+      systemctl: (args) =>
+        args.includes("is-active") ? { stdout: "active", stderr: "" } : { stdout: "", stderr: "" },
+    }),
+  );
   let refreshServiceCalled = false;
   const refreshService = async (): Promise<void> => {
     refreshServiceCalled = true;
   };
 
-  await runUpgrade(["--tag", "v1.0.0"], { exec, appDir, refreshService });
+  await runUpgrade(["--tag", "v1.0.0"], {
+    exec,
+    appDir,
+    refreshService,
+    mkdirRecursive: noopMkdir,
+    mkdtemp: noopMkdtemp,
+  });
 
   assert.ok(refreshServiceCalled, "refreshService must be called before restarting an active service");
   assert.deepEqual(calls, [
@@ -280,6 +332,8 @@ test("runUpgrade refreshes the systemd unit and restarts when the service was ac
     `git -C ${appDir} checkout --force v1.0.0`,
     `npm ci --omit=dev (cwd=${appDir})`,
     `npm link (cwd=${appDir})`,
+    `gh release download v1.0.0 --repo tanyudii/tmux-web --pattern kmp-web.tar.gz --dir ${FAKE_DOWNLOAD_DIR} --clobber`,
+    `tar -xzf ${FAKE_DOWNLOAD_DIR}/kmp-web.tar.gz -C ${appDir}/kmp/composeApp/build/dist/wasmJs/productionExecutable`,
     "systemctl --user is-active tmux-web",
     "systemctl --user restart tmux-web",
   ]);
@@ -287,41 +341,59 @@ test("runUpgrade refreshes the systemd unit and restarts when the service was ac
 
 test("runUpgrade does not refresh the systemd unit when the service is not active", async () => {
   const appDir = "/existing/app/dir";
-  const { exec } = recordingExec({
-    git: (args) => {
-      if (args.includes("rev-parse")) return { stdout: "true", stderr: "" };
-      if (args.includes("get-url")) return { stdout: "git@github.com:tanyudii/tmux-web\n", stderr: "" };
-      return { stdout: "", stderr: "" };
-    },
-    npm: () => ({ stdout: "", stderr: "" }),
-    systemctl: (args) => (args.includes("is-active") ? { stdout: "inactive", stderr: "" } : { stdout: "", stderr: "" }),
-  });
+  const { exec } = recordingExec(
+    withWebBuildOk({
+      git: (args) => {
+        if (args.includes("rev-parse")) return { stdout: "true", stderr: "" };
+        if (args.includes("get-url")) return { stdout: "git@github.com:tanyudii/tmux-web\n", stderr: "" };
+        return { stdout: "", stderr: "" };
+      },
+      npm: () => ({ stdout: "", stderr: "" }),
+      systemctl: (args) =>
+        args.includes("is-active") ? { stdout: "inactive", stderr: "" } : { stdout: "", stderr: "" },
+    }),
+  );
   let refreshServiceCalled = false;
   const refreshService = async (): Promise<void> => {
     refreshServiceCalled = true;
   };
 
-  await runUpgrade(["--tag", "v1.0.0"], { exec, appDir, refreshService });
+  await runUpgrade(["--tag", "v1.0.0"], {
+    exec,
+    appDir,
+    refreshService,
+    mkdirRecursive: noopMkdir,
+    mkdtemp: noopMkdtemp,
+  });
 
   assert.equal(refreshServiceCalled, false);
 });
 
 test("runUpgrade still restarts the service when refreshing the systemd unit fails", async () => {
   const appDir = "/existing/app/dir";
-  const { exec, calls } = recordingExec({
-    git: (args) => {
-      if (args.includes("rev-parse")) return { stdout: "true", stderr: "" };
-      if (args.includes("get-url")) return { stdout: "git@github.com:tanyudii/tmux-web\n", stderr: "" };
-      return { stdout: "", stderr: "" };
-    },
-    npm: () => ({ stdout: "", stderr: "" }),
-    systemctl: (args) => (args.includes("is-active") ? { stdout: "active", stderr: "" } : { stdout: "", stderr: "" }),
-  });
+  const { exec, calls } = recordingExec(
+    withWebBuildOk({
+      git: (args) => {
+        if (args.includes("rev-parse")) return { stdout: "true", stderr: "" };
+        if (args.includes("get-url")) return { stdout: "git@github.com:tanyudii/tmux-web\n", stderr: "" };
+        return { stdout: "", stderr: "" };
+      },
+      npm: () => ({ stdout: "", stderr: "" }),
+      systemctl: (args) =>
+        args.includes("is-active") ? { stdout: "active", stderr: "" } : { stdout: "", stderr: "" },
+    }),
+  );
   const refreshService = async (): Promise<void> => {
     throw new Error("could not write unit file");
   };
 
-  await runUpgrade(["--tag", "v1.0.0"], { exec, appDir, refreshService });
+  await runUpgrade(["--tag", "v1.0.0"], {
+    exec,
+    appDir,
+    refreshService,
+    mkdirRecursive: noopMkdir,
+    mkdtemp: noopMkdtemp,
+  });
 
   assert.ok(calls.includes("systemctl --user restart tmux-web"), "must still attempt a restart");
 });
@@ -338,24 +410,159 @@ test("runUpgrade throws UpgradeError when --app-dir is passed without a value", 
 
 test("runUpgrade honors an explicit --app-dir over the default", async () => {
   const customAppDir = "/custom/path";
-  const { exec, calls } = recordingExec({
-    git: (args) => {
-      if (args.includes("rev-parse")) throw new Error("fatal: not a git repository");
-      return { stdout: "", stderr: "" };
-    },
-    npm: () => ({ stdout: "", stderr: "" }),
-    systemctl: (args) => (args.includes("is-active") ? { stdout: "inactive", stderr: "" } : { stdout: "", stderr: "" }),
-  });
+  const { exec, calls } = recordingExec(
+    withWebBuildOk({
+      git: (args) => {
+        if (args.includes("rev-parse")) throw new Error("fatal: not a git repository");
+        return { stdout: "", stderr: "" };
+      },
+      npm: () => ({ stdout: "", stderr: "" }),
+      systemctl: (args) =>
+        args.includes("is-active") ? { stdout: "inactive", stderr: "" } : { stdout: "", stderr: "" },
+    }),
+  );
 
-  await runUpgrade(["--tag", "v1.0.0", "--app-dir", customAppDir], { exec, mkdirRecursive: noopMkdir });
+  await runUpgrade(["--tag", "v1.0.0", "--app-dir", customAppDir], {
+    exec,
+    mkdirRecursive: noopMkdir,
+    mkdtemp: noopMkdtemp,
+  });
 
   assert.deepEqual(calls, [
     `git -C ${customAppDir} rev-parse --is-inside-work-tree`,
     `git clone --branch v1.0.0 --depth 1 git@github.com:tanyudii/tmux-web ${customAppDir}`,
     `npm ci --omit=dev (cwd=${customAppDir})`,
     `npm link (cwd=${customAppDir})`,
+    `gh release download v1.0.0 --repo tanyudii/tmux-web --pattern kmp-web.tar.gz --dir ${FAKE_DOWNLOAD_DIR} --clobber`,
+    `tar -xzf ${FAKE_DOWNLOAD_DIR}/kmp-web.tar.gz -C ${customAppDir}/kmp/composeApp/build/dist/wasmJs/productionExecutable`,
     "systemctl --user is-active tmux-web",
   ]);
+});
+
+test("downloadWebBuild downloads the release asset and extracts it into the app dir's wasmJs output path", async () => {
+  const appDir = "/existing/app/dir";
+  const targetDir = join(appDir, "kmp", "composeApp", "build", "dist", "wasmJs", "productionExecutable");
+  const { exec, calls } = recordingExec({
+    gh: () => ({ stdout: "", stderr: "" }),
+    tar: () => ({ stdout: "", stderr: "" }),
+  });
+  const mkdirCalls: string[] = [];
+  const rmCalls: string[] = [];
+
+  await downloadWebBuild(
+    exec,
+    appDir,
+    "v1.4.0",
+    "tanyudii/tmux-web",
+    async (path) => {
+      mkdirCalls.push(path);
+    },
+    async () => FAKE_DOWNLOAD_DIR,
+    async (path) => {
+      rmCalls.push(path);
+    },
+  );
+
+  assert.deepEqual(calls, [
+    `gh release download v1.4.0 --repo tanyudii/tmux-web --pattern kmp-web.tar.gz --dir ${FAKE_DOWNLOAD_DIR} --clobber`,
+    `tar -xzf ${FAKE_DOWNLOAD_DIR}/kmp-web.tar.gz -C ${targetDir}`,
+  ]);
+  assert.deepEqual(mkdirCalls, [targetDir]);
+  assert.deepEqual(rmCalls, [FAKE_DOWNLOAD_DIR]);
+});
+
+test("downloadWebBuild wraps a gh release download failure in UpgradeError and still cleans up the temp dir", async () => {
+  const appDir = "/existing/app/dir";
+  const { exec, calls } = recordingExec({
+    gh: () => {
+      throw new Error("HTTP 404: Not Found");
+    },
+  });
+  const rmCalls: string[] = [];
+
+  await assert.rejects(
+    () =>
+      downloadWebBuild(
+        exec,
+        appDir,
+        "v1.4.0",
+        "tanyudii/tmux-web",
+        async () => {},
+        async () => FAKE_DOWNLOAD_DIR,
+        async (path) => {
+          rmCalls.push(path);
+        },
+      ),
+    UpgradeError,
+  );
+  assert.ok(!calls.some((c) => c.startsWith("tar")), "must not attempt extraction after a failed download");
+  assert.deepEqual(rmCalls, [FAKE_DOWNLOAD_DIR]);
+});
+
+test("downloadWebBuild wraps a tar extraction failure in UpgradeError and still cleans up the temp dir", async () => {
+  const appDir = "/existing/app/dir";
+  const { exec } = recordingExec({
+    gh: () => ({ stdout: "", stderr: "" }),
+    tar: () => {
+      throw new Error("gzip: unexpected end of file");
+    },
+  });
+  const rmCalls: string[] = [];
+
+  await assert.rejects(
+    () =>
+      downloadWebBuild(
+        exec,
+        appDir,
+        "v1.4.0",
+        "tanyudii/tmux-web",
+        async () => {},
+        async () => FAKE_DOWNLOAD_DIR,
+        async (path) => {
+          rmCalls.push(path);
+        },
+      ),
+    UpgradeError,
+  );
+  assert.deepEqual(rmCalls, [FAKE_DOWNLOAD_DIR]);
+});
+
+test("runUpgrade continues past a failed web UI build download and still restarts an active service", async () => {
+  const appDir = "/existing/app/dir";
+  const { exec, calls } = recordingExec(
+    withWebBuildOk({
+      git: (args) => {
+        if (args.includes("rev-parse")) return { stdout: "true", stderr: "" };
+        if (args.includes("get-url")) return { stdout: "git@github.com:tanyudii/tmux-web\n", stderr: "" };
+        return { stdout: "", stderr: "" };
+      },
+      npm: () => ({ stdout: "", stderr: "" }),
+      gh: () => {
+        throw new Error("gh: command not found");
+      },
+      systemctl: (args) =>
+        args.includes("is-active") ? { stdout: "active", stderr: "" } : { stdout: "", stderr: "" },
+    }),
+  );
+  // Must stub refreshService here (as every other "service was active" test
+  // above does) -- leaving it unstubbed calls the REAL installService(),
+  // which does a real fs.writeFile of ~/.config/systemd/user/tmux-web.service
+  // on whatever machine the test runs on, independent of the mocked exec.
+  const refreshService = async (): Promise<void> => {};
+
+  await runUpgrade(["--tag", "v1.0.0"], {
+    exec,
+    appDir,
+    refreshService,
+    mkdirRecursive: noopMkdir,
+    mkdtemp: noopMkdtemp,
+  });
+
+  assert.ok(
+    calls.includes("systemctl --user restart tmux-web"),
+    "must still restart the service after a failed web build download",
+  );
+  assert.ok(!calls.some((c) => c.startsWith("tar")), "must not attempt extraction after a failed gh download");
 });
 
 function isGitAvailable(): boolean {
@@ -444,6 +651,61 @@ test(
       else process.env.npm_config_prefix = previousPrefix;
       await rm(fixtureDir, { recursive: true, force: true });
       await rm(npmPrefixDir, { recursive: true, force: true });
+    }
+  },
+);
+
+function isTarAvailable(): boolean {
+  try {
+    execFileSync("tar", ["--version"], { stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// downloadWebBuild's `gh` call is deliberately NOT covered by a real-process
+// test here (unlike the real-git/real-npm tests above): unlike a local git
+// remote or an npm install against a synthetic local fixture, `gh`
+// unavoidably needs network + auth (gh auth login/GH_TOKEN), which can't be
+// assumed in every dev sandbox or CI job. What this test exercises instead
+// is the actually mock-invisible risk: the nested-path extraction math --
+// does `-C targetDir` really land index.html where web-build.ts's
+// resolveWebBuildDir() looks for it? `gh` is stood in for with a fake that
+// just drops a pre-built fixture tarball where a real `gh release download`
+// would, so `tar` itself does the real extraction.
+test(
+  "real tar integration: downloadWebBuild extracts a synthetic release tarball into the exact path main.ts serves from",
+  { skip: !isTarAvailable() },
+  async () => {
+    const fixtureSrcDir = await mkdtemp(join(tmpdir(), "upgrade-test-web-src-"));
+    const fixtureTarDir = await mkdtemp(join(tmpdir(), "upgrade-test-web-tar-"));
+    const parentPath = await mkdtemp(join(tmpdir(), "upgrade-test-web-app-"));
+    const appDir = join(parentPath, "app");
+    try {
+      await writeFile(join(fixtureSrcDir, "index.html"), "<html>fake web ui</html>");
+      const tarPath = join(fixtureTarDir, "kmp-web.tar.gz");
+      await execFileAsync("tar", ["-czf", tarPath, "-C", fixtureSrcDir, "."]);
+
+      const exec: ExecFn = async (file, args, options) => {
+        if (file === "gh") {
+          const dirFlagIndex = args.indexOf("--dir");
+          const downloadDir = args[dirFlagIndex + 1];
+          await execFileAsync("cp", [tarPath, join(downloadDir, "kmp-web.tar.gz")]);
+          return { stdout: "", stderr: "" };
+        }
+        return defaultExec(file, args, options);
+      };
+
+      await downloadWebBuild(exec, appDir, "v9.9.9", "tanyudii/tmux-web");
+
+      const targetDir = join(appDir, "kmp", "composeApp", "build", "dist", "wasmJs", "productionExecutable");
+      assert.equal(await readFile(join(targetDir, "index.html"), "utf-8"), "<html>fake web ui</html>");
+      assert.equal(resolveWebBuildDir(targetDir), targetDir);
+    } finally {
+      await rm(fixtureSrcDir, { recursive: true, force: true });
+      await rm(fixtureTarDir, { recursive: true, force: true });
+      await rm(parentPath, { recursive: true, force: true });
     }
   },
 );
