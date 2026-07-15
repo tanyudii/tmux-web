@@ -21,14 +21,12 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
-import com.tanyudii.tmuxweb.data.remote.ApiError
 import com.tanyudii.tmuxweb.domain.model.ProjectSession
 import com.tanyudii.tmuxweb.domain.repository.ProjectsRepository
 import com.tanyudii.tmuxweb.domain.repository.SessionsRepository
 import com.tanyudii.tmuxweb.presentation.SessionListUiState
 import com.tanyudii.tmuxweb.presentation.SessionListViewModel
-import com.tanyudii.tmuxweb.presentation.runSuspendCatching
-import com.tanyudii.tmuxweb.presentation.toUiMessage
+import com.tanyudii.tmuxweb.presentation.deleteHandlingConflict
 import com.tanyudii.tmuxweb.ui.components.TmuxButton
 import com.tanyudii.tmuxweb.ui.components.TmuxButtonSize
 import com.tanyudii.tmuxweb.ui.components.TmuxButtonVariant
@@ -288,12 +286,13 @@ private fun sessionSubtitle(session: ProjectSession): String =
  * [SessionListViewModel] (which only owns *session* CRUD for one project):
  * this talks to [ProjectsRepository] directly, the same minimal-plumbing
  * pattern already used by `RepoPathPicker`/`WebShellScreen` for one-off
- * repository calls from the UI layer. Known limitation: the already-popped
- * Projects screen's own `ProjectListViewModel` instance doesn't know to
- * refresh, so a stale entry can briefly remain in its list until it next
- * reloads — a pre-existing nav-state-freshness gap, not introduced here.
+ * repository calls from the UI layer. Navigation always rebuilds a fresh
+ * [com.tanyudii.tmuxweb.presentation.ProjectListViewModel] on re-entry to
+ * the Projects screen (see its own `init { load() }` and how
+ * `ProjectListRoute` constructs it via `remember`), so there is no stale
+ * sibling-screen state to reconcile here after a delete.
  */
-private class DeleteProjectState(
+internal class DeleteProjectState(
     private val projectId: String,
     private val repository: ProjectsRepository,
     private val scope: CoroutineScope,
@@ -327,15 +326,12 @@ private class DeleteProjectState(
 
     private fun delete(force: Boolean) {
         scope.launch {
-            runSuspendCatching { repository.deleteProject(projectId, force) }
-                .onSuccess { onDeleted() }
-                .onFailure { error ->
-                    if (error is ApiError.Conflict) {
-                        pendingForceMessage = error.serverMessage
-                    } else {
-                        errorMessage = error.toUiMessage()
-                    }
-                }
+            deleteHandlingConflict(
+                delete = { repository.deleteProject(projectId, force) },
+                onSuccess = { onDeleted() },
+                onConflict = { message -> pendingForceMessage = message },
+                onError = { message -> errorMessage = message },
+            )
         }
     }
 }
