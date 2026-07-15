@@ -1,11 +1,23 @@
 name: Release
 
-# Manually-triggered semver release. Pick a bump level (patch/minor/major);
-# the workflow reads the latest v*.*.* tag, increments it, bumps package.json
-# + package-lock.json to match, commits "chore: release vX.Y.Z", creates a
-# lightweight tag (matching the existing v1.x tag convention), and pushes
-# both to main. This mirrors the manual release process documented in
-# CLAUDE.md -- keep them in sync if this changes.
+# Two ways to cut a semver release:
+#
+#  1. Manual (workflow_dispatch): pick a bump level (patch/minor/major) from
+#     the Actions tab.
+#  2. Automatic (push to main): the determine-release job reads every commit
+#     since the latest v*.*.* tag and picks the bump level itself from
+#     Conventional Commits prefixes -- any "type!:"/"BREAKING CHANGE" ->
+#     major, else any "feat:" -> minor, else any "fix:" -> patch, else (only
+#     chore/docs/refactor/test/ci/style commits landed) -> no release at all,
+#     not even an empty patch bump. This repo's own commit history (and its
+#     squash-merge convention, so one PR = one commit on main) already uses
+#     these prefixes consistently.
+#
+# Either way, the release job below reads the latest v*.*.* tag, increments
+# it, bumps package.json + package-lock.json to match, commits
+# "chore: release vX.Y.Z", creates a lightweight tag (matching the existing
+# v1.x tag convention), and pushes both to main. This mirrors the release
+# process documented in CLAUDE.md -- keep them in sync if this changes.
 #
 # Notes:
 #  - Runs the full typecheck + test suite as a gate before tagging, so a
@@ -14,8 +26,10 @@ name: Release
 #    always advances past whatever `tmuxweb upgrade`'s resolveLatestTag()
 #    (git ls-remote --tags --sort=-v:refname) would resolve.
 #  - Pushes with GITHUB_TOKEN, which does NOT re-trigger the push-to-main CI
-#    workflow (a GitHub limitation). The release commit is a version-only
-#    bump gated by the test step above, so that's acceptable.
+#    workflow (a GitHub limitation) -- this is what stops the release
+#    commit's own push from re-triggering this very workflow and looping.
+#    The release commit is a version-only bump gated by the test step above,
+#    so that's acceptable either way.
 
 on:
   workflow_dispatch:
@@ -29,18 +43,80 @@ on:
           - patch
           - minor
           - major
+  push:
+    branches: [main]
 
 permissions:
   contents: write
 
-# Two simultaneous release dispatches would race on the version number; queue
-# them rather than letting both compute the same "latest + 1".
+# Two simultaneous release runs would race on the version number; queue them
+# rather than letting both compute the same "latest + 1". Shared across both
+# jobs/triggers below, so a manual dispatch and an auto-triggered push never
+# race each other either.
 concurrency:
   group: release
   cancel-in-progress: false
 
 jobs:
+  determine-release:
+    runs-on: ubuntu-latest
+    outputs:
+      should_release: ${{ steps.decide.outputs.should_release }}
+      bump: ${{ steps.decide.outputs.bump }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # full history + every tag, to scan commits since the last release
+
+      - name: Decide whether to release, and at what bump level
+        id: decide
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          MANUAL_BUMP: ${{ inputs.bump }}
+        run: |
+          set -eu
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            echo "Manual dispatch: bump=$MANUAL_BUMP"
+            {
+              echo "should_release=true"
+              echo "bump=$MANUAL_BUMP"
+            } >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          latest=$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | awk 'NR==1{print; exit}')
+          if [ -z "$latest" ]; then
+            echo "::error::No v*.*.* tag found to increment from."
+            exit 1
+          fi
+
+          # %s%n%b per commit: check subject AND body, since a "BREAKING
+          # CHANGE:" footer conventionally lives in the body, not the
+          # subject line.
+          log=$(git log "$latest..HEAD" --format='%s%n%b')
+          bump=""
+          if printf '%s\n' "$log" | grep -qE '^[a-zA-Z]+(\([^)]*\))?!:|BREAKING CHANGE'; then
+            bump=major
+          elif printf '%s\n' "$log" | grep -qE '^feat(\([^)]*\))?:'; then
+            bump=minor
+          elif printf '%s\n' "$log" | grep -qE '^fix(\([^)]*\))?:'; then
+            bump=patch
+          fi
+
+          if [ -z "$bump" ]; then
+            echo "No feat/fix/breaking-change commits since $latest -- nothing to release."
+            echo "should_release=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "Auto-detected bump from commits since $latest: $bump"
+            {
+              echo "should_release=true"
+              echo "bump=$bump"
+            } >> "$GITHUB_OUTPUT"
+          fi
+
   release:
+    needs: determine-release
+    if: needs.determine-release.outputs.should_release == 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Refuse to release from outside main
@@ -78,7 +154,7 @@ jobs:
       - name: Compute next version
         id: next
         env:
-          BUMP: ${{ inputs.bump }}
+          BUMP: ${{ needs.determine-release.outputs.bump }}
         run: |
           set -eu
           bump="$BUMP"
