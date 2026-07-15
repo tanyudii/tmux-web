@@ -22,11 +22,19 @@ data class ComposeServiceStatus(
     val health: String? = null,
 )
 
+/** Mirrors `ResolvedOpenLink` in src/session-env.ts. */
+@Serializable
+data class EnvOpenLink(
+    val label: String,
+    val url: String,
+    val service: String,
+)
+
 /** Mirrors `EnvStatus` in src/session-env.ts. */
 @Serializable
 data class EnvStatus(
     val phase: EnvPhase,
-    val openUrl: String? = null,
+    val openLinks: List<EnvOpenLink>? = null,
     val message: String? = null,
     val services: List<ComposeServiceStatus>? = null,
 )

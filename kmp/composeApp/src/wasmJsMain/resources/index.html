@@ -14,6 +14,20 @@
          globalThis with no npm/webpack module wiring. See Spike B (docs/adr/0002-*). -->
     <script src="vendor/xterm.js"></script>
     <script src="vendor/addon-fit.js"></script>
+    <script>
+      // Kotlin/Wasm's JS interop generates a runtime `instanceof <ExternalClassName>`
+      // / `() => <ExternalClassName>` check for every `external class` (used for
+      // nullable-type safe casts) -- it expects a global matching the Kotlin class's
+      // *name*, not whatever name the underlying JS library actually exports.
+      // XtermJs.kt's `external class XtermTerminal`/`XtermFitAddon` construct real
+      // instances via `js("new Terminal(...)")`/`js("new FitAddon.FitAddon()")`, so
+      // without these aliases the generated check throws
+      // "XtermTerminal is not defined" the moment PlatformTerminalView.wasmJs.kt
+      // mounts a terminal, and the whole screen fails silently (blank pane, no
+      // rendered xterm rows).
+      window.XtermTerminal = Terminal;
+      window.XtermFitAddon = FitAddon.FitAddon;
+    </script>
     <script src="composeApp.js"></script>
 </body>
 </html>

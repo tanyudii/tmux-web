@@ -15,6 +15,7 @@ actual fun PlatformTerminalView(
     onBell: () -> Unit,
     onResize: (cols: Int, rows: Int) -> Unit,
     handleReady: (PlatformTerminalHandle) -> Unit,
+    isVisible: Boolean,
 ) {
     LaunchedEffect(Unit) { handleReady(PlatformTerminalHandle()) }
     Box(modifier = modifier)
