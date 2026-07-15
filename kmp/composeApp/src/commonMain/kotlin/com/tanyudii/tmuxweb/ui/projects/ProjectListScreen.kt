@@ -8,7 +8,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
@@ -16,7 +15,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.tanyudii.tmuxweb.domain.model.Project
@@ -24,6 +22,7 @@ import com.tanyudii.tmuxweb.domain.repository.ProjectsRepository
 import com.tanyudii.tmuxweb.presentation.ProjectListUiState
 import com.tanyudii.tmuxweb.presentation.ProjectListViewModel
 import com.tanyudii.tmuxweb.ui.components.TmuxConfirmDialog
+import com.tanyudii.tmuxweb.ui.components.TmuxEmptyState
 import com.tanyudii.tmuxweb.ui.components.TmuxErrorBanner
 import com.tanyudii.tmuxweb.ui.components.TmuxGroup
 import com.tanyudii.tmuxweb.ui.components.TmuxGroupDivider
@@ -138,7 +137,7 @@ private fun ProjectsListContent(
 ) {
     Column(modifier = modifier.verticalScroll(rememberScrollState()).padding(top = 12.dp)) {
         if (state.projects.isEmpty() && !state.isLoading) {
-            EmptyProjectsState()
+            TmuxEmptyState(icon = TmuxIcons.Folder, title = "No projects", subtitle = "Tap + to add one.")
             return@Column
         }
         TmuxGroup {
@@ -167,29 +166,6 @@ private fun ProjectsListContent(
             fontFamily = TmuxFonts.sans,
             fontSize = TmuxTextSize.sm,
             modifier = Modifier.padding(horizontal = 22.dp),
-        )
-    }
-}
-
-@Composable
-private fun EmptyProjectsState() {
-    Column(
-        horizontalAlignment = Alignment.CenterHorizontally,
-        modifier = Modifier.fillMaxWidth().padding(top = 48.dp, start = 30.dp, end = 30.dp),
-    ) {
-        Icon(
-            TmuxIcons.Folder,
-            contentDescription = null,
-            tint = TmuxColors.textTertiary,
-            modifier = Modifier.padding(bottom = 10.dp),
-        )
-        Text("No projects", color = TmuxColors.textTertiary, fontFamily = TmuxFonts.sans, fontSize = TmuxTextSize.md)
-        Text(
-            "Tap + to add one.",
-            color = TmuxColors.textTertiary,
-            fontFamily = TmuxFonts.sans,
-            fontSize = TmuxTextSize.sm,
-            modifier = Modifier.padding(top = 4.dp),
         )
     }
 }

@@ -21,6 +21,7 @@ import com.tanyudii.tmuxweb.ui.components.TmuxConnectionBanner
 import com.tanyudii.tmuxweb.ui.components.TmuxConnectionStatus
 import com.tanyudii.tmuxweb.ui.components.TmuxEnvironmentMenu
 import com.tanyudii.tmuxweb.ui.components.TmuxNavBar
+import com.tanyudii.tmuxweb.ui.components.TmuxNavBarBack
 import com.tanyudii.tmuxweb.ui.theme.TmuxColors
 import org.koin.compose.koinInject
 
@@ -73,8 +74,7 @@ private fun TerminalScreen(
     Column(modifier = Modifier.fillMaxSize().background(TmuxColors.bgTerminal)) {
         TmuxNavBar(
             title = title,
-            onBack = onBack,
-            backLabel = backLabel,
+            back = TmuxNavBarBack(label = backLabel, onClick = onBack),
             right = {
                 TmuxEnvironmentMenu(
                     status = envState.status,
