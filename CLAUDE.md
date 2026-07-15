@@ -211,12 +211,32 @@ covered by mocked unit tests only.
 ## Cutting a release
 
 Releases are cut by the **Release** workflow (`.github/workflows/release.yml`),
-triggered manually from the Actions tab: pick a bump level (patch/minor/major)
-and it reads the latest `v*.*.*` tag, increments it, bumps `package.json` +
-`package-lock.json` (the three `tmux-web` version fields only -- top-level in
-both files plus `packages[""].version` in the lockfile), runs typecheck + the
-full test suite as a gate, then commits `chore: release vX.Y.Z`, creates a
-lightweight tag, and pushes both to `main`. It refuses to run off `main`.
+two ways:
+
+1. **Manual**, from the Actions tab: pick a bump level (patch/minor/major).
+2. **Automatic**, on every push to `main`: the workflow's `determine-release`
+   job scans every commit since the latest `v*.*.*` tag for Conventional
+   Commits prefixes and picks the bump level itself -- any `type!:` or
+   `BREAKING CHANGE` footer -> major, else any `feat:` -> minor, else any
+   `fix:` -> patch, else (only `chore`/`docs`/`refactor`/`test`/`ci`/`style`
+   commits landed since the last tag) -> **no release at all**, not even an
+   empty patch bump. This relies on the repo's existing squash-merge
+   convention (one PR = one commit on `main`) and its already-consistent use
+   of these prefixes -- see recent `git log --oneline` for real examples.
+
+Either way, the `release` job (gated behind `determine-release` actually
+deciding to release) reads the latest `v*.*.*` tag, increments it, bumps
+`package.json` + `package-lock.json` (the three `tmux-web` version fields
+only -- top-level in both files plus `packages[""].version` in the
+lockfile), runs typecheck + the full test suite as a gate, then commits
+`chore: release vX.Y.Z`, creates a lightweight tag, and pushes both to
+`main`. It refuses to run off `main`.
+
+**Why the auto-trigger doesn't loop on itself**: the release job's
+`chore: release vX.Y.Z` push uses the default `GITHUB_TOKEN`, and pushes
+authenticated that way do not re-trigger `on: push` workflow runs (a
+deliberate GitHub Actions safeguard) -- so the release commit landing on
+`main` does not cause `determine-release` to run again for it.
 
 The version is computed from the latest *tag* (not `package.json`), matching
 what `tmuxweb upgrade`'s `resolveLatestTag()` resolves (`git ls-remote --tags
