@@ -1,8 +1,9 @@
 import { WebSocketServer, type WebSocket } from "ws";
-import { pathToFileURL } from "node:url";
+import { pathToFileURL, fileURLToPath } from "node:url";
 import { join } from "node:path";
 import { createServer } from "./server.ts";
 import { readConfig, ConfigError, defaultConfigDir } from "./config.ts";
+import { resolveWebBuildDir } from "./web-build.ts";
 import { listSessions, createSession, killSession, isValidSessionName } from "./tmux.ts";
 import { extractQueryToken, verifyToken } from "./auth.ts";
 import { attachPtyToSocket, type SocketLike } from "./pty-bridge.ts";
@@ -42,6 +43,14 @@ import { sanitizeServiceName } from "./service-name.ts";
 
 const DEFAULT_COLS = 80;
 const DEFAULT_ROWS = 24;
+
+// Default location of the KMP Web client's compiled output relative to this
+// file (src/main.ts) -- see kmp/composeApp/build.gradle.kts's wasmJs target
+// and .claude/plans/rebuild-web-ios-kmp.plan.md Phase 6 "Cutover".
+// Overridable via TMUX_WEB_PUBLIC_DIR for non-standard install layouts.
+const DEFAULT_WEB_BUILD_DIR = fileURLToPath(
+  new URL("../kmp/composeApp/build/dist/wasmJs/productionExecutable", import.meta.url),
+);
 
 interface DestroyableSocket {
   write(data: string): void;
@@ -94,8 +103,17 @@ export async function main(): Promise<void> {
     worktreesRoot,
   };
 
+  const webBuildDir = resolveWebBuildDir(process.env.TMUX_WEB_PUBLIC_DIR ?? DEFAULT_WEB_BUILD_DIR);
+  if (!webBuildDir) {
+    console.log(
+      `Web client build not found (looked in ${process.env.TMUX_WEB_PUBLIC_DIR ?? DEFAULT_WEB_BUILD_DIR}) -- ` +
+        "serving API only. Run `./gradlew :composeApp:wasmJsBrowserDistribution` in kmp/ to enable it.",
+    );
+  }
+
   const httpServer = createServer({
     token: config.token,
+    publicDir: webBuildDir,
 
     listProjects: () => loadProjects(projectsFile),
     registerProject: (name, repoPath) =>

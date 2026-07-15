@@ -65,6 +65,10 @@ const MIME_TYPES: Record<string, string> = {
   ".html": "text/html; charset=utf-8",
   ".js": "text/javascript; charset=utf-8",
   ".css": "text/css; charset=utf-8",
+  // Required for WebAssembly.instantiateStreaming() -- the KMP Kotlin/Wasm
+  // build's entry point fetches its .wasm binaries directly and needs this
+  // exact content type, not the application/octet-stream default.
+  ".wasm": "application/wasm",
 };
 
 function sendJson(res: ServerResponse, status: number, body: unknown): void {

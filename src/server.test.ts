@@ -930,6 +930,24 @@ test("returns 404 for a nonexistent static file under publicDir", async () => {
   }
 });
 
+// A KMP Kotlin/Wasm build's `WebAssembly.instantiateStreaming()` requires the
+// server to answer with `Content-Type: application/wasm` -- browsers reject
+// (or silently fall back to the slower non-streaming path for) a `.wasm`
+// response served as the default `application/octet-stream`.
+test("serves .wasm static files with the application/wasm content type", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tmux-web-public-"));
+  await writeFile(join(dir, "app.wasm"), Buffer.from([0x00, 0x61, 0x73, 0x6d]));
+  try {
+    await withServer(makeDeps({ publicDir: dir }), async (baseUrl) => {
+      const res = await fetch(`${baseUrl}/app.wasm`);
+      assert.equal(res.status, 200);
+      assert.equal(res.headers.get("content-type"), "application/wasm");
+    });
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test("unknown routes return 404", async () => {
   await withServer(makeDeps(), async (baseUrl) => {
     const res = await fetch(`${baseUrl}/does-not-exist`, { headers: authHeaders() });
