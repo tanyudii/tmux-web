@@ -41,6 +41,7 @@ class TerminalViewModel(
     private var connectionJob: Job? = null
     private var connectedSessionFullName: String? = null
     private var lastBellAlertAt: Long? = null
+    private var lastRequestedSize: Pair<Int, Int>? = null
 
     fun connect(sessionFullName: String) {
         connectedSessionFullName = sessionFullName
@@ -66,6 +67,7 @@ class TerminalViewModel(
 
     fun onResize(cols: Int, rows: Int) {
         if (cols <= 0 || rows <= 0) return
+        lastRequestedSize = cols to rows
         scope.launch { socket.send(ClientMessage.Resize(cols, rows)) }
     }
 
@@ -88,7 +90,18 @@ class TerminalViewModel(
 
     private suspend fun handleEvent(event: TerminalEvent) {
         when (event) {
-            is TerminalEvent.Opened -> _state.update { it.copy(isConnected = true) }
+            is TerminalEvent.Opened -> {
+                _state.update { it.copy(isConnected = true) }
+                // TerminalSocket.send() (KtorTerminalSocket) silently no-ops
+                // until its underlying WS session exists -- and the platform
+                // terminal view's first fit()/resize typically fires at
+                // mount time, well before this Opened event, so that first
+                // resize is otherwise lost with no retry. Re-sending
+                // whatever size we last know about here is what actually
+                // gets the server (and therefore tmux) synced to the real
+                // terminal size instead of staying at tmux's own default.
+                lastRequestedSize?.let { (cols, rows) -> socket.send(ClientMessage.Resize(cols, rows)) }
+            }
             is TerminalEvent.Output -> _output.emit(event.bytes)
             is TerminalEvent.Closed -> _state.update { it.copy(isConnected = false) }
         }

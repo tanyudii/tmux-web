@@ -14,6 +14,7 @@ import androidx.compose.material.icons.outlined.Circle
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.DeleteOutline
 import androidx.compose.material.icons.outlined.Dns
+import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.KeyboardArrowDown
 import androidx.compose.material.icons.outlined.Link
@@ -67,4 +68,5 @@ object TmuxIcons {
     val Square: ImageVector = Icons.Outlined.Stop
     val Box: ImageVector = Icons.Outlined.Widgets
     val ExternalLink: ImageVector = Icons.AutoMirrored.Outlined.OpenInNew
+    val Edit: ImageVector = Icons.Outlined.Edit
 }

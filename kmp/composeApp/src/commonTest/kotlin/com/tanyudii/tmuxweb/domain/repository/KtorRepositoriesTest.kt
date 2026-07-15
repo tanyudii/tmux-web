@@ -111,12 +111,16 @@ class KtorRepositoriesTest {
     @Test
     fun `envStatus decodes running phase`() = runTest {
         val repo = KtorEnvironmentRepository(
-            client(HttpStatusCode.OK, """{"phase":"running","openUrl":"http://localhost:1234"}"""),
+            client(
+                HttpStatusCode.OK,
+                """{"phase":"running","openLinks":[{"label":"web","url":"http://localhost:1234","service":"web"}]}""",
+            ),
         )
 
         val status = repo.envStatus("p1", "my-branch")
 
-        assertEquals("http://localhost:1234", status.openUrl)
+        assertEquals("http://localhost:1234", status.openLinks?.single()?.url)
+        assertEquals("web", status.openLinks?.single()?.service)
     }
 
     @Test

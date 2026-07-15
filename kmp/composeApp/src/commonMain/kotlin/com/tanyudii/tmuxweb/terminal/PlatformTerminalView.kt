@@ -10,6 +10,15 @@ import androidx.compose.ui.Modifier
  *
  * [handleReady] fires once the underlying native terminal is constructed, handing
  * back a [PlatformTerminalHandle] the caller uses to push PTY bytes / resize.
+ *
+ * [isVisible] defaults to true and only matters on wasmJs: a native interop
+ * DOM element (xterm.js) always paints above Compose-canvas content, including
+ * `Popup`/`Dialog`, regardless of composition order — a known Compose
+ * Multiplatform Web limitation, not a bug in this app's own layering. Callers
+ * showing a modal over the terminal should flip this to false for the
+ * duration so the dialog isn't visually covered; the terminal instance itself
+ * stays mounted (no reconnect/blank flash) since this only toggles CSS
+ * visibility, not composition.
  */
 @Composable
 expect fun PlatformTerminalView(
@@ -18,6 +27,7 @@ expect fun PlatformTerminalView(
     onBell: () -> Unit,
     onResize: (cols: Int, rows: Int) -> Unit,
     handleReady: (PlatformTerminalHandle) -> Unit,
+    isVisible: Boolean = true,
 )
 
 expect class PlatformTerminalHandle {

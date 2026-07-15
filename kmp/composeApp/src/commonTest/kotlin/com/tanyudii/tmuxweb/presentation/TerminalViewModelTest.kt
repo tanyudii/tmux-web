@@ -94,6 +94,35 @@ class TerminalViewModelTest {
     }
 
     @Test
+    fun `a resize sent before the socket opens is retransmitted once it does`() = runTest {
+        // PlatformTerminalView's initial fit() fires onResize essentially at
+        // mount time, which can easily race ahead of the WS handshake --
+        // KtorTerminalSocket.send() silently no-ops while its session is
+        // still null, so without this retransmit the server (and therefore
+        // tmux) would never learn the real terminal size at all.
+        val socket = FakeTerminalSocket()
+        val viewModel = viewModel(socket)
+        viewModel.connect("proj__main")
+
+        viewModel.onResize(120, 40)
+        socket.events.emit(TerminalEvent.Opened)
+
+        val expected: List<ClientMessage> = listOf(ClientMessage.Resize(120, 40), ClientMessage.Resize(120, 40))
+        assertEquals(expected, socket.sentMessages)
+    }
+
+    @Test
+    fun `opened event with no prior resize does not send a spurious resize`() = runTest {
+        val socket = FakeTerminalSocket()
+        val viewModel = viewModel(socket)
+        viewModel.connect("proj__main")
+
+        socket.events.emit(TerminalEvent.Opened)
+
+        assertTrue(socket.sentMessages.isEmpty())
+    }
+
+    @Test
     fun `onScroll sends a Scroll message for positive line counts`() = runTest {
         val socket = FakeTerminalSocket()
         viewModel(socket).onScroll(ClientMessage.ScrollDirection.UP, 3)
