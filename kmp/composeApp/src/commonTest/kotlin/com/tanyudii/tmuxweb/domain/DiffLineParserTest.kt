@@ -8,7 +8,7 @@ import kotlin.test.assertTrue
 /** Ports public/diff-parser.test.js 1:1 (see commit 94514e6, removed from the repo in 2d3b55c's cutover to kmp/). */
 class DiffLineParserTest {
     @Test
-    fun `parses a single hunk with add, del and context lines`() {
+    fun `parses a single hunk with add and del and context lines`() {
         // Arrange
         val text = listOf(
             "diff --git a/file.txt b/file.txt",
