@@ -15,7 +15,7 @@ import {
   downloadWebBuild,
   defaultExec,
 } from "./upgrade.ts";
-import type { ExecFn } from "./upgrade.ts";
+import type { ExecFn, SpawnFn } from "./upgrade.ts";
 import { resolveWebBuildDir } from "../web-build.ts";
 
 const execFileAsync = promisify(execFileCb);
@@ -90,7 +90,13 @@ test("runUpgrade clones fresh when appDir is not an existing git repo", async ()
     }),
   );
 
-  await runUpgrade(["--tag", "v1.0.0"], { exec, appDir, mkdirRecursive: noopMkdir, mkdtemp: noopMkdtemp });
+  await runUpgrade(["--tag", "v1.0.0"], {
+    exec,
+    appDir,
+    isReexecChild: true,
+    mkdirRecursive: noopMkdir,
+    mkdtemp: noopMkdtemp,
+  });
 
   assert.deepEqual(calls, [
     `git -C ${appDir} rev-parse --is-inside-work-tree`,
@@ -118,7 +124,13 @@ test("runUpgrade installs the explicitly requested tag without calling git ls-re
     }),
   );
 
-  await runUpgrade(["--tag", "v1.0.0"], { exec, appDir, mkdirRecursive: noopMkdir, mkdtemp: noopMkdtemp });
+  await runUpgrade(["--tag", "v1.0.0"], {
+    exec,
+    appDir,
+    isReexecChild: true,
+    mkdirRecursive: noopMkdir,
+    mkdtemp: noopMkdtemp,
+  });
 
   assert.deepEqual(calls, [
     `git -C ${appDir} rev-parse --is-inside-work-tree`,
@@ -149,7 +161,7 @@ test("runUpgrade resolves the latest tag when --tag is omitted", async () => {
     }),
   );
 
-  await runUpgrade([], { exec, appDir, mkdirRecursive: noopMkdir, mkdtemp: noopMkdtemp });
+  await runUpgrade([], { exec, appDir, isReexecChild: true, mkdirRecursive: noopMkdir, mkdtemp: noopMkdtemp });
 
   assert.deepEqual(calls, [
     "git ls-remote --sort=-v:refname --tags git@github.com:tanyudii/tmux-web",
@@ -180,7 +192,13 @@ test("runUpgrade fetches and checks out the tag when appDir is already a matchin
     }),
   );
 
-  await runUpgrade(["--tag", "v2.0.0"], { exec, appDir, mkdirRecursive: noopMkdir, mkdtemp: noopMkdtemp });
+  await runUpgrade(["--tag", "v2.0.0"], {
+    exec,
+    appDir,
+    isReexecChild: true,
+    mkdirRecursive: noopMkdir,
+    mkdtemp: noopMkdtemp,
+  });
 
   assert.ok(!calls.some((c) => c.includes("clone --branch")), "must not re-clone an existing matching checkout");
   assert.deepEqual(calls, [
@@ -211,7 +229,13 @@ test("runUpgrade treats an origin remote with a trailing .git as matching (no re
     }),
   );
 
-  await runUpgrade(["--tag", "v1.0.0"], { exec, appDir, mkdirRecursive: noopMkdir, mkdtemp: noopMkdtemp });
+  await runUpgrade(["--tag", "v1.0.0"], {
+    exec,
+    appDir,
+    isReexecChild: true,
+    mkdirRecursive: noopMkdir,
+    mkdtemp: noopMkdtemp,
+  });
 
   assert.ok(
     !calls.some((c) => c.includes("clone --branch")),
@@ -320,6 +344,7 @@ test("runUpgrade refreshes the systemd unit and restarts when the service was ac
     exec,
     appDir,
     refreshService,
+    isReexecChild: true,
     mkdirRecursive: noopMkdir,
     mkdtemp: noopMkdtemp,
   });
@@ -362,6 +387,7 @@ test("runUpgrade does not refresh the systemd unit when the service is not activ
     exec,
     appDir,
     refreshService,
+    isReexecChild: true,
     mkdirRecursive: noopMkdir,
     mkdtemp: noopMkdtemp,
   });
@@ -391,6 +417,7 @@ test("runUpgrade still restarts the service when refreshing the systemd unit fai
     exec,
     appDir,
     refreshService,
+    isReexecChild: true,
     mkdirRecursive: noopMkdir,
     mkdtemp: noopMkdtemp,
   });
@@ -424,6 +451,7 @@ test("runUpgrade honors an explicit --app-dir over the default", async () => {
 
   await runUpgrade(["--tag", "v1.0.0", "--app-dir", customAppDir], {
     exec,
+    isReexecChild: true,
     mkdirRecursive: noopMkdir,
     mkdtemp: noopMkdtemp,
   });
@@ -554,6 +582,7 @@ test("runUpgrade continues past a failed web UI build download and still restart
     exec,
     appDir,
     refreshService,
+    isReexecChild: true,
     mkdirRecursive: noopMkdir,
     mkdtemp: noopMkdtemp,
   });
@@ -563,6 +592,117 @@ test("runUpgrade continues past a failed web UI build download and still restart
     "must still restart the service after a failed web build download",
   );
   assert.ok(!calls.some((c) => c.startsWith("tar")), "must not attempt extraction after a failed gh download");
+});
+
+test("runUpgrade re-execs into the freshly-installed bin/tmuxweb.ts instead of finishing the upgrade itself", async () => {
+  const appDir = "/existing/app/dir";
+  const { exec, calls } = recordingExec({
+    git: (args) => {
+      if (args.includes("rev-parse")) return { stdout: "true", stderr: "" };
+      if (args.includes("get-url")) return { stdout: "git@github.com:tanyudii/tmux-web\n", stderr: "" };
+      return { stdout: "", stderr: "" };
+    },
+    npm: () => ({ stdout: "", stderr: "" }),
+  });
+  const spawnCalls: Array<{ command: string; args: string[]; env?: NodeJS.ProcessEnv }> = [];
+  const spawn: SpawnFn = async (command, args, options) => {
+    spawnCalls.push({ command, args, env: options.env });
+    return 0;
+  };
+
+  await runUpgrade(["--tag", "v1.0.0"], { exec, appDir, spawn, mkdirRecursive: noopMkdir, mkdtemp: noopMkdtemp });
+
+  // The parent only clones/installs -- it must NOT itself download the web
+  // build or touch systemd, since the re-exec'd child owns the rest of the
+  // upgrade running the code that was JUST installed, not whatever this
+  // process already had loaded in memory.
+  assert.deepEqual(calls, [
+    `git -C ${appDir} rev-parse --is-inside-work-tree`,
+    `git -C ${appDir} remote get-url origin`,
+    `git -C ${appDir} fetch --depth 1 --force origin tag v1.0.0`,
+    `git -C ${appDir} checkout --force v1.0.0`,
+    `npm ci --omit=dev (cwd=${appDir})`,
+    `npm link (cwd=${appDir})`,
+  ]);
+  assert.equal(spawnCalls.length, 1);
+  assert.equal(spawnCalls[0].command, process.execPath);
+  assert.deepEqual(spawnCalls[0].args, [
+    "--experimental-strip-types",
+    join(appDir, "bin", "tmuxweb.ts"),
+    "upgrade",
+    "--tag",
+    "v1.0.0",
+    "--app-dir",
+    appDir,
+  ]);
+  assert.equal(spawnCalls[0].env?.TMUX_WEB_UPGRADE_REEXEC, "1");
+});
+
+test("runUpgrade throws UpgradeError when the re-exec'd child exits with a non-zero code", async () => {
+  const appDir = "/existing/app/dir";
+  const { exec } = recordingExec({
+    git: (args) => {
+      if (args.includes("rev-parse")) throw new Error("fatal: not a git repository");
+      return { stdout: "", stderr: "" };
+    },
+    npm: () => ({ stdout: "", stderr: "" }),
+  });
+  const spawn: SpawnFn = async () => 1;
+
+  await assert.rejects(
+    () => runUpgrade(["--tag", "v1.0.0"], { exec, appDir, spawn, mkdirRecursive: noopMkdir, mkdtemp: noopMkdtemp }),
+    UpgradeError,
+  );
+});
+
+test("runUpgrade skips the re-exec and finishes the upgrade directly when isReexecChild is set", async () => {
+  const appDir = "/existing/app/dir";
+  const { exec, calls } = recordingExec(
+    withWebBuildOk({
+      git: (args) => {
+        if (args.includes("rev-parse")) return { stdout: "true", stderr: "" };
+        if (args.includes("get-url")) return { stdout: "git@github.com:tanyudii/tmux-web\n", stderr: "" };
+        return { stdout: "", stderr: "" };
+      },
+      npm: () => ({ stdout: "", stderr: "" }),
+      systemctl: (args) =>
+        args.includes("is-active") ? { stdout: "inactive", stderr: "" } : { stdout: "", stderr: "" },
+    }),
+  );
+  const spawn: SpawnFn = async () => {
+    throw new Error("spawn must not be called when already the re-exec'd child");
+  };
+
+  await runUpgrade(["--tag", "v1.0.0"], {
+    exec,
+    appDir,
+    spawn,
+    isReexecChild: true,
+    mkdirRecursive: noopMkdir,
+    mkdtemp: noopMkdtemp,
+  });
+
+  assert.ok(calls.includes("gh release download v1.0.0 --repo tanyudii/tmux-web --pattern kmp-web.tar.gz --dir " +
+    `${FAKE_DOWNLOAD_DIR} --clobber`));
+});
+
+test("defaultSpawn resolves with the real child process's exit code", async () => {
+  const { defaultSpawn } = await import("./upgrade.ts");
+  const okCode = await defaultSpawn(process.execPath, ["-e", "process.exit(0)"], {});
+  assert.equal(okCode, 0);
+  const failCode = await defaultSpawn(process.execPath, ["-e", "process.exit(7)"], {});
+  assert.equal(failCode, 7);
+});
+
+test("defaultSpawn passes the given env through to the child", async () => {
+  const { defaultSpawn } = await import("./upgrade.ts");
+  const marker = "hello-from-parent";
+  const code = await defaultSpawn(
+    process.execPath,
+    ["-e", `process.exit(process.env.UPGRADE_TEST_MARKER === "${marker}" ? 0 : 1)`],
+    { env: { ...process.env, UPGRADE_TEST_MARKER: marker } },
+  );
+  assert.equal(code, 0);
 });
 
 function isGitAvailable(): boolean {
