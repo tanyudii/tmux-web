@@ -1,11 +1,9 @@
 package com.tanyudii.tmuxweb.ui.web
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
@@ -13,9 +11,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
@@ -30,21 +25,16 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import com.tanyudii.tmuxweb.domain.FileTreeNode
 import com.tanyudii.tmuxweb.domain.model.ChangedFile
 import com.tanyudii.tmuxweb.domain.model.DiffMode
 import com.tanyudii.tmuxweb.domain.model.EnvStatus
-import com.tanyudii.tmuxweb.domain.model.FileStatus
 import com.tanyudii.tmuxweb.domain.model.GroupedChanges
 import com.tanyudii.tmuxweb.domain.model.Project
 import com.tanyudii.tmuxweb.domain.model.ProjectSession
 import com.tanyudii.tmuxweb.domain.repository.ChangesRepository
-import com.tanyudii.tmuxweb.presentation.ChangeRow
 import com.tanyudii.tmuxweb.presentation.DiffViewModel
-import com.tanyudii.tmuxweb.presentation.buildChangeRows
 import com.tanyudii.tmuxweb.terminal.PlatformTerminalView
 import com.tanyudii.tmuxweb.ui.components.TmuxButton
 import com.tanyudii.tmuxweb.ui.components.TmuxButtonVariant
@@ -61,7 +51,6 @@ import com.tanyudii.tmuxweb.ui.theme.TmuxColors
 import com.tanyudii.tmuxweb.ui.theme.TmuxFonts
 import com.tanyudii.tmuxweb.ui.theme.TmuxIcons
 import com.tanyudii.tmuxweb.ui.theme.TmuxTextSize
-import com.tanyudii.tmuxweb.ui.theme.TmuxTracking
 import com.tanyudii.tmuxweb.ui.theme.TmuxWeight
 import org.koin.compose.koinInject
 
@@ -114,52 +103,24 @@ fun WebMainPane(
         // with TopBar) instead of hanging below a tab row that's mostly
         // empty once only a couple of tmux windows are open.
         Row(modifier = Modifier.weight(1f).fillMaxWidth()) {
-            Column(modifier = Modifier.weight(1f).fillMaxHeight()) {
-                TopBar(
-                    project = project,
-                    session = session,
-                    environment = environment,
-                    environmentBusy = environmentBusy,
-                    railOpen = railOpen,
-                    onToggleRail = onToggleRail,
-                    onEnvironmentRun = onEnvironmentRun,
-                    onEnvironmentStop = onEnvironmentStop,
-                    onEnvironmentMenuOpenChanged = { environmentMenuOpen = it },
-                )
-                WindowTabs(
-                    windowCount = session.windows,
-                    activeWindow = activeWindow,
-                    serverWindowNames = session.windowNames,
-                    onSelectWindow = onSelectWindow,
-                    onWindowsChanged = onWindowsChanged,
-                    terminal = terminal,
-                    onDialogOpenChanged = { windowDialogOpen = it },
-                )
-
-                if (!terminal.isConnected) {
-                    TmuxConnectionBanner(status = TmuxConnectionStatus.RECONNECTING, message = "Reconnecting to the server…")
-                }
-
-                Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
-                    // Keyed by session identity -- without this, switching
-                    // sessions directly (no intermediate null selection)
-                    // reuses the xterm.js instance instead of recreating it.
-                    val terminalVisible =
-                        isTerminalVisible && !environmentMenuOpen && !windowDialogOpen && diffTarget == null
-                    key(session.fullName) {
-                        PlatformTerminalView(
-                            modifier = Modifier.fillMaxSize(),
-                            onInput = terminal::onInput,
-                            onBell = terminal::onBell,
-                            onResize = terminal::onResize,
-                            handleReady = terminal.onHandleReady,
-                            isVisible = terminalVisible,
-                        )
-                    }
-                }
-
-                StatusFooter(session = session)
-            }
+            MainContent(
+                project = project,
+                session = session,
+                terminal = terminal,
+                environment = environment,
+                environmentBusy = environmentBusy,
+                railOpen = railOpen,
+                activeWindow = activeWindow,
+                onSelectWindow = onSelectWindow,
+                onWindowsChanged = onWindowsChanged,
+                onToggleRail = onToggleRail,
+                onEnvironmentRun = onEnvironmentRun,
+                onEnvironmentStop = onEnvironmentStop,
+                terminalVisible = isTerminalVisible && !environmentMenuOpen && !windowDialogOpen && diffTarget == null,
+                onEnvironmentMenuOpenChanged = { environmentMenuOpen = it },
+                onDialogOpenChanged = { windowDialogOpen = it },
+                modifier = Modifier.weight(1f).fillMaxHeight(),
+            )
             if (railOpen) {
                 ChangesRail(changes = changes, onFileClick = { file, mode -> diffTarget = DiffTarget(file, mode) })
             }
@@ -175,6 +136,80 @@ fun WebMainPane(
 }
 
 private data class DiffTarget(val file: ChangedFile, val mode: DiffMode)
+
+/**
+ * Top bar, tmux window tabs, terminal viewport, and status footer -- the
+ * left side of [WebMainPane]'s main Row, sized independently of
+ * [ChangesRail]. Split out purely to keep [WebMainPane] under the project's
+ * detekt line-count threshold -- no behavior change.
+ */
+@Composable
+private fun MainContent(
+    project: Project?,
+    session: ProjectSession,
+    terminal: TerminalSession,
+    environment: EnvStatus?,
+    environmentBusy: Boolean,
+    railOpen: Boolean,
+    activeWindow: Int,
+    onSelectWindow: (Int) -> Unit,
+    onWindowsChanged: () -> Unit,
+    onToggleRail: () -> Unit,
+    onEnvironmentRun: () -> Unit,
+    onEnvironmentStop: () -> Unit,
+    terminalVisible: Boolean,
+    onEnvironmentMenuOpenChanged: (Boolean) -> Unit,
+    onDialogOpenChanged: (Boolean) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Column(modifier = modifier) {
+        TopBar(
+            project = project,
+            session = session,
+            environment = environment,
+            environmentBusy = environmentBusy,
+            railOpen = railOpen,
+            onToggleRail = onToggleRail,
+            onEnvironmentRun = onEnvironmentRun,
+            onEnvironmentStop = onEnvironmentStop,
+            onEnvironmentMenuOpenChanged = onEnvironmentMenuOpenChanged,
+        )
+        WindowTabs(
+            windowCount = session.windows,
+            activeWindow = activeWindow,
+            serverWindowNames = session.windowNames,
+            onSelectWindow = onSelectWindow,
+            onWindowsChanged = onWindowsChanged,
+            terminal = terminal,
+            onDialogOpenChanged = onDialogOpenChanged,
+        )
+
+        if (!terminal.isConnected) {
+            TmuxConnectionBanner(
+                status = TmuxConnectionStatus.RECONNECTING,
+                message = "Reconnecting to the server…",
+            )
+        }
+
+        Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
+            // Keyed by session identity -- without this, switching sessions
+            // directly (no intermediate null selection) reuses the xterm.js
+            // instance instead of recreating it.
+            key(session.fullName) {
+                PlatformTerminalView(
+                    modifier = Modifier.fillMaxSize(),
+                    onInput = terminal::onInput,
+                    onBell = terminal::onBell,
+                    onResize = terminal::onResize,
+                    handleReady = terminal.onHandleReady,
+                    isVisible = terminalVisible,
+                )
+            }
+        }
+
+        StatusFooter(session = session)
+    }
+}
 
 /** Hosts [DiffDialogHost] once a [DiffTarget] is picked -- split out purely to keep [WebMainPane] short. */
 @Composable
