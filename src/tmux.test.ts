@@ -2,8 +2,10 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   parseSessionList,
+  parseWindowList,
   isValidSessionName,
   listSessions,
+  listWindows,
   createSession,
   killSession,
   getPaneMode,
@@ -100,6 +102,51 @@ test("listSessions rethrows unexpected errors", async () => {
   };
 
   await assert.rejects(() => listSessions(fakeExec), /tmux binary not found/);
+});
+
+test("parseWindowList returns an empty array for empty output", () => {
+  assert.deepEqual(parseWindowList(""), []);
+});
+
+test("parseWindowList parses multiple windows in index order", () => {
+  const output = "0\tbash\n1\tserver\n";
+  assert.deepEqual(parseWindowList(output), [
+    { index: 0, name: "bash" },
+    { index: 1, name: "server" },
+  ]);
+});
+
+test("parseWindowList ignores blank trailing lines", () => {
+  assert.deepEqual(parseWindowList("0\tbash\n\n"), [{ index: 0, name: "bash" }]);
+});
+
+test("listWindows rejects invalid session names without calling exec", async () => {
+  let called = false;
+  const fakeExec = async () => {
+    called = true;
+    return { stdout: "" };
+  };
+
+  await assert.rejects(() => listWindows("-t", fakeExec), ValidationError);
+  assert.equal(called, false);
+});
+
+test("listWindows calls tmux list-windows -t <name> with a parseable format and returns parsed windows", async () => {
+  const calls: Array<{ file: string; args: string[] }> = [];
+  const fakeExec = async (file: string, args: string[]) => {
+    calls.push({ file, args });
+    return { stdout: "0\tbash\n1\tserver\n" };
+  };
+
+  const result = await listWindows("main", fakeExec);
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].file, "tmux");
+  assert.deepEqual(calls[0].args, ["list-windows", "-t", "main", "-F", "#{window_index}\t#{window_name}"]);
+  assert.deepEqual(result, [
+    { index: 0, name: "bash" },
+    { index: 1, name: "server" },
+  ]);
 });
 
 test("createSession rejects invalid names without calling exec", async () => {
