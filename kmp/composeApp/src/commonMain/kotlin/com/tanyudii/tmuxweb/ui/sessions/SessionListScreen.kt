@@ -8,7 +8,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
@@ -18,7 +17,6 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.tanyudii.tmuxweb.domain.model.ProjectSession
@@ -31,6 +29,7 @@ import com.tanyudii.tmuxweb.ui.components.TmuxButton
 import com.tanyudii.tmuxweb.ui.components.TmuxButtonSize
 import com.tanyudii.tmuxweb.ui.components.TmuxButtonVariant
 import com.tanyudii.tmuxweb.ui.components.TmuxConfirmDialog
+import com.tanyudii.tmuxweb.ui.components.TmuxEmptyState
 import com.tanyudii.tmuxweb.ui.components.TmuxErrorBanner
 import com.tanyudii.tmuxweb.ui.components.TmuxGroup
 import com.tanyudii.tmuxweb.ui.components.TmuxGroupDivider
@@ -38,6 +37,7 @@ import com.tanyudii.tmuxweb.ui.components.TmuxIconButton
 import com.tanyudii.tmuxweb.ui.components.TmuxIconButtonSize
 import com.tanyudii.tmuxweb.ui.components.TmuxListRow
 import com.tanyudii.tmuxweb.ui.components.TmuxNavBar
+import com.tanyudii.tmuxweb.ui.components.TmuxNavBarBack
 import com.tanyudii.tmuxweb.ui.components.TmuxProgressBar
 import com.tanyudii.tmuxweb.ui.components.TmuxStatusBadge
 import com.tanyudii.tmuxweb.ui.components.TmuxStatusTone
@@ -102,8 +102,7 @@ private fun SessionListScreen(
     Column(modifier = Modifier.fillMaxSize().background(TmuxColors.bgSurface)) {
         TmuxNavBar(
             title = projectName,
-            onBack = onBack,
-            backLabel = "Projects",
+            back = TmuxNavBarBack(label = "Projects", onClick = onBack),
             right = {
                 TmuxIconButton(
                     icon = TmuxIcons.Plus,
@@ -154,7 +153,15 @@ private fun SessionsBody(
     Column(modifier = modifier.verticalScroll(rememberScrollState()).padding(top = 8.dp)) {
         state.sessionCreation?.let { creation -> CreatingSessionCard(creation.progressMessage) }
         when {
-            state.sessions.isEmpty() && state.sessionCreation == null -> EmptySessionsState()
+            state.sessions.isEmpty() && state.sessionCreation == null -> {
+                TmuxEmptyState(
+                    icon = TmuxIcons.Terminal,
+                    title = "No active sessions",
+                    subtitle = "Tap + to start one.",
+                    titleColor = TmuxColors.textPrimary,
+                    titleSize = TmuxTextSize.base,
+                )
+            }
             else -> SessionsGroup(state.sessions, viewModel, onOpenSession)
         }
         Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
@@ -245,34 +252,6 @@ private fun CreatingSessionCard(progressMessage: String?) {
             .padding(14.dp),
     ) {
         TmuxProgressBar(label = progressMessage ?: "Creating session…")
-    }
-}
-
-@Composable
-private fun EmptySessionsState() {
-    Column(
-        horizontalAlignment = Alignment.CenterHorizontally,
-        modifier = Modifier.fillMaxWidth().padding(top = 48.dp, start = 30.dp, end = 30.dp),
-    ) {
-        Icon(
-            TmuxIcons.Terminal,
-            contentDescription = null,
-            tint = TmuxColors.textTertiary,
-            modifier = Modifier.padding(bottom = 10.dp),
-        )
-        Text(
-            "No active sessions",
-            color = TmuxColors.textPrimary,
-            fontFamily = TmuxFonts.sans,
-            fontSize = TmuxTextSize.base,
-        )
-        Text(
-            "Tap + to start one.",
-            color = TmuxColors.textTertiary,
-            fontFamily = TmuxFonts.sans,
-            fontSize = TmuxTextSize.sm,
-            modifier = Modifier.padding(top = 4.dp),
-        )
     }
 }
 

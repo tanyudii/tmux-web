@@ -31,6 +31,16 @@ import com.tanyudii.tmuxweb.ui.theme.TmuxWeight
 private val NAV_RAIL_MIN_WIDTH = 76.dp
 private val BACK_CHEVRON_SIZE = 22.dp
 
+/**
+ * A back control's label and click handler as one atomic unit — bundled
+ * (rather than two separate `onBack`/`backLabel` parameters, one with an
+ * unused default) so a caller can't supply one without the other: every
+ * call site that needs a back button was already passing both explicitly,
+ * and the two that don't just omit [TmuxNavBar]'s `back` parameter
+ * entirely instead of needing a meaningless label value.
+ */
+data class TmuxNavBarBack(val label: String, val onClick: () -> Unit)
+
 /** One-off large-title size/tracking — the handoff hardcodes 32px/-0.02em here rather than reusing a UI-scale token. */
 private val LARGE_TITLE_SIZE = 32.sp
 private val LARGE_TITLE_TRACKING = (-0.02).em
@@ -50,8 +60,7 @@ fun TmuxNavBar(
     title: String,
     modifier: Modifier = Modifier,
     large: Boolean = false,
-    onBack: (() -> Unit)? = null,
-    backLabel: String = "Back",
+    back: TmuxNavBarBack? = null,
     leading: @Composable RowScope.() -> Unit = {},
     right: @Composable RowScope.() -> Unit = {},
 ) {
@@ -61,8 +70,8 @@ fun TmuxNavBar(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Box(modifier = Modifier.widthIn(min = NAV_RAIL_MIN_WIDTH), contentAlignment = Alignment.CenterStart) {
-                if (onBack != null) {
-                    BackControl(label = backLabel, onClick = onBack)
+                if (back != null) {
+                    BackControl(label = back.label, onClick = back.onClick)
                 } else {
                     Row(verticalAlignment = Alignment.CenterVertically, content = leading)
                 }
