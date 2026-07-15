@@ -119,6 +119,68 @@ class ProjectListViewModelTest {
     }
 
     @Test
+    fun `showNewProjectSheet opens sheet in non-saving state`() = runTest {
+        val viewModel = viewModel(FakeProjectsRepository())
+
+        viewModel.state.test {
+            awaitItem()
+            viewModel.showNewProjectSheet()
+            val state = awaitItem()
+            assertEquals(false, state.newProject?.isSaving)
+            assertNull(state.newProject?.errorMessage)
+        }
+    }
+
+    @Test
+    fun `cancelNewProject closes the sheet`() = runTest {
+        val viewModel = viewModel(FakeProjectsRepository())
+
+        viewModel.state.test {
+            awaitItem()
+            viewModel.showNewProjectSheet()
+            awaitItem()
+            viewModel.cancelNewProject()
+            assertNull(awaitItem().newProject)
+        }
+    }
+
+    @Test
+    fun `createProject adds the created project and closes the sheet`() = runTest {
+        val repository = FakeProjectsRepository()
+        val viewModel = viewModel(repository)
+
+        viewModel.state.test {
+            awaitItem()
+            viewModel.showNewProjectSheet()
+            awaitItem()
+            viewModel.createProject("demo", "/repo")
+            val saving = awaitItem()
+            assertEquals(true, saving.newProject?.isSaving)
+            val created = awaitItem()
+            assertNull(created.newProject)
+            assertEquals(listOf(repository.projects.single()), created.projects)
+        }
+    }
+
+    @Test
+    fun `createProject failure surfaces error on the sheet without closing it`() = runTest {
+        val repository = FakeProjectsRepository().apply { createError = ApiError.Server(500, "boom") }
+        val viewModel = viewModel(repository)
+
+        viewModel.state.test {
+            awaitItem()
+            viewModel.showNewProjectSheet()
+            awaitItem()
+            viewModel.createProject("demo", "/repo")
+            awaitItem()
+            val failed = awaitItem()
+            assertEquals(false, failed.newProject?.isSaving)
+            assertEquals("boom", failed.newProject?.errorMessage)
+            assertEquals(emptyList(), failed.projects)
+        }
+    }
+
+    @Test
     fun `dismissError clears error message`() = runTest {
         val repository = FakeProjectsRepository().apply { listError = ApiError.Server(500, "boom") }
         val viewModel = viewModel(repository)

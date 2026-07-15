@@ -1,18 +1,60 @@
 package com.tanyudii.tmuxweb.di
 
+import com.tanyudii.tmuxweb.data.local.BaseUrlStore
+import com.tanyudii.tmuxweb.data.local.TokenStore
+import com.tanyudii.tmuxweb.data.remote.ConnectionTester
+import com.tanyudii.tmuxweb.data.remote.KtorConnectionTester
+import com.tanyudii.tmuxweb.data.remote.TmuxWebHttpClient
+import com.tanyudii.tmuxweb.data.remote.createTmuxWebHttpClient
+import com.tanyudii.tmuxweb.data.remote.terminal.KtorTerminalSocket
+import com.tanyudii.tmuxweb.data.remote.terminal.TerminalSocket
+import com.tanyudii.tmuxweb.domain.repository.ChangesRepository
+import com.tanyudii.tmuxweb.domain.repository.ConnectionSettingsStore
+import com.tanyudii.tmuxweb.domain.repository.DefaultConnectionSettingsStore
+import com.tanyudii.tmuxweb.domain.repository.EnvironmentRepository
+import com.tanyudii.tmuxweb.domain.repository.KtorChangesRepository
+import com.tanyudii.tmuxweb.domain.repository.KtorEnvironmentRepository
+import com.tanyudii.tmuxweb.domain.repository.KtorProjectsRepository
+import com.tanyudii.tmuxweb.domain.repository.KtorSessionsRepository
+import com.tanyudii.tmuxweb.domain.repository.ProjectsRepository
+import com.tanyudii.tmuxweb.domain.repository.SessionsRepository
+import io.ktor.client.HttpClient
 import org.koin.core.context.startKoin
 import org.koin.core.module.Module
 import org.koin.dsl.KoinAppDeclaration
 import org.koin.dsl.module
 
 /**
- * Phase 1 foundation: Koin plumbing only. Left empty on purpose — repository
- * and ViewModel bindings land in Phase 2/3 (see
- * .claude/plans/rebuild-web-ios-kmp.plan.md) once there's real domain/data
- * code to bind. An empty module isn't a placeholder smell here; it's the
- * seam platform entry points already depend on.
+ * Local storage, network, and repository bindings — see
+ * [TmuxWebSessionHolder] for why [TmuxWebHttpClient]/[TerminalSocket]/the
+ * repositories are `factory`, not `single`: they need a `baseUrl`/`token`
+ * only known once Settings succeeds, and must be rebuilt whenever that
+ * changes (testAndSave()/clear()), never cached stale.
  */
-val commonModule: Module = module {}
+val commonModule: Module = module {
+    single { TokenStore() }
+    single { BaseUrlStore() }
+    single<ConnectionSettingsStore> { DefaultConnectionSettingsStore(get(), get()) }
+
+    single<HttpClient> { createTmuxWebHttpClient() }
+    single<ConnectionTester> { KtorConnectionTester(get()) }
+    single { TmuxWebSessionHolder() }
+
+    factory {
+        val settings = get<TmuxWebSessionHolder>().require()
+        TmuxWebHttpClient(httpClient = get(), baseUrl = settings.baseUrl, token = settings.token)
+    }
+
+    factory<ProjectsRepository> { KtorProjectsRepository(get()) }
+    factory<SessionsRepository> { KtorSessionsRepository(get()) }
+    factory<ChangesRepository> { KtorChangesRepository(get()) }
+    factory<EnvironmentRepository> { KtorEnvironmentRepository(get()) }
+
+    factory<TerminalSocket> {
+        val settings = get<TmuxWebSessionHolder>().require()
+        KtorTerminalSocket(httpClient = get(), baseUrl = settings.baseUrl, token = settings.token)
+    }
+}
 
 /**
  * Called once per platform entry point (wasmJsMain's main.kt, iosMain's

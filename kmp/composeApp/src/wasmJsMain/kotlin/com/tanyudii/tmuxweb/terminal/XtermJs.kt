@@ -10,6 +10,9 @@ import org.w3c.dom.HTMLElement
 // docs/adr/0002-web-terminal-embedding.md). No @JsModule/npm wiring needed because
 // these are loaded as plain <script> tags, exactly like the existing public/app.js.
 external class XtermTerminal : JsAny {
+    val cols: Int
+    val rows: Int
+
     fun open(container: HTMLElement)
     fun write(data: JsString)
     fun onData(callback: (JsString) -> Unit)

@@ -16,9 +16,16 @@ data class ProjectListUiState(
     val isLoading: Boolean = false,
     val errorMessage: String? = null,
     val pendingForceDelete: PendingForceDelete? = null,
+    // null = sheet closed. Mirrors NewProjectSheet.swift's own @State, kept
+    // here (not in the composable) so it's unit-testable like every other
+    // mutation on this ViewModel — see SessionListViewModel.createSession
+    // for the equivalent pattern this was modeled after.
+    val newProject: NewProjectUiState? = null,
 ) {
     /** Set on 409 — the project still has active sessions; see ApiError.Conflict. */
     data class PendingForceDelete(val project: Project, val message: String)
+
+    data class NewProjectUiState(val isSaving: Boolean = false, val errorMessage: String? = null)
 }
 
 class ProjectListViewModel(
@@ -43,6 +50,29 @@ class ProjectListViewModel(
 
     fun addProject(project: Project) {
         _state.update { it.copy(projects = it.projects + project) }
+    }
+
+    fun showNewProjectSheet() {
+        _state.update { it.copy(newProject = ProjectListUiState.NewProjectUiState()) }
+    }
+
+    fun cancelNewProject() {
+        _state.update { it.copy(newProject = null) }
+    }
+
+    fun createProject(name: String, repoPath: String) {
+        _state.update { it.copy(newProject = ProjectListUiState.NewProjectUiState(isSaving = true)) }
+        scope.launch {
+            runSuspendCatching { repository.createProject(name, repoPath) }
+                .onSuccess { project ->
+                    addProject(project)
+                    _state.update { it.copy(newProject = null) }
+                }
+                .onFailure { error ->
+                    val message = error.toUiMessage()
+                    _state.update { it.copy(newProject = ProjectListUiState.NewProjectUiState(errorMessage = message)) }
+                }
+        }
     }
 
     fun delete(project: Project) {

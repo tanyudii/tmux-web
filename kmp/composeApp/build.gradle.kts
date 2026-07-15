@@ -33,6 +33,18 @@ kotlin {
         }
     }
 
+    // Coverage-only target: Kover has no Kotlin/Native or Kotlin/Wasm support
+    // (confirmed against Kover's own docs), so without a JVM target the
+    // `koverVerify` 80% gate below has nothing to instrument and passes
+    // trivially on 0-missed/0-covered — not a real signal. commonTest runs
+    // here too, giving Kover real JVM bytecode for commonMain to measure.
+    // Not a real product target: no desktop UI entry point is wired up.
+    jvm {
+        compilerOptions {
+            jvmTarget.set(JvmTarget.JVM_17)
+        }
+    }
+
     @OptIn(ExperimentalWasmDsl::class)
     wasmJs {
         browser()
@@ -56,6 +68,7 @@ kotlin {
             implementation(libs.ktor.serialization.kotlinx.json)
 
             implementation(libs.koin.core)
+            implementation(libs.koin.compose)
             implementation(libs.navigation.compose)
         }
 
@@ -78,6 +91,10 @@ kotlin {
                 implementation(libs.kotlinx.browser)
             }
         }
+
+        jvmMain.dependencies {
+            implementation(libs.ktor.client.cio)
+        }
     }
 }
 
@@ -96,6 +113,40 @@ detekt {
 
 kover {
     reports {
+        filters {
+            excludes {
+                // Compose UI screens and navigation wiring: per plan §3.7,
+                // automated UI-tree tests have limited value on these
+                // targets, so the primary automated layer is ViewModel/
+                // state-logic tests (already covered below) and each screen
+                // gets a manual QA pass instead — a deliberate scope call,
+                // not a gap.
+                packages("com.tanyudii.tmuxweb.ui")
+                // Platform entry points (App.kt, MainViewController.kt,
+                // main.kt) and generated Compose resource accessors — pure
+                // wiring/codegen, nothing to unit-test.
+                classes("com.tanyudii.tmuxweb.AppKt", "com.tanyudii.tmuxweb.MainViewControllerKt", "com.tanyudii.tmuxweb.MainKt")
+                packages("tmux_web_kmp.composeapp.generated.resources")
+                // Platform expect/actual glue verified by manual on-device
+                // QA, not unit tests (Keychain/localStorage/SwiftTerm/
+                // xterm.js interop) — same reasoning as the UI layer above.
+                // The jvmMain actuals exist purely so Kover has JVM bytecode
+                // to instrument at all (see the jvm() target comment); they
+                // have no real behavior of their own to verify.
+                packages("com.tanyudii.tmuxweb.terminal")
+                classes(
+                    "com.tanyudii.tmuxweb.data.local.TokenStore",
+                    "com.tanyudii.tmuxweb.data.local.BaseUrlStore",
+                )
+                // KtorTerminalSocket: Ktor's MockEngine has no WebSocket
+                // support on the client side (ktorio/ktor#1413, open since
+                // 2020) — a real, external tooling gap, not an oversight.
+                // Testing it properly needs an embedded test server, out of
+                // scope for this pass; ClientMessage.kt's pure wire-format
+                // logic in the same package is still fully tested.
+                classes("com.tanyudii.tmuxweb.data.remote.terminal.KtorTerminalSocket")
+            }
+        }
         verify {
             rule {
                 minBound(80)

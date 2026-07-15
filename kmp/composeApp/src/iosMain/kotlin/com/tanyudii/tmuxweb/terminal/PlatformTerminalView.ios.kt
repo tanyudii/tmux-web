@@ -18,6 +18,7 @@ actual fun PlatformTerminalView(
     modifier: Modifier,
     onInput: (String) -> Unit,
     onBell: () -> Unit,
+    onResize: (cols: Int, rows: Int) -> Unit,
     handleReady: (PlatformTerminalHandle) -> Unit,
 ) {
     val factory = requireNotNull(TerminalViewProvider.factory) {
@@ -27,7 +28,7 @@ actual fun PlatformTerminalView(
     }
     UIKitView(
         factory = {
-            val view = factory.createTerminalView(onInput, onBell)
+            val view = factory.createTerminalView(onInput, onBell, onResize)
             val handle = view as? TerminalViewHandle
                 ?: error(
                     "${view::class} must conform to TerminalViewHandle " +

@@ -1,20 +1,24 @@
 package com.tanyudii.tmuxweb.data.local
 
+import kotlinx.cinterop.BetaInteropApi
 import kotlinx.cinterop.ExperimentalForeignApi
 import kotlinx.cinterop.alloc
 import kotlinx.cinterop.memScoped
 import kotlinx.cinterop.ptr
 import kotlinx.cinterop.value
-import platform.CoreFoundation.CFDictionaryRef
-import platform.CoreFoundation.CFTypeRef
+import platform.CoreFoundation.CFDictionaryAddValue
+import platform.CoreFoundation.CFDictionaryCreateMutable
+import platform.CoreFoundation.CFMutableDictionaryRef
+import platform.CoreFoundation.CFRelease
 import platform.CoreFoundation.CFTypeRefVar
+import platform.CoreFoundation.kCFBooleanTrue
+import platform.Foundation.CFBridgingRelease
+import platform.Foundation.CFBridgingRetain
 import platform.Foundation.NSData
-import platform.Foundation.NSMutableDictionary
 import platform.Foundation.NSString
+import platform.Foundation.NSUTF8StringEncoding
 import platform.Foundation.create
 import platform.Foundation.dataUsingEncoding
-import platform.Foundation.NSUTF8StringEncoding
-import platform.Foundation.setValue
 import platform.Security.SecItemAdd
 import platform.Security.SecItemCopyMatching
 import platform.Security.SecItemDelete
@@ -33,66 +37,57 @@ import platform.Security.kSecValueData
 /**
  * Direct port of KeychainStore.swift — same service/account identifiers,
  * same `kSecAttrAccessibleWhenUnlockedThisDeviceOnly` (device-only, no
- * iCloud Keychain sync). UNVERIFIED at runtime (no iOS simulator in this dev
- * environment); Kotlin/Native's cinterop against `Security.framework`
- * compiles here (`compileKotlinIosSimulatorArm64`), which catches signature
- * mismatches, but not runtime Keychain behavior — that's a CI/real-device
- * check, same caveat as ADR 0001's SwiftTerm bridge.
+ * iCloud Keychain sync). Builds the query as a pure CFDictionary (CFStringRef
+ * keys added via CFDictionaryAddValue) rather than routing through
+ * NSMutableDictionary + a CFStringRef->Kotlin String cast — that cast is not
+ * a real bridging operation in Kotlin/Native (kSecClass et al. are opaque
+ * CFStringRef pointers, not NSString-backed objects) and crashes at runtime
+ * with a ClassCastException, which is what the first real-device run of this
+ * file caught.
  */
-@OptIn(ExperimentalForeignApi::class)
+@OptIn(ExperimentalForeignApi::class, BetaInteropApi::class)
 actual class TokenStore actual constructor() {
     actual suspend fun saveToken(token: String) {
         deleteToken()
-        val query = baseQuery()
-        val tokenData = NSString.create(string = token).dataUsingEncoding(NSUTF8StringEncoding)
-        query.setValue(tokenData, forKey = kSecValueDataKey)
-        query.setValue(kSecAttrAccessibleWhenUnlockedThisDeviceOnly, forKey = kSecAttrAccessibleKey)
-        SecItemAdd(query.asCfDictionary(), null)
+        val dict = baseQuery()
+        val tokenData = CFBridgingRetain(NSString.create(string = token).dataUsingEncoding(NSUTF8StringEncoding))
+        CFDictionaryAddValue(dict, kSecValueData, tokenData)
+        CFDictionaryAddValue(dict, kSecAttrAccessible, kSecAttrAccessibleWhenUnlockedThisDeviceOnly)
+        SecItemAdd(dict, null)
+        tokenData?.let { CFBridgingRelease(it) }
+        CFRelease(dict)
     }
 
     actual suspend fun loadToken(): String? = memScoped {
-        val query = baseQuery()
-        query.setValue(true, forKey = kSecReturnDataKey)
-        query.setValue(kSecMatchLimitOne, forKey = kSecMatchLimitKey)
+        val dict = baseQuery()
+        CFDictionaryAddValue(dict, kSecReturnData, kCFBooleanTrue)
+        CFDictionaryAddValue(dict, kSecMatchLimit, kSecMatchLimitOne)
 
         val resultVar = alloc<CFTypeRefVar>()
-        val status = SecItemCopyMatching(query.asCfDictionary(), resultVar.ptr)
+        val status = SecItemCopyMatching(dict, resultVar.ptr)
+        CFRelease(dict)
         if (status != errSecSuccess) return@memScoped null
-        val data = resultVar.value as? NSData ?: return@memScoped null
+        val data = CFBridgingRelease(resultVar.value) as? NSData ?: return@memScoped null
+        @Suppress("USELESS_CAST") // NSString -> String is a real toll-free-bridging cast here, not a no-op
         NSString.create(data = data, encoding = NSUTF8StringEncoding) as String?
     }
 
     actual suspend fun deleteToken() {
-        SecItemDelete(baseQuery().asCfDictionary())
+        val dict = baseQuery()
+        SecItemDelete(dict)
+        CFRelease(dict)
     }
 
-    private fun baseQuery(): NSMutableDictionary {
-        val dict = NSMutableDictionary()
-        dict.setValue(kSecClassGenericPassword, forKey = kSecClassKey)
-        dict.setValue(SERVICE, forKey = kSecAttrServiceKey)
-        dict.setValue(ACCOUNT, forKey = kSecAttrAccountKey)
+    private fun baseQuery(): CFMutableDictionaryRef {
+        val dict = requireNotNull(CFDictionaryCreateMutable(null, 0, null, null))
+        CFDictionaryAddValue(dict, kSecClass, kSecClassGenericPassword)
+        CFDictionaryAddValue(dict, kSecAttrService, CFBridgingRetain(SERVICE))
+        CFDictionaryAddValue(dict, kSecAttrAccount, CFBridgingRetain(ACCOUNT))
         return dict
     }
 
     private companion object {
         const val SERVICE = "com.tanyudii.tmuxweb.token"
         const val ACCOUNT = "com.tanyudii.tmuxweb.token.account"
-
-        // NSDictionary keys must be Kotlin String, not the raw CFStringRef
-        // constants Security.framework exposes — bridging cast, same pattern
-        // used by the multiplatform-settings library's KeychainSettings.
-        val kSecClassKey = kSecClass.toKotlinStringKey()
-        val kSecAttrServiceKey = kSecAttrService.toKotlinStringKey()
-        val kSecAttrAccountKey = kSecAttrAccount.toKotlinStringKey()
-        val kSecValueDataKey = kSecValueData.toKotlinStringKey()
-        val kSecAttrAccessibleKey = kSecAttrAccessible.toKotlinStringKey()
-        val kSecReturnDataKey = kSecReturnData.toKotlinStringKey()
-        val kSecMatchLimitKey = kSecMatchLimit.toKotlinStringKey()
     }
 }
-
-@OptIn(ExperimentalForeignApi::class)
-private fun CFTypeRef?.toKotlinStringKey(): String = this as String
-
-@OptIn(ExperimentalForeignApi::class)
-private fun NSMutableDictionary.asCfDictionary(): CFDictionaryRef = this as CFDictionaryRef
