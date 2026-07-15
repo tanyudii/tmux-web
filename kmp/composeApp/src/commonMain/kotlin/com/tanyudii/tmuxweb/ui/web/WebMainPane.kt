@@ -20,26 +20,34 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.tanyudii.tmuxweb.domain.model.ChangedFile
+import com.tanyudii.tmuxweb.domain.model.DiffMode
 import com.tanyudii.tmuxweb.domain.model.EnvStatus
 import com.tanyudii.tmuxweb.domain.model.FileStatus
 import com.tanyudii.tmuxweb.domain.model.GroupedChanges
 import com.tanyudii.tmuxweb.domain.model.Project
 import com.tanyudii.tmuxweb.domain.model.ProjectSession
+import com.tanyudii.tmuxweb.domain.repository.ChangesRepository
+import com.tanyudii.tmuxweb.presentation.DiffViewModel
 import com.tanyudii.tmuxweb.terminal.PlatformTerminalView
 import com.tanyudii.tmuxweb.ui.components.TmuxButton
 import com.tanyudii.tmuxweb.ui.components.TmuxButtonVariant
 import com.tanyudii.tmuxweb.ui.components.TmuxConnectionBanner
 import com.tanyudii.tmuxweb.ui.components.TmuxConnectionStatus
+import com.tanyudii.tmuxweb.ui.components.TmuxDiffDialog
 import com.tanyudii.tmuxweb.ui.components.TmuxEnvironmentMenu
 import com.tanyudii.tmuxweb.ui.components.TmuxIconButton
-import com.tanyudii.tmuxweb.ui.components.TmuxIconButtonSize
 import com.tanyudii.tmuxweb.ui.components.TmuxIconButtonVariant
 import com.tanyudii.tmuxweb.ui.components.TmuxStatusBadge
 import com.tanyudii.tmuxweb.ui.components.TmuxStatusTone
@@ -49,6 +57,7 @@ import com.tanyudii.tmuxweb.ui.theme.TmuxFonts
 import com.tanyudii.tmuxweb.ui.theme.TmuxIcons
 import com.tanyudii.tmuxweb.ui.theme.TmuxTextSize
 import com.tanyudii.tmuxweb.ui.theme.TmuxWeight
+import org.koin.compose.koinInject
 
 /**
  * Master-detail main area: breadcrumb top bar, tmux window tabs, terminal
@@ -71,12 +80,23 @@ fun WebMainPane(
     railOpen: Boolean,
     activeWindow: Int,
     onSelectWindow: (Int) -> Unit,
+    onWindowsChanged: () -> Unit,
     onToggleRail: () -> Unit,
     onNewSession: () -> Unit,
     onEnvironmentRun: () -> Unit,
     onEnvironmentStop: () -> Unit,
     modifier: Modifier = Modifier,
+    isTerminalVisible: Boolean = true,
 ) {
+    // Any Popup opened from within this pane (environment dropdown, window
+    // rename/close confirm) needs to hide the terminal's native DOM element
+    // for its duration -- see PlatformTerminalView's `isVisible` kdoc. Each
+    // child reports its own open state here rather than owning a shared
+    // dialog-stack, since at most one of these is ever open at a time.
+    var environmentMenuOpen by remember { mutableStateOf(false) }
+    var windowDialogOpen by remember { mutableStateOf(false) }
+    var diffTarget by remember(session?.name) { mutableStateOf<DiffTarget?>(null) }
+
     Column(modifier = modifier.fillMaxSize().background(TmuxColors.bgApp)) {
         if (session == null || terminal == null) {
             EmptyMainPane(project = project, onNewSession = onNewSession)
@@ -92,12 +112,16 @@ fun WebMainPane(
             onToggleRail = onToggleRail,
             onEnvironmentRun = onEnvironmentRun,
             onEnvironmentStop = onEnvironmentStop,
+            onEnvironmentMenuOpenChanged = { environmentMenuOpen = it },
         )
         WindowTabs(
             windowCount = session.windows,
             activeWindow = activeWindow,
+            serverWindowNames = session.windowNames,
             onSelectWindow = onSelectWindow,
+            onWindowsChanged = onWindowsChanged,
             terminal = terminal,
+            onDialogOpenChanged = { windowDialogOpen = it },
         )
 
         if (!terminal.isConnected) {
@@ -112,16 +136,79 @@ fun WebMainPane(
                     onBell = terminal::onBell,
                     onResize = terminal::onResize,
                     handleReady = terminal.onHandleReady,
+                    isVisible = isTerminalVisible && !environmentMenuOpen && !windowDialogOpen && diffTarget == null,
                 )
             }
             if (railOpen) {
-                ChangesRail(changes = changes)
+                ChangesRail(changes = changes, onFileClick = { file, mode -> diffTarget = DiffTarget(file, mode) })
             }
         }
 
         StatusFooter(session = session)
+
+        MainPaneDiffDialog(
+            projectId = project?.id,
+            sessionName = session.name,
+            diffTarget = diffTarget,
+            onDismiss = { diffTarget = null },
+        )
     }
 }
+
+private data class DiffTarget(val file: ChangedFile, val mode: DiffMode)
+
+/** Hosts [DiffDialogHost] once a [DiffTarget] is picked -- split out purely to keep [WebMainPane] short. */
+@Composable
+private fun MainPaneDiffDialog(
+    projectId: String?,
+    sessionName: String,
+    diffTarget: DiffTarget?,
+    onDismiss: () -> Unit,
+) {
+    if (projectId == null || diffTarget == null) return
+    DiffDialogHost(projectId = projectId, sessionName = sessionName, target = diffTarget, onDismiss = onDismiss)
+}
+
+/**
+ * Owns the [DiffViewModel] for one open diff dialog -- a fresh instance per
+ * [DiffTarget], mirroring [RepoPathPicker].
+ */
+@Composable
+private fun DiffDialogHost(
+    projectId: String,
+    sessionName: String,
+    target: DiffTarget,
+    onDismiss: () -> Unit,
+) {
+    val repository: ChangesRepository = koinInject()
+    val scope = rememberCoroutineScope()
+    val viewModel = remember(target) {
+        DiffViewModel(projectId, sessionName, target.file.path, target.mode, repository, scope)
+    }
+    val state by viewModel.state.collectAsState()
+
+    TmuxDiffDialog(
+        fileName = target.file.path,
+        statusLabel = target.mode.label,
+        statusTone = target.mode.tone,
+        state = state,
+        onDismiss = onDismiss,
+    )
+}
+
+private val DiffMode.label: String
+    get() = when (this) {
+        DiffMode.STAGED -> "staged"
+        DiffMode.UNSTAGED -> "unstaged"
+        DiffMode.UNTRACKED -> "untracked"
+    }
+
+private val DiffMode.tone: TmuxStatusTone
+    get() = when (this) {
+        DiffMode.STAGED -> TmuxStatusTone.STAGED
+        DiffMode.UNSTAGED -> TmuxStatusTone.UNSTAGED
+        DiffMode.UNTRACKED -> TmuxStatusTone.UNTRACKED
+    }
 
 @Composable
 private fun TopBar(
@@ -133,6 +220,7 @@ private fun TopBar(
     onToggleRail: () -> Unit,
     onEnvironmentRun: () -> Unit,
     onEnvironmentStop: () -> Unit,
+    onEnvironmentMenuOpenChanged: (Boolean) -> Unit,
 ) {
     Row(
         verticalAlignment = Alignment.CenterVertically,
@@ -162,6 +250,7 @@ private fun TopBar(
             isBusy = environmentBusy,
             onRun = onEnvironmentRun,
             onStop = onEnvironmentStop,
+            onOpenChanged = onEnvironmentMenuOpenChanged,
         )
         TmuxIconButton(
             TmuxIcons.GitBranch,
@@ -173,50 +262,7 @@ private fun TopBar(
 }
 
 @Composable
-private fun WindowTabs(windowCount: Int, activeWindow: Int, onSelectWindow: (Int) -> Unit, terminal: TerminalSession) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(36.dp)
-            .background(TmuxColors.bgTerminal)
-            .padding(horizontal = 8.dp),
-    ) {
-        for (index in 0 until windowCount) {
-            val active = index == activeWindow
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier
-                    .fillMaxHeight()
-                    .background(if (active) TmuxColors.bgRaised else Color.Transparent)
-                    .clickable {
-                        onSelectWindow(index)
-                        // Real tmux prefix (Ctrl+B) + window index — no per-window REST endpoint exists (see kdoc).
-                        terminal.onInput(TMUX_PREFIX_CTRL_B + index.toString())
-                    }
-                    .padding(horizontal = 14.dp),
-                horizontalArrangement = Arrangement.spacedBy(7.dp),
-            ) {
-                Text(
-                    index.toString(),
-                    color = if (active) TmuxColors.accent else TmuxColors.textTertiary,
-                    fontFamily = TmuxFonts.mono,
-                    fontSize = TmuxTextSize.xs,
-                )
-                Text(
-                    "win$index",
-                    color = if (active) TmuxColors.textPrimary else TmuxColors.textTertiary,
-                    fontFamily = TmuxFonts.mono,
-                    fontSize = TmuxTextSize.xs,
-                )
-            }
-        }
-    }
-}
-
-private val TMUX_PREFIX_CTRL_B = Char(2).toString()
-
-@Composable
-private fun ChangesRail(changes: GroupedChanges?) {
+private fun ChangesRail(changes: GroupedChanges?, onFileClick: (ChangedFile, DiffMode) -> Unit) {
     Column(
         modifier = Modifier
             .width(290.dp)
@@ -242,9 +288,13 @@ private fun ChangesRail(changes: GroupedChanges?) {
                 fontWeight = TmuxWeight.semibold,
             )
         }
-        val entries = changes?.let { it.staged + it.unstaged + it.untracked }.orEmpty()
+        val entries = changes?.let {
+            it.staged.map { file -> file to DiffMode.STAGED } +
+                it.unstaged.map { file -> file to DiffMode.UNSTAGED } +
+                it.untracked.map { file -> file to DiffMode.UNTRACKED }
+        }.orEmpty()
         LazyColumn(modifier = Modifier.weight(1f), contentPadding = PaddingValues(vertical = 6.dp)) {
-            items(entries) { file -> ChangedFileRow(file) }
+            items(entries) { (file, mode) -> ChangedFileRow(file, onClick = { onFileClick(file, mode) }) }
         }
         Box(modifier = Modifier.fillMaxWidth().padding(12.dp)) {
             TmuxButton(
@@ -259,7 +309,7 @@ private fun ChangesRail(changes: GroupedChanges?) {
 }
 
 @Composable
-private fun ChangedFileRow(file: ChangedFile) {
+private fun ChangedFileRow(file: ChangedFile, onClick: () -> Unit) {
     val (marker, color) = when (file.status) {
         FileStatus.ADDED -> "A" to TmuxColors.gitAdded
         FileStatus.MODIFIED -> "M" to TmuxColors.gitUnstaged
@@ -269,7 +319,7 @@ private fun ChangedFileRow(file: ChangedFile) {
     }
     Row(
         verticalAlignment = Alignment.CenterVertically,
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 6.dp),
+        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 14.dp, vertical = 6.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         Text(

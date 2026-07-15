@@ -8,10 +8,12 @@ import com.tanyudii.tmuxweb.data.remote.TmuxWebHttpClient
 import com.tanyudii.tmuxweb.data.remote.createTmuxWebHttpClient
 import com.tanyudii.tmuxweb.data.remote.terminal.KtorTerminalSocket
 import com.tanyudii.tmuxweb.data.remote.terminal.TerminalSocket
+import com.tanyudii.tmuxweb.domain.repository.BrowseRepository
 import com.tanyudii.tmuxweb.domain.repository.ChangesRepository
 import com.tanyudii.tmuxweb.domain.repository.ConnectionSettingsStore
 import com.tanyudii.tmuxweb.domain.repository.DefaultConnectionSettingsStore
 import com.tanyudii.tmuxweb.domain.repository.EnvironmentRepository
+import com.tanyudii.tmuxweb.domain.repository.KtorBrowseRepository
 import com.tanyudii.tmuxweb.domain.repository.KtorChangesRepository
 import com.tanyudii.tmuxweb.domain.repository.KtorEnvironmentRepository
 import com.tanyudii.tmuxweb.domain.repository.KtorProjectsRepository
@@ -49,6 +51,7 @@ val commonModule: Module = module {
     factory<SessionsRepository> { KtorSessionsRepository(get()) }
     factory<ChangesRepository> { KtorChangesRepository(get()) }
     factory<EnvironmentRepository> { KtorEnvironmentRepository(get()) }
+    factory<BrowseRepository> { KtorBrowseRepository(get()) }
 
     factory<TerminalSocket> {
         val settings = get<TmuxWebSessionHolder>().require()

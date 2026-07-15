@@ -8,6 +8,11 @@ data class ProjectSession(
     val name: String,
     val fullName: String,
     val windows: Int,
+    // Per-window display names, ordered by tmux window index -- best-effort,
+    // so it defaults to empty (falling back to a "win$index" placeholder,
+    // see WindowTabs.kt) rather than failing decode when the backend
+    // couldn't fetch them (see project-sessions.ts's fetchWindowNames).
+    val windowNames: List<String> = emptyList(),
     val attached: Boolean,
 )
 
