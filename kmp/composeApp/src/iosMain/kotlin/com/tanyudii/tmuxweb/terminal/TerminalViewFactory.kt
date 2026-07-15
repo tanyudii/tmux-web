@@ -24,8 +24,15 @@ interface TerminalViewFactory {
      * - call [onInput] for every byte the user types (mirrors ClientMessage's
      *   "input" case — see .claude/plans/rebuild-web-ios-kmp.plan.md §2.3)
      * - call [onBell] when the terminal receives BEL (0x07)
+     * - call [onResize] when its own column/row count changes (from rotation,
+     *   Slide Over, or an initial layout pass) so TerminalViewModel.onResize
+     *   can send the server a `resize` message
      */
-    fun createTerminalView(onInput: (String) -> Unit, onBell: () -> Unit): UIView
+    fun createTerminalView(
+        onInput: (String) -> Unit,
+        onBell: () -> Unit,
+        onResize: (cols: Int, rows: Int) -> Unit,
+    ): UIView
 }
 
 /** Kotlin -> native direction: shared code calls this to push PTY bytes / resize. */
