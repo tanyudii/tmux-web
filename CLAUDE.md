@@ -107,7 +107,9 @@ Code and runtime data live in two deliberately separate places:
   and leaves the server running API-only via `web-build.ts`'s existing
   graceful-degrade path, it never aborts the upgrade.
 - `runUpgrade()` -- wires the above together, resolves `--tag`/`--app-dir`,
-  restarts the systemd `--user` service if it was already running.
+  re-execs into the freshly-installed code (see the re-exec section below)
+  before downloading the web build and restarting the systemd `--user`
+  service if it was already running.
 
 `src/cli/service-command.ts`'s `resolveBinPath()` and `src/cli/version.ts`'s
 `readPackageVersion()` both resolve paths relative to their own
@@ -118,45 +120,49 @@ The user-facing version of this is documented in `README.md` under
 **Installation (global CLI, production)** and **Upgrading** -- keep those
 sections in sync with `upgrade.ts` if the mechanism changes.
 
-## A running `tmuxweb upgrade` process can't apply its own code changes
+## A running `tmuxweb upgrade` process can't apply its own code changes -- fixed via re-exec
 
 Learned the hard way shipping v1.1.0/v1.1.1: when `tmuxweb upgrade` updates
 `~/.local/share/tmux-web` on disk and then calls back into
 `service-command.ts` (via `refreshService` in `upgrade.ts`) to regenerate
-the systemd unit, it uses the **already-loaded, in-memory** version of
+the systemd unit, it used the **already-loaded, in-memory** version of
 `service-command.ts` -- i.e. whatever code was running when that
 `tmuxweb upgrade` invocation started, NOT the newly-installed version that
 was just written to disk. Node doesn't hot-reload a module that's already
-imported, even though the file on disk changed underneath it.
+imported, even though the file on disk changed underneath it. The exact
+same gotcha applied to `downloadWebBuild()` (added for the KMP web bundle):
+the first `tmuxweb upgrade` run after that feature shipped cloned the new
+`upgrade.ts` to disk but kept executing the OLD in-memory code, so
+`downloadWebBuild()` never actually got called that run.
 
-Practical effect: any release that changes what `buildUnit()` produces
-(v1.1.0 added the `start` argument to `ExecStart`; v1.1.1 removed
-`ProtectSystem=strict`) does NOT take full effect on the upgrade that
-introduces it -- `tmuxweb upgrade`'s own unit-refresh step still writes
-the OLD unit shape that upgrade. It only takes effect starting with the
-NEXT `tmuxweb upgrade` (or any other fresh `tmuxweb` invocation, e.g.
-`tmuxweb service install` run by hand), because that starts a brand new
-process which loads the already-updated files fresh from disk.
+**Fixed by re-exec**: `runUpgrade()` now does `cloneOrUpdateAppDir()` +
+`npmInstallAndLink()` (bringing the code on disk up to date), then --
+unless `isReexecChild` is already set -- spawns a **fresh child process**
+(`spawn`/`defaultSpawn`, `stdio: "inherit"` so the child's own
+console output streams straight through) running
+`<appDir>/bin/tmuxweb.ts upgrade --tag <tag> --app-dir <appDir>` with
+`TMUX_WEB_UPGRADE_REEXEC=1` set on its env, and returns once that child
+exits (throwing `UpgradeError` on a non-zero exit code). That child is a
+brand-new Node process, so it loads `bin/tmuxweb.ts` → `upgrade.ts` →
+`service-command.ts` fresh from the just-updated disk -- no stale
+in-memory code anywhere. The child sees `isReexecChild = true` (read from
+the env var by `resolveUpgradeDeps()` when the caller doesn't override it)
+and skips straight to `downloadWebBuild()` + the systemd
+refresh-and-restart, i.e. exactly the code that was just installed. One
+`tmuxweb upgrade` invocation is now sufficient end-to-end for *any* future
+release, including ones that change `buildUnit()`/`installService()` or
+`downloadWebBuild()` itself.
 
-If you ship another `buildUnit()`/`installService()` change: after
-upgrading a server past that release, run `tmuxweb service install`
-by hand once (a fresh process) to force the corrected unit into place
-immediately, then `systemctl --user restart tmux-web` -- systemd
-sandboxing directives like `ProtectSystem` apply at process start, so an
-already-running process stays under the old sandbox until restarted even
-after the unit file itself is rewritten. Don't assume the self-refresh
-mechanism alone is sufficient on the very first upgrade past such a
-change.
-
-The exact same gotcha applies to `downloadWebBuild()` (added for the KMP
-web bundle -- see above): the very first `tmuxweb upgrade` run *after* that
-feature ships will clone the new `upgrade.ts` to disk, but this invocation
-is still executing the OLD in-memory code that was already running when it
-started -- so `downloadWebBuild()` doesn't actually get called yet. Only
-the *next* `tmuxweb upgrade` (a fresh process, loading the new code from
-disk) will really fetch the web UI bundle for the first time. Not a bug;
-just don't expect the web UI to appear after only one upgrade the first
-time this ships to an existing install.
+**Bootstrapping caveat, inherent and unavoidable**: this only fixes
+upgrades *from* a version that already has the re-exec mechanism. A server
+still running a pre-re-exec `upgrade.ts` has no way to know about
+re-exec'ing at all -- its `tmuxweb upgrade` will run the old single-process
+flow exactly as before (self-consistent for whatever it already knows how
+to do, just without the fix). One such upgrade is enough to land the
+re-exec-enabled code on disk; every `tmuxweb upgrade` after that is
+reliably single-invocation. This is the same one-time bootstrap gap any
+self-updating CLI has for a fix to its own update mechanism -- there's no
+way to retroactively patch code that hasn't been fetched yet.
 
 ## Testing this mechanism
 
@@ -177,6 +183,18 @@ These exist because a 100%-mocked test suite is exactly what let the
 original `npm install -g github:...` bug ship invisibly -- mocks would
 happily "pass" even with the wrong command. Keep both real-process tests if
 you touch this code again; don't reduce coverage back to mocks-only.
+
+The re-exec mechanism itself has the same "mocks would happily pass either
+way" risk for the one thing that actually matters -- does `defaultSpawn`
+really wait for a real child process and really return its real exit
+code? -- so `defaultSpawn` gets two real-process tests of its own (spawning
+`node -e "process.exit(N)"` and asserting the returned code, and asserting
+an injected `env` value round-trips into the child). `runUpgrade`'s own
+re-exec *branching* logic (spawn called with the right args and env,
+`isReexecChild` skipping straight to the download/refresh continuation, a
+non-zero child exit surfacing as `UpgradeError`) stays mocked, same as
+every other `runUpgrade` test -- the branching logic itself has nothing
+process-real to get wrong.
 
 `downloadWebBuild()`'s `gh` call is deliberately **not** covered by a
 real-process test the way `git`/`npm` are: unlike a local git remote or an

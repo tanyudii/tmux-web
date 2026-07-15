@@ -1,4 +1,4 @@
-import { execFile as execFileCb } from "node:child_process";
+import { execFile as execFileCb, spawn as spawnCb } from "node:child_process";
 import { promisify } from "node:util";
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -7,6 +7,10 @@ import { defaultAppDir } from "./app-dir.ts";
 import { installService } from "./service-command.ts";
 
 const execFileAsync = promisify(execFileCb);
+
+// Guards runUpgrade's re-exec (see below) against looping forever: set only
+// on the re-exec'd child's own env, never inherited from a normal shell.
+const REEXEC_ENV_FLAG = "TMUX_WEB_UPGRADE_REEXEC";
 
 export type ExecFn = (
   file: string,
@@ -20,6 +24,28 @@ export function defaultExec(
   options?: { cwd?: string },
 ): Promise<{ stdout: string; stderr: string }> {
   return execFileAsync(file, args, { encoding: "utf8", cwd: options?.cwd });
+}
+
+export type SpawnFn = (
+  command: string,
+  args: string[],
+  options: { cwd?: string; env?: NodeJS.ProcessEnv },
+) => Promise<number>;
+
+// stdio: "inherit" (not execFile's captured-output model) so the re-exec'd
+// child's own console.log/warn output streams straight to the terminal the
+// user is watching, in real time, exactly like a normal CLI invocation --
+// not buffered and dumped only after the child exits.
+export function defaultSpawn(
+  command: string,
+  args: string[],
+  options: { cwd?: string; env?: NodeJS.ProcessEnv },
+): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const child = spawnCb(command, args, { stdio: "inherit", cwd: options.cwd, env: options.env });
+    child.on("error", reject);
+    child.on("exit", (code) => resolve(code ?? 1));
+  });
 }
 
 export class UpgradeError extends Error {}
@@ -70,6 +96,9 @@ export interface UpgradeDeps {
   mkdtemp?: (prefix: string) => Promise<string>;
   rmRecursive?: (path: string) => Promise<unknown>;
   refreshService?: (deps: { exec: ExecFn }) => Promise<void>;
+  spawn?: SpawnFn;
+  /** True when this process IS the re-exec'd child (see runUpgrade) -- defaults to reading the guard env var. */
+  isReexecChild?: boolean;
 }
 
 interface ResolvedUpgradeDeps {
@@ -81,6 +110,8 @@ interface ResolvedUpgradeDeps {
   mkdtemp: (prefix: string) => Promise<string>;
   rmRecursive: (path: string) => Promise<unknown>;
   refreshService: (deps: { exec: ExecFn }) => Promise<void>;
+  spawn: SpawnFn;
+  isReexecChild: boolean;
 }
 
 function resolveUpgradeDeps(deps: UpgradeDeps): ResolvedUpgradeDeps {
@@ -93,6 +124,8 @@ function resolveUpgradeDeps(deps: UpgradeDeps): ResolvedUpgradeDeps {
     mkdtemp: deps.mkdtemp ?? ((prefix) => mkdtemp(join(tmpdir(), prefix))),
     rmRecursive: deps.rmRecursive ?? ((path) => rm(path, { recursive: true, force: true })),
     refreshService: deps.refreshService ?? installService,
+    spawn: deps.spawn ?? defaultSpawn,
+    isReexecChild: deps.isReexecChild ?? process.env[REEXEC_ENV_FLAG] === "1",
   };
 }
 
@@ -289,17 +322,50 @@ export async function runUpgrade(args: string[], deps: UpgradeDeps = {}): Promis
     throw new UpgradeError("Usage: tmuxweb upgrade [--tag <tag>] [--app-dir <path>]");
   }
 
-  const { exec, repoUrl, repoSlug, appDir, mkdirRecursive, mkdtemp: mkdtempDep, rmRecursive, refreshService } =
-    resolveUpgradeDeps({
-      ...deps,
-      appDir: explicitAppDir ?? deps.appDir,
-    });
+  const {
+    exec,
+    repoUrl,
+    repoSlug,
+    appDir,
+    mkdirRecursive,
+    mkdtemp: mkdtempDep,
+    rmRecursive,
+    refreshService,
+    spawn,
+    isReexecChild,
+  } = resolveUpgradeDeps({
+    ...deps,
+    appDir: explicitAppDir ?? deps.appDir,
+  });
 
   const tag = explicitTag ?? (await resolveLatestTag({ exec, repoUrl }));
   console.log(`Upgrading to ${tag}...`);
 
   await cloneOrUpdateAppDir(exec, appDir, repoUrl, tag, mkdirRecursive);
   await npmInstallAndLink(exec, appDir);
+  console.log(`Installed ${tag} at ${appDir}.`);
+
+  if (!isReexecChild) {
+    // The files on disk are now the new version, but THIS process is still
+    // running the old upgrade.ts that was already loaded into memory when
+    // it started -- Node can't hot-reload an already-imported module, so
+    // finishing the upgrade in-process would silently run stale logic (see
+    // CLAUDE.md's "a running tmuxweb upgrade process can't apply its own
+    // code changes"). Re-exec into the freshly-installed bin/tmuxweb.ts
+    // instead: a brand new process loads it fresh from disk, so the rest of
+    // the upgrade (web build download, service refresh) always runs the
+    // code that was just installed, in a single `tmuxweb upgrade` call.
+    const binPath = join(appDir, "bin", "tmuxweb.ts");
+    const reexecArgs = ["--experimental-strip-types", binPath, "upgrade", "--tag", tag, "--app-dir", appDir];
+    const exitCode = await spawn(process.execPath, reexecArgs, {
+      cwd: appDir,
+      env: { ...process.env, [REEXEC_ENV_FLAG]: "1" },
+    });
+    if (exitCode !== 0) {
+      throw new UpgradeError(`Re-exec into the updated tmux-web code failed (exit code ${exitCode}).`);
+    }
+    return;
+  }
 
   console.log("Downloading the web UI build...");
   try {
@@ -311,8 +377,6 @@ export async function runUpgrade(args: string[], deps: UpgradeDeps = {}): Promis
       "tmux-web will still serve the API; the web UI stays unavailable until the next successful upgrade.",
     );
   }
-
-  console.log(`Installed ${tag} at ${appDir}.`);
 
   if (await isServiceActive(exec)) {
     // Re-write the systemd unit before restarting, not just restart in
