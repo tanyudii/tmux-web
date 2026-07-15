@@ -1,0 +1,68 @@
+package com.tanyudii.tmuxweb.ui.terminal
+
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
+import com.tanyudii.tmuxweb.data.remote.terminal.TerminalSocket
+import com.tanyudii.tmuxweb.presentation.TerminalViewModel
+import com.tanyudii.tmuxweb.terminal.PlatformTerminalHandle
+import com.tanyudii.tmuxweb.terminal.triggerBellFeedback
+import kotlinx.coroutines.launch
+import org.koin.compose.koinInject
+import kotlin.time.Clock
+import kotlin.time.ExperimentalTime
+
+/**
+ * Owns one session's `TerminalViewModel` + socket lifecycle so both the
+ * mobile [TerminalRoute] and the Web shell's terminal pane can embed
+ * [com.tanyudii.tmuxweb.terminal.PlatformTerminalView] against the same
+ * wiring (connect on native-view ready, disconnect on dispose, bell
+ * cooldown) without duplicating it — see [TerminalViewModel] for the
+ * business logic this drives.
+ */
+class TerminalSession internal constructor(
+    val viewModel: TerminalViewModel,
+    val isConnected: Boolean,
+    val onHandleReady: (PlatformTerminalHandle) -> Unit,
+) {
+    fun onInput(text: String) = viewModel.onInput(text)
+
+    fun onResize(cols: Int, rows: Int) = viewModel.onResize(cols, rows)
+
+    @OptIn(ExperimentalTime::class)
+    fun onBell() {
+        val now = Clock.System.now().toEpochMilliseconds()
+        if (viewModel.onBell(muted = false, hasFocus = true, hidden = false, now = now)) {
+            triggerBellFeedback()
+        }
+    }
+}
+
+@Composable
+fun rememberTerminalSession(sessionFullName: String): TerminalSession {
+    val socket: TerminalSocket = koinInject()
+    val scope = rememberCoroutineScope()
+    val viewModel = remember(sessionFullName) { TerminalViewModel(socket, scope) }
+    val state by viewModel.state.collectAsState()
+    var handle by remember(sessionFullName) { mutableStateOf<PlatformTerminalHandle?>(null) }
+
+    LaunchedEffect(handle) {
+        val readyHandle = handle ?: return@LaunchedEffect
+        // Start collecting output BEFORE connect(): `output` is a replay=0
+        // SharedFlow, so a subscriber that attaches after emissions start
+        // would miss the shell's first bytes (prompt / tmux attach output).
+        launch { viewModel.output.collect { bytes -> readyHandle.write(bytes.decodeToString()) } }
+        viewModel.connect(sessionFullName)
+    }
+    DisposableEffect(sessionFullName) { onDispose { viewModel.disconnect() } }
+
+    return remember(viewModel, state.isConnected) {
+        TerminalSession(viewModel = viewModel, isConnected = state.isConnected, onHandleReady = { handle = it })
+    }
+}
