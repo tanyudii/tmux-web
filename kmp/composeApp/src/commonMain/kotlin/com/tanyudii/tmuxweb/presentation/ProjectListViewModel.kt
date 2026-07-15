@@ -1,6 +1,5 @@
 package com.tanyudii.tmuxweb.presentation
 
-import com.tanyudii.tmuxweb.data.remote.ApiError
 import com.tanyudii.tmuxweb.domain.model.Project
 import com.tanyudii.tmuxweb.domain.repository.ProjectsRepository
 import kotlinx.coroutines.CoroutineScope
@@ -77,9 +76,15 @@ class ProjectListViewModel(
 
     fun delete(project: Project) {
         scope.launch {
-            runSuspendCatching { repository.deleteProject(project.id) }
-                .onSuccess { removeProject(project.id) }
-                .onFailure { error -> handleDeleteFailure(project, error) }
+            deleteHandlingConflict(
+                delete = { repository.deleteProject(project.id) },
+                onSuccess = { removeProject(project.id) },
+                onConflict = { message ->
+                    val pending = ProjectListUiState.PendingForceDelete(project, message)
+                    _state.update { it.copy(pendingForceDelete = pending) }
+                },
+                onError = { message -> _state.update { it.copy(errorMessage = message) } },
+            )
         }
     }
 
@@ -99,16 +104,6 @@ class ProjectListViewModel(
 
     fun dismissError() {
         _state.update { it.copy(errorMessage = null) }
-    }
-
-    private fun handleDeleteFailure(project: Project, error: Throwable) {
-        if (error is ApiError.Conflict) {
-            _state.update {
-                it.copy(pendingForceDelete = ProjectListUiState.PendingForceDelete(project, error.serverMessage))
-            }
-        } else {
-            _state.update { it.copy(errorMessage = error.toUiMessage()) }
-        }
     }
 
     private fun removeProject(id: String) {

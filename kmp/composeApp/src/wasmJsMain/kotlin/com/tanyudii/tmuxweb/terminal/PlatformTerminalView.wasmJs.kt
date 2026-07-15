@@ -4,6 +4,7 @@ package com.tanyudii.tmuxweb.terminal
 
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -51,6 +52,11 @@ actual fun PlatformTerminalView(
     var lastCols by remember { mutableStateOf(0) }
     var lastRows by remember { mutableStateOf(0) }
     var fontSize by remember { mutableStateOf(DEFAULT_FONT_SIZE) }
+
+    // Caller keys this composable by session identity (WebMainPane's
+    // `key(session.fullName)`) -- dispose the xterm.js instance once per
+    // lifetime instead of leaking it when the session switches away.
+    DisposableEffect(Unit) { onDispose { terminal?.dispose() } }
 
     // Shared by the synchronous `update` pass AND the deferred first-fit
     // callback below -- a resize that only happens inside `update` would be
