@@ -1,7 +1,8 @@
 import { execFile as execFileCb } from "node:child_process";
 import { promisify } from "node:util";
-import { mkdir } from "node:fs/promises";
-import { dirname } from "node:path";
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import { defaultAppDir } from "./app-dir.ts";
 import { installService } from "./service-command.ts";
 
@@ -24,7 +25,17 @@ export function defaultExec(
 export class UpgradeError extends Error {}
 
 const REPO_SSH_URL = "git@github.com:tanyudii/tmux-web";
+// `gh --repo` wants "owner/repo", not the SSH remote form above -- gh's own
+// auth (gh auth login / GH_TOKEN) is a separate credential from the SSH
+// deploy key used for git, so this is a deliberate second identity for the
+// same repo, not duplication.
+const REPO_SLUG = "tanyudii/tmux-web";
 const SERVICE_NAME = "tmux-web";
+// Fixed name, not tag-suffixed -- `gh release download <tag>` already scopes
+// the download to one release, so the asset itself doesn't need the version
+// baked into its filename. Must match what release.yml's "Package the web
+// build for the release" step produces.
+const WEB_BUILD_ASSET_NAME = "kmp-web.tar.gz";
 
 function messageOf(error: unknown): string {
   const stderr = (error as { stderr?: string })?.stderr;
@@ -53,16 +64,22 @@ export function parseLatestTag(lsRemoteOutput: string): string | null {
 export interface UpgradeDeps {
   exec?: ExecFn;
   repoUrl?: string;
+  repoSlug?: string;
   appDir?: string;
   mkdirRecursive?: (path: string) => Promise<unknown>;
+  mkdtemp?: (prefix: string) => Promise<string>;
+  rmRecursive?: (path: string) => Promise<unknown>;
   refreshService?: (deps: { exec: ExecFn }) => Promise<void>;
 }
 
 interface ResolvedUpgradeDeps {
   exec: ExecFn;
   repoUrl: string;
+  repoSlug: string;
   appDir: string;
   mkdirRecursive: (path: string) => Promise<unknown>;
+  mkdtemp: (prefix: string) => Promise<string>;
+  rmRecursive: (path: string) => Promise<unknown>;
   refreshService: (deps: { exec: ExecFn }) => Promise<void>;
 }
 
@@ -70,8 +87,11 @@ function resolveUpgradeDeps(deps: UpgradeDeps): ResolvedUpgradeDeps {
   return {
     exec: deps.exec ?? defaultExec,
     repoUrl: deps.repoUrl ?? REPO_SSH_URL,
+    repoSlug: deps.repoSlug ?? REPO_SLUG,
     appDir: deps.appDir ?? defaultAppDir(),
     mkdirRecursive: deps.mkdirRecursive ?? ((path) => mkdir(path, { recursive: true })),
+    mkdtemp: deps.mkdtemp ?? ((prefix) => mkdtemp(join(tmpdir(), prefix))),
+    rmRecursive: deps.rmRecursive ?? ((path) => rm(path, { recursive: true, force: true })),
     refreshService: deps.refreshService ?? installService,
   };
 }
@@ -196,6 +216,66 @@ export async function npmInstallAndLink(exec: ExecFn, appDir: string): Promise<v
   }
 }
 
+// Downloads this tag's prebuilt KMP web (wasmJs) bundle from a GitHub
+// Release asset (built + attached by release.yml) and extracts it into the
+// exact path src/main.ts's DEFAULT_WEB_BUILD_DIR reads from. That path is
+// duplicated here rather than imported from main.ts on purpose -- main.ts
+// resolves it relative to its own import.meta.url as a *runtime* concern,
+// this is a *deploy* concern with a different caller; if you change one,
+// change the other (see CLAUDE.md).
+//
+// Auth is entirely `gh`'s problem (gh auth login / GH_TOKEN on the server --
+// see README's "Requirements on the host machine"), matching how SSH auth
+// for cloneOrUpdateAppDir's git calls is the server operator's problem too.
+// Callers decide whether a failure here is fatal -- see runUpgrade, which
+// treats it as non-fatal so a missing/misconfigured `gh` still leaves a
+// working, API-only server (src/web-build.ts's existing graceful-degrade
+// path) rather than blocking the rest of the upgrade.
+export async function downloadWebBuild(
+  exec: ExecFn,
+  appDir: string,
+  tag: string,
+  repoSlug: string,
+  mkdirRecursive: (path: string) => Promise<unknown> = (path) => mkdir(path, { recursive: true }),
+  mkdtempFn: (prefix: string) => Promise<string> = (prefix) => mkdtemp(join(tmpdir(), prefix)),
+  rmRecursiveFn: (path: string) => Promise<unknown> = (path) => rm(path, { recursive: true, force: true }),
+): Promise<void> {
+  const downloadDir = await mkdtempFn("tmux-web-kmp-web-");
+  try {
+    try {
+      await exec("gh", [
+        "release",
+        "download",
+        tag,
+        "--repo",
+        repoSlug,
+        "--pattern",
+        WEB_BUILD_ASSET_NAME,
+        "--dir",
+        downloadDir,
+        "--clobber",
+      ]);
+    } catch (error) {
+      throw new UpgradeError(
+        `gh release download failed for ${tag} (asset ${WEB_BUILD_ASSET_NAME}) from ${repoSlug}: ` +
+          `${messageOf(error)}. Make sure the gh CLI is installed and authenticated (gh auth login, or ` +
+          `set GH_TOKEN) -- see README's "Requirements on the host machine".`,
+      );
+    }
+
+    const targetDir = join(appDir, "kmp", "composeApp", "build", "dist", "wasmJs", "productionExecutable");
+    await mkdirRecursive(targetDir);
+
+    try {
+      await exec("tar", ["-xzf", join(downloadDir, WEB_BUILD_ASSET_NAME), "-C", targetDir]);
+    } catch (error) {
+      throw new UpgradeError(`Failed to extract ${WEB_BUILD_ASSET_NAME} into ${targetDir}: ${messageOf(error)}`);
+    }
+  } finally {
+    await rmRecursiveFn(downloadDir);
+  }
+}
+
 export async function runUpgrade(args: string[], deps: UpgradeDeps = {}): Promise<void> {
   const tagFlagIndex = args.indexOf("--tag");
   const explicitTag = tagFlagIndex !== -1 ? args[tagFlagIndex + 1] : undefined;
@@ -209,16 +289,29 @@ export async function runUpgrade(args: string[], deps: UpgradeDeps = {}): Promis
     throw new UpgradeError("Usage: tmuxweb upgrade [--tag <tag>] [--app-dir <path>]");
   }
 
-  const { exec, repoUrl, appDir, mkdirRecursive, refreshService } = resolveUpgradeDeps({
-    ...deps,
-    appDir: explicitAppDir ?? deps.appDir,
-  });
+  const { exec, repoUrl, repoSlug, appDir, mkdirRecursive, mkdtemp: mkdtempDep, rmRecursive, refreshService } =
+    resolveUpgradeDeps({
+      ...deps,
+      appDir: explicitAppDir ?? deps.appDir,
+    });
 
   const tag = explicitTag ?? (await resolveLatestTag({ exec, repoUrl }));
   console.log(`Upgrading to ${tag}...`);
 
   await cloneOrUpdateAppDir(exec, appDir, repoUrl, tag, mkdirRecursive);
   await npmInstallAndLink(exec, appDir);
+
+  console.log("Downloading the web UI build...");
+  try {
+    await downloadWebBuild(exec, appDir, tag, repoSlug, mkdirRecursive, mkdtempDep, rmRecursive);
+    console.log("Web UI build installed.");
+  } catch (error) {
+    console.warn(`Could not download the web UI build: ${messageOf(error)}`);
+    console.warn(
+      "tmux-web will still serve the API; the web UI stays unavailable until the next successful upgrade.",
+    );
+  }
+
   console.log(`Installed ${tag} at ${appDir}.`);
 
   if (await isServiceActive(exec)) {
