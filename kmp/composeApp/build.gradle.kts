@@ -1,5 +1,6 @@
 import org.jetbrains.kotlin.gradle.ExperimentalWasmDsl
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+import org.jetbrains.kotlin.gradle.targets.js.webpack.KotlinWebpackConfig
 
 plugins {
     alias(libs.plugins.kotlinMultiplatform)
@@ -47,7 +48,27 @@ kotlin {
 
     @OptIn(ExperimentalWasmDsl::class)
     wasmJs {
-        browser()
+        browser {
+            // `wasmJsBrowserDevelopmentRun` proxies /api and /ws* to a locally
+            // running `npm run dev` backend (default port from src/config.ts's
+            // DEFAULT_PORT) so local iteration never needs backend-side CORS —
+            // same-origin from the browser's point of view. Override the
+            // target with -PbackendUrl=http://host:port for a non-default
+            // local backend. Production serves this build same-origin
+            // directly from the backend (see src/main.ts's publicDir wiring),
+            // where this proxy plays no role at all.
+            val backendUrl = (project.findProperty("backendUrl") as String?) ?: "http://127.0.0.1:5309"
+            commonWebpackConfig {
+                devServer = (devServer ?: KotlinWebpackConfig.DevServer()).copy(
+                    proxy = mutableListOf(
+                        KotlinWebpackConfig.DevServer.Proxy(
+                            context = mutableListOf("/api", "/ws"),
+                            target = backendUrl,
+                        ),
+                    ),
+                )
+            }
+        }
         binaries.executable()
     }
 
@@ -56,6 +77,7 @@ kotlin {
             implementation(compose.runtime)
             implementation(compose.foundation)
             implementation(compose.material3)
+            implementation(compose.materialIconsExtended)
             implementation(compose.components.resources)
             implementation(compose.ui)
 
