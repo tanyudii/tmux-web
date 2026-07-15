@@ -76,7 +76,7 @@ class DeleteProjectStateTest {
     }
 
     @Test
-    fun `conflict failure sets pendingForceMessage from the server, not errorMessage`() = runTest {
+    fun `conflict failure sets pendingForceMessage from the server instead of errorMessage`() = runTest {
         val repository = FakeProjectsRepository().apply {
             deleteError = ApiError.Conflict("still has sessions", sessionCount = 2)
         }
@@ -89,7 +89,7 @@ class DeleteProjectStateTest {
     }
 
     @Test
-    fun `non-conflict failure sets errorMessage, not pendingForceMessage`() = runTest {
+    fun `non-conflict failure sets errorMessage instead of pendingForceMessage`() = runTest {
         val repository = FakeProjectsRepository().apply { deleteError = ApiError.Server(500, "boom") }
         val delegate = state(repository)
 

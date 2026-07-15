@@ -16,7 +16,8 @@ import kotlin.test.assertTrue
  * tree-builder.
  */
 class ChangesTreeTest {
-    private fun file(path: String) = ChangedFile(path = path, oldPath = null, status = FileStatus.MODIFIED, staged = false)
+    private fun file(path: String) =
+        ChangedFile(path = path, oldPath = null, status = FileStatus.MODIFIED, staged = false)
 
     private fun changes(
         staged: List<String> = emptyList(),
@@ -36,7 +37,8 @@ class ChangesTreeTest {
 
     @Test
     fun `each non-empty section gets a group header row and empty sections are skipped`() {
-        val rows = buildChangeRows(changes(staged = listOf("a.txt"), unstaged = listOf("b.txt")), collapsedKeys = emptySet())
+        val input = changes(staged = listOf("a.txt"), unstaged = listOf("b.txt"))
+        val rows = buildChangeRows(input, collapsedKeys = emptySet())
 
         val headers = rows.filterIsInstance<ChangeRow.GroupHeader>()
         assertEquals(listOf(DiffMode.STAGED, DiffMode.UNSTAGED), headers.map { it.mode })
@@ -82,9 +84,10 @@ class ChangesTreeTest {
 
         val rows = buildChangeRows(base, collapsedKeys = setOf(stagedFolderKey))
 
-        val unstagedNodeNames = rows.filterIsInstance<ChangeRow.Node>().filter { it.mode == DiffMode.UNSTAGED }.map { it.node.name }
+        val nodes = rows.filterIsInstance<ChangeRow.Node>()
+        val unstagedNodeNames = nodes.filter { it.mode == DiffMode.UNSTAGED }.map { it.node.name }
         assertEquals(listOf("shared", "b.kt"), unstagedNodeNames)
-        val stagedNodeNames = rows.filterIsInstance<ChangeRow.Node>().filter { it.mode == DiffMode.STAGED }.map { it.node.name }
+        val stagedNodeNames = nodes.filter { it.mode == DiffMode.STAGED }.map { it.node.name }
         assertEquals(listOf("shared"), stagedNodeNames)
     }
 
