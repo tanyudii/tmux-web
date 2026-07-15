@@ -64,7 +64,13 @@ private fun flattenNodes(
     val path = if (pathPrefix.isEmpty()) node.name else "$pathPrefix/${node.name}"
     val key = "${mode.name}:$path"
     val row = ChangeRow.Node(node = node, mode = mode, depth = depth, key = key)
-    if (node.isFolder && key !in collapsedKeys) {
+    // Gated on `children.isNotEmpty()` rather than `node.isFolder` (`file == null`):
+    // a node can have BOTH a non-null `file` and non-empty `children` when a
+    // changed path collides with a deeper one in the same section (e.g. `git rm
+    // src && mkdir src && git add src/x.txt` stages a deletion of the file "src"
+    // alongside an addition of "src/x.txt"). Gating on `isFolder` alone silently
+    // dropped that node's descendants -- see ChangesTreeTest's collision case.
+    if (node.children.isNotEmpty() && key !in collapsedKeys) {
         listOf(row) + flattenNodes(node.children, mode, depth + 1, path, collapsedKeys)
     } else {
         listOf(row)
