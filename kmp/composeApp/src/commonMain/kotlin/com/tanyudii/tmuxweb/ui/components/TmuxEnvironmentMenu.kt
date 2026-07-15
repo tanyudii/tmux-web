@@ -17,6 +17,7 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -28,6 +29,7 @@ import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.UriHandler
 import androidx.compose.ui.unit.dp
 import com.tanyudii.tmuxweb.domain.model.ComposeServiceStatus
+import com.tanyudii.tmuxweb.domain.model.EnvOpenLink
 import com.tanyudii.tmuxweb.domain.model.EnvPhase
 import com.tanyudii.tmuxweb.domain.model.EnvStatus
 import com.tanyudii.tmuxweb.ui.theme.TmuxColors
@@ -50,6 +52,12 @@ private fun dotColor(state: String): Color = when (state.lowercase()) {
  * running — ports `components/environment/EnvironmentMenu.jsx`. Renders
  * nothing when [status] is null/unavailable (projects without
  * `.tmux-web-env/` never show this control, per plan §5).
+ *
+ * [onOpenChanged] fires whenever the dropdown's open/closed state changes —
+ * the web shell uses it to hide the terminal's native DOM element for the
+ * duration (see [com.tanyudii.tmuxweb.terminal.PlatformTerminalView]'s
+ * `isVisible` kdoc), since this dropdown is a `Popup` just like the other
+ * modals affected by that same Compose Multiplatform Web limitation.
  */
 @Composable
 fun TmuxEnvironmentMenu(
@@ -58,9 +66,11 @@ fun TmuxEnvironmentMenu(
     onRun: () -> Unit,
     onStop: () -> Unit,
     modifier: Modifier = Modifier,
+    onOpenChanged: (Boolean) -> Unit = {},
 ) {
     if (status == null || status.phase == EnvPhase.UNAVAILABLE) return
     var open by remember { mutableStateOf(false) }
+    LaunchedEffect(open) { onOpenChanged(open) }
     val running = status.phase == EnvPhase.RUNNING
     val starting = status.phase == EnvPhase.STARTING || (isBusy && status.phase == EnvPhase.IDLE)
     val services = status.services.orEmpty()
@@ -80,10 +90,10 @@ fun TmuxEnvironmentMenu(
             open = open,
             running = running,
             services = services,
-            openUrl = status.openUrl,
+            openLinks = status.openLinks.orEmpty(),
             uriHandler = uriHandler,
             onDismiss = { open = false },
-            onServiceOpened = { open = false },
+            onLinkOpened = { open = false },
             onStop = {
                 open = false
                 onStop()
@@ -159,22 +169,29 @@ private fun EnvironmentToggleRow(
 }
 
 /**
- * The services dropdown: header row, one [ServiceRow] per service, and the
- * stop-environment action. Split out of [TmuxEnvironmentMenu] purely to keep
- * that composable's cyclomatic complexity under the project's threshold —
- * no behavior change.
+ * The services dropdown: header row, one [ServiceRow] per service (showing
+ * an "open in a new tab" icon instead of its status text when that service
+ * has a matching open link -- correlated by [EnvOpenLink.service], since a
+ * user might run several openable services at once and needs to know which
+ * icon opens which), a fallback [OpenLinkRow] for any configured link whose
+ * service isn't in [services] for some reason, and the stop-environment
+ * action. Split out of [TmuxEnvironmentMenu] purely to keep that
+ * composable's cyclomatic complexity under the project's threshold — no
+ * behavior change.
  */
 @Composable
 private fun EnvironmentDropdownContent(
     open: Boolean,
     running: Boolean,
     services: List<ComposeServiceStatus>,
-    openUrl: String?,
+    openLinks: List<EnvOpenLink>,
     uriHandler: UriHandler,
     onDismiss: () -> Unit,
-    onServiceOpened: () -> Unit,
+    onLinkOpened: () -> Unit,
     onStop: () -> Unit,
 ) {
+    val linksByService = openLinks.associateBy { it.service }
+    val unmatchedLinks = openLinks.filter { link -> services.none { it.service == link.service } }
     DropdownMenu(
         expanded = open && running,
         onDismissRequest = onDismiss,
@@ -195,12 +212,15 @@ private fun EnvironmentDropdownContent(
             )
         }
         services.forEach { service ->
-            ServiceRow(
-                service,
-                canOpen = service.state.equals("running", ignoreCase = true) && openUrl != null,
-            ) {
-                openUrl?.let(uriHandler::openUri)
-                onServiceOpened()
+            ServiceRow(service, openLink = linksByService[service.service]) { link ->
+                uriHandler.openUri(link.url)
+                onLinkOpened()
+            }
+        }
+        unmatchedLinks.forEach { link ->
+            OpenLinkRow(link) {
+                uriHandler.openUri(link.url)
+                onLinkOpened()
             }
         }
         DropdownMenuItem(
@@ -226,8 +246,40 @@ private fun EnvironmentDropdownContent(
     }
 }
 
+/**
+ * One "open in a new tab" affordance per configured link — this is the whole
+ * point of the menu for a user who doesn't know which host port their
+ * service ended up on (Docker Compose picks it dynamically unless pinned).
+ * Only used as a fallback for a link whose service didn't match any row in
+ * [EnvironmentDropdownContent]'s `services` list -- normally the icon shows
+ * directly on that service's own [ServiceRow] instead.
+ */
 @Composable
-private fun ServiceRow(service: ComposeServiceStatus, canOpen: Boolean, onOpen: () -> Unit) {
+private fun OpenLinkRow(link: EnvOpenLink, onOpen: () -> Unit) {
+    DropdownMenuItem(
+        text = {
+            Text(
+                link.label,
+                color = TmuxColors.textPrimary,
+                fontFamily = TmuxFonts.sans,
+                fontSize = TmuxTextSize.sm,
+                fontWeight = TmuxWeight.semibold,
+            )
+        },
+        leadingIcon = {
+            Icon(
+                TmuxIcons.ExternalLink,
+                contentDescription = null,
+                tint = TmuxColors.accent,
+                modifier = Modifier.size(15.dp),
+            )
+        },
+        onClick = onOpen,
+    )
+}
+
+@Composable
+private fun ServiceRow(service: ComposeServiceStatus, openLink: EnvOpenLink?, onOpen: (EnvOpenLink) -> Unit) {
     DropdownMenuItem(
         text = {
             Text(
@@ -240,11 +292,11 @@ private fun ServiceRow(service: ComposeServiceStatus, canOpen: Boolean, onOpen: 
         },
         leadingIcon = { Box(Modifier.size(7.dp).background(dotColor(service.state), CircleShape)) },
         trailingIcon = {
-            if (canOpen) {
+            if (openLink != null) {
                 Icon(
                     TmuxIcons.ExternalLink,
-                    contentDescription = "Open in browser",
-                    tint = TmuxColors.textTertiary,
+                    contentDescription = "Open ${service.service} in a new tab",
+                    tint = TmuxColors.accent,
                     modifier = Modifier.size(15.dp),
                 )
             } else {
@@ -256,6 +308,6 @@ private fun ServiceRow(service: ComposeServiceStatus, canOpen: Boolean, onOpen: 
                 )
             }
         },
-        onClick = { if (canOpen) onOpen() },
+        onClick = { openLink?.let(onOpen) },
     )
 }

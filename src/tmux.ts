@@ -9,9 +9,15 @@ export interface TmuxSession {
   attached: boolean;
 }
 
+export interface TmuxWindow {
+  index: number;
+  name: string;
+}
+
 export type ExecFn = (file: string, args: string[]) => Promise<{ stdout: string }>;
 
 const SESSION_LIST_FORMAT = "#{session_name}\t#{session_windows}\t#{session_attached}";
+const WINDOW_LIST_FORMAT = "#{window_index}\t#{window_name}";
 
 // tmux session names may not contain ':' (target separator), must not start
 // with '-' (would be parsed as a CLI flag), and are kept free of shell
@@ -55,6 +61,27 @@ export async function listSessions(exec: ExecFn = defaultExec): Promise<TmuxSess
     if (isNoServerRunningError(error)) return [];
     throw error;
   }
+}
+
+export function parseWindowList(output: string): TmuxWindow[] {
+  return output
+    .split("\n")
+    .filter((line) => line.trim().length > 0)
+    .map((line) => {
+      const [index, name] = line.split("\t");
+      return { index: Number.parseInt(index, 10), name };
+    });
+}
+
+// Per-window names for a session, keyed by index -- see WindowTabs.kt on the
+// KMP client for why this exists (real tmux window names must survive a
+// page refresh, not just live as client-local optimistic state).
+export async function listWindows(name: string, exec: ExecFn = defaultExec): Promise<TmuxWindow[]> {
+  if (!isValidSessionName(name)) {
+    throw new ValidationError(`Invalid session name: ${name}`);
+  }
+  const { stdout } = await exec("tmux", ["list-windows", "-t", name, "-F", WINDOW_LIST_FORMAT]);
+  return parseWindowList(stdout);
 }
 
 export interface CreateSessionOptions {

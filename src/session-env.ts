@@ -13,6 +13,7 @@ export type EnvPhase = "unavailable" | "idle" | "starting" | "running" | "error"
 export interface ResolvedOpenLink {
   label: string;
   url: string;
+  service: string;
 }
 
 export interface EnvStatus {
@@ -83,7 +84,7 @@ async function resolveOpenLinks(
       // non-HTTP caller); "localhost" is the last resort when neither is
       // available.
       const host = requestHost ?? deps.openHost ?? "localhost";
-      return { label: link.label, url: `http://${host}:${hostPort}` };
+      return { label: link.label, url: `http://${host}:${hostPort}`, service: link.service };
     }),
   );
   return resolved.filter((link): link is ResolvedOpenLink => link !== null);

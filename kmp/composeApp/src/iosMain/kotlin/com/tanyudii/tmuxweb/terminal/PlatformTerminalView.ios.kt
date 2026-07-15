@@ -20,7 +20,12 @@ actual fun PlatformTerminalView(
     onBell: () -> Unit,
     onResize: (cols: Int, rows: Int) -> Unit,
     handleReady: (PlatformTerminalHandle) -> Unit,
+    isVisible: Boolean,
 ) {
+    // isVisible is a web-only workaround (see kdoc on the expect declaration)
+    // for interop DOM views always painting above Compose Popups -- native
+    // UIKit modals already z-order correctly above sibling UIViews, so
+    // there's nothing to do with it here.
     val factory = requireNotNull(TerminalViewProvider.factory) {
         "TerminalViewProvider.factory was never set. iosApp must register it " +
             "(see iosApp/iosApp/Terminal/SwiftTermViewFactory.swift) before " +

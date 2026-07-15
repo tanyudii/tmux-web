@@ -118,7 +118,7 @@ test("getSessionEnvStatus derives 'running' + openLinks live from docker, withou
   const status = await getSessionEnvStatus(PROJECT, "feature-x", deps, store);
 
   assert.equal(status.phase, "running");
-  assert.deepEqual(status.openLinks, [{ label: "Open", url: "http://localhost:54321" }]);
+  assert.deepEqual(status.openLinks, [{ label: "Open", url: "http://localhost:54321", service: "web" }]);
   assert.deepEqual(status.services, services);
 });
 
@@ -132,7 +132,7 @@ test("getSessionEnvStatus builds openLinks urls from the given requestHost inste
 
   const status = await getSessionEnvStatus(PROJECT, "feature-x", deps, store, "10.8.0.2");
 
-  assert.deepEqual(status.openLinks, [{ label: "Open", url: "http://10.8.0.2:54321" }]);
+  assert.deepEqual(status.openLinks, [{ label: "Open", url: "http://10.8.0.2:54321", service: "web" }]);
 });
 
 test("getSessionEnvStatus falls back to deps.openHost, then localhost, when no requestHost is given", async () => {
@@ -146,7 +146,7 @@ test("getSessionEnvStatus falls back to deps.openHost, then localhost, when no r
 
   const status = await getSessionEnvStatus(PROJECT, "feature-x", deps, store);
 
-  assert.deepEqual(status.openLinks, [{ label: "Open", url: "http://192.168.1.50:54321" }]);
+  assert.deepEqual(status.openLinks, [{ label: "Open", url: "http://192.168.1.50:54321", service: "web" }]);
 });
 
 test("getSessionEnvStatus resolves multiple openLinks independently, omitting entries whose service hasn't published a port yet", async () => {
@@ -171,7 +171,7 @@ test("getSessionEnvStatus resolves multiple openLinks independently, omitting en
 
   const status = await getSessionEnvStatus(PROJECT, "feature-x", deps, store);
 
-  assert.deepEqual(status.openLinks, [{ label: "Frontend", url: "http://localhost:54321" }]);
+  assert.deepEqual(status.openLinks, [{ label: "Frontend", url: "http://localhost:54321", service: "web" }]);
 });
 
 test("getSessionEnvStatus resolves every configured openLinks entry once all services have published their ports", async () => {
@@ -197,8 +197,8 @@ test("getSessionEnvStatus resolves every configured openLinks entry once all ser
   const status = await getSessionEnvStatus(PROJECT, "feature-x", deps, store);
 
   assert.deepEqual(status.openLinks, [
-    { label: "Frontend", url: "http://localhost:54321" },
-    { label: "DBeaver", url: "http://localhost:32831" },
+    { label: "Frontend", url: "http://localhost:54321", service: "web" },
+    { label: "DBeaver", url: "http://localhost:32831", service: "dbeaver" },
   ]);
 });
 
@@ -328,7 +328,7 @@ test("startSessionEnv runs pre-run -> compose up -> post-run, then status report
   assert.deepEqual(calls, [`run:${config.preRunScript}`, "up", `run:${config.postRunScript}`]);
   const status = await getSessionEnvStatus(PROJECT, "feature-x", deps, store);
   assert.equal(status.phase, "running");
-  assert.deepEqual(status.openLinks, [{ label: "Open", url: "http://localhost:54321" }]);
+  assert.deepEqual(status.openLinks, [{ label: "Open", url: "http://localhost:54321", service: "web" }]);
 });
 
 test("startSessionEnv aborts before compose up when pre-run fails", async () => {
@@ -393,7 +393,7 @@ test("startSessionEnv reports 'error' with services+openUrl still visible when o
   assert.equal(status.phase, "error");
   assert.match(status.message ?? "", /migration failed/);
   assert.deepEqual(status.services, [{ service: "web", state: "running" }]);
-  assert.deepEqual(status.openLinks, [{ label: "Open", url: "http://localhost:54321" }]);
+  assert.deepEqual(status.openLinks, [{ label: "Open", url: "http://localhost:54321", service: "web" }]);
 });
 
 test("stopSessionEnv throws EnvNotRunningError when nothing is running", async () => {

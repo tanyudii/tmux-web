@@ -2,7 +2,7 @@ import type { Project } from "./projects.ts";
 import { buildSessionName, parseSessionName, belongsToProject } from "./session-naming.ts";
 import { resolveWorktreePath } from "./worktree.ts";
 import { slugifyBranchName } from "./slug.ts";
-import { ValidationError, type TmuxSession, type CreateSessionOptions } from "./tmux.ts";
+import { ValidationError, type TmuxSession, type TmuxWindow, type CreateSessionOptions } from "./tmux.ts";
 import type { RemoveWorktreeOptions } from "./worktree.ts";
 import type { GroupedChanges, FileDiff, DiffMode } from "./git-status.ts";
 
@@ -27,11 +27,17 @@ export interface ProjectSession {
   name: string;
   fullName: string;
   windows: number;
+  // Per-window display names, ordered by tmux window index (best-effort --
+  // omitted rather than guessed when the live tmux query fails or isn't
+  // available). Lets the client show real tmux window names (see
+  // WindowTabs.kt) instead of a placeholder after a page refresh.
+  windowNames?: string[];
   attached: boolean;
 }
 
 export interface ProjectSessionsDeps {
   listSessions: () => Promise<TmuxSession[]>;
+  listWindows: (fullName: string) => Promise<TmuxWindow[]>;
   createSession: (name: string, options?: CreateSessionOptions) => Promise<void>;
   killSession: (name: string) => Promise<void>;
   addWorktree: (repoPath: string, worktreePath: string, branchName: string, onProgress?: (message: string) => void) => Promise<void>;
@@ -80,11 +86,24 @@ export async function listProjectSessions(
       name: parsed?.sessionSlug ?? session.name,
       fullName: session.name,
       windows: session.windows,
+      windowNames: await fetchWindowNames(session.name, deps),
       attached: session.attached,
     });
   }
 
   return result;
+}
+
+// Best-effort: a session that vanishes between deps.listSessions() and this
+// call (or any other tmux error) must not fail the whole listing -- window
+// names are supplementary display data, not load-bearing.
+async function fetchWindowNames(fullName: string, deps: ProjectSessionsDeps): Promise<string[] | undefined> {
+  try {
+    const windows = await deps.listWindows(fullName);
+    return windows.map((window) => window.name);
+  } catch {
+    return undefined;
+  }
 }
 
 export async function createProjectSession(

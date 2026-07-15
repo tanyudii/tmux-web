@@ -64,6 +64,15 @@ data class WebShellUiState(
         ) : PendingDelete
     }
 
+    /**
+     * True while any modal (new project/session, pending delete) is shown —
+     * see [com.tanyudii.tmuxweb.terminal.PlatformTerminalView]'s `isVisible`
+     * kdoc for why the web shell needs this to hide the terminal's native
+     * DOM element for the duration instead of letting it paint over the dialog.
+     */
+    val hasOpenDialog: Boolean
+        get() = newProjectDialog != null || newSessionDialog != null || pendingDelete != null
+
     val selectedProject: Project?
         get() = projects.find { it.id == selectedProjectId }
 
@@ -129,6 +138,18 @@ class WebShellViewModel(
 
     fun toggleSidebarCollapsed() {
         _state.update { it.copy(sidebarCollapsed = !it.sidebarCollapsed) }
+    }
+
+    /**
+     * Re-fetches one project's session list -- used after sending a tmux
+     * `new-window` keystroke, since `ProjectSession.windows` is a plain
+     * snapshot from `GET /api/projects/:id/sessions` (src/tmux.ts's
+     * `tmux list-sessions`), not something polled while a session is
+     * attached. Without this, a newly created window has no way to appear
+     * in the tab bar until the user navigates away and back.
+     */
+    fun refreshSessions(projectId: String) {
+        loadSessions(projectId)
     }
 
     fun showNewProjectDialog() {
