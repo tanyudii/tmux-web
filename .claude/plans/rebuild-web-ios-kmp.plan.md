@@ -82,6 +82,68 @@
   `wasmJsTest` pass + `koverVerify` for Phase 3's new code, or explicitly
   accept the gap and move to Phase 4 (Shared Compose UI) with Phase 3 flagged
   as "compiles + statically clean, browser-execution unverified locally."
+- **Phase 4 — Shared Compose UI, Web-first slice landed.** Phase 3 accepted
+  the wasmJsTest gap and moved forward per the note above; Phase 4 started
+  with the design-system foundation and the **Web** target specifically
+  (per an explicit user request to sequence Web before iOS/Android polish),
+  driven by a Claude Design handoff bundle
+  (`tmux-web Design System-handoff.zip`, imported into
+  `kmp/composeApp/src/commonMain/kotlin/com/tanyudii/tmuxweb/ui/theme/` and
+  `ui/components/`). Landed:
+  - `ui/theme/` — color/typography/spacing/radius/motion tokens ported 1:1
+    from the handoff's `tokens/*.css`, plus `TmuxWebTheme` mapping them onto
+    Material3's `darkColorScheme` so every existing (mobile) screen inherits
+    the dark palette for free. Fonts fall back to system sans/mono for now —
+    the handoff itself flags IBM Plex Sans/Mono as CDN-loaded, not
+    self-hosted; swapping in real `.ttf`s under `composeResources/font/` is
+    a one-file follow-up (`TmuxFonts`).
+  - `ui/theme/TmuxIcons.kt` — maps the handoff's Lucide prototype glyph set
+    onto `compose.materialIconsExtended` (Outlined-biased), per the
+    handoff's own caveat that Lucide is a cross-platform stand-in and
+    production should use platform icon sets; Material Symbols is what's
+    actually available inside a shared Compose UI.
+  - `ui/components/` — `TmuxButton`, `TmuxIconButton`, `TmuxTextField`,
+    `TmuxStatusBadge`, `TmuxConnectionBanner`, `TmuxProgressBar`,
+    `TmuxConfirmDialog`, `TmuxEnvironmentMenu` ports of the handoff's DS
+    component library (`Button.jsx`, `Input.jsx`, `StatusBadge.jsx`, etc.).
+  - `presentation/WebShellViewModel.kt` — new ViewModel (not a reuse of
+    `ProjectListViewModel`/`SessionListViewModel`) for the Web sidebar's
+    project→session tree + master-detail selection, since the Web layout
+    needs multiple projects' sessions loaded/expanded at once — a genuinely
+    different data shape from the mobile drill-down screens. Fully
+    unit-tested against the existing `FakeProjectsRepository`/
+    `FakeSessionsRepository` fakes (12 tests).
+  - `ui/web/` — `WebShellScreen`/`WebSidebar`/`WebMainPane`: persistent
+    sidebar (project/session tree, collapse toggle), master-detail terminal
+    (breadcrumb top bar, tmux window tabs, changes rail, status footer),
+    reusing the existing `PlatformTerminalView`/`TerminalViewModel`
+    (xterm.js on wasmJs, unchanged from Phase 0/3) via a new shared
+    `ui/terminal/TerminalSession.kt` helper extracted from `TerminalRoute`
+    so both the mobile and Web screens drive one socket-lifecycle wiring,
+    not two copies of it. Window tabs send the real tmux prefix (Ctrl+B) +
+    digit into the PTY rather than calling a per-window REST endpoint — the
+    backend contract (§2.2) has none; window switching is a tmux keybinding,
+    not an API call, so `activeWindow` is a local optimistic highlight only.
+  - `App.kt` — `MaterialTheme {}` replaced with `TmuxWebTheme {}`; a new
+    `AdaptiveRoot` composable picks `WebShellScreen` vs. the existing
+    `MainNavHost` by available width (`BoxWithConstraints`, 900.dp
+    breakpoint), not by platform — matches the handoff's "Web is about the
+    *layout*, not the runtime" framing, and means a wide Compose Desktop or
+    landscape-iPad window would also get the sidebar shell for free later.
+  - **Explicitly deferred, not done**: iOS/Android screen redesigns to match
+    the handoff's `ui_kits/ios`/`ui_kits/android` kits (HIG stack nav +
+    sheets / Material 3 app bar + FAB) — existing mobile screens
+    (`ProjectListScreen`, `SessionListScreen`, `TerminalScreen`, etc.) are
+    unchanged in structure, only inheriting the new dark color scheme
+    automatically via `TmuxWebTheme`. No Android target exists in this
+    project yet (`composeApp/build.gradle.kts` only declares
+    `iosArm64`/`iosSimulatorArm64`/`jvm`(coverage-only)/`wasmJs` — adding a
+    real Android target is out of scope for this slice and wasn't in this
+    plan's original Phase 4/5 scope either). Changes/Diff file-tree +
+    per-file diff viewer (only a flat changed-file list is shown in the Web
+    changes rail); `EnvironmentPanel`/`ServiceItem` persistent-rail variant
+    (only `EnvironmentMenu`'s toolbar-dropdown form is wired, matching what
+    the Web kit's own `app.jsx` actually renders); IBM Plex font files.
 
 ## 1. Requirements restatement
 

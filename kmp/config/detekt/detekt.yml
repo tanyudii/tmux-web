@@ -13,6 +13,14 @@ naming:
     active: false
 
 complexity:
+  LongParameterList:
+    active: true
+    # Compose's own convention embraces many-parameter composables — call
+    # sites always use named arguments (not positional), which is exactly
+    # the readability risk this rule normally guards against. Material3's
+    # own TextField/Button etc. take 10+ parameters for the same reason:
+    # each one is an independently meaningful, named style/behavior knob.
+    ignoreAnnotated: ["Composable"]
   TooManyFunctions:
     active: true
     # The architecture deliberately has no use-case layer (plan §3.2: "thin
@@ -24,6 +32,15 @@ complexity:
     thresholdInClasses: 15
 
 style:
+  MagicNumber:
+    active: true
+    # Design-token files (ui/theme/TmuxColor.kt, TmuxType.kt, TmuxMotion.kt)
+    # are nothing but property declarations of literal values ported 1:1
+    # from the design handoff's CSS tokens (e.g. `val green500 =
+    # Color(0xFF3ECF8E)`, `val space3 = 8.dp`, `CubicBezierEasing(0.2f, 0f,
+    # 0f, 1f)`) — the property name *is* the "well named constant" this rule
+    # asks for, so flagging the literal on the right-hand side is redundant.
+    ignorePropertyDeclaration: true
   ReturnCount:
     active: true
     # Early-return guard clauses for field-by-field validation (e.g. parsing
