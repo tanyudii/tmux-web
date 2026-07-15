@@ -99,4 +99,18 @@ class ChangesTreeTest {
         assertEquals(2, header.count)
         assertEquals(DiffMode.UNTRACKED, header.mode)
     }
+
+    @Test
+    fun `a changed path that collides with a deeper folder still shows its nested children`() {
+        // Reachable via real git output: `git rm src && mkdir src && git add src/x.txt`
+        // stages a deletion of the file "src" and an addition of "src/x.txt" in the
+        // same section. buildFileTree merges both into one FileTreeNode named "src"
+        // that has both a non-null `file` (the deletion) and a non-empty `children`
+        // list (the nested addition) -- `isFolder` (`file == null`) is therefore
+        // false for that node even though it has descendants to render.
+        val rows = buildChangeRows(changes(staged = listOf("src", "src/x.txt")), collapsedKeys = emptySet())
+
+        val nodeNames = rows.filterIsInstance<ChangeRow.Node>().map { it.node.name }
+        assertEquals(listOf("src", "x.txt"), nodeNames)
+    }
 }
