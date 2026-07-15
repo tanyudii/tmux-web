@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -20,9 +21,12 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import com.tanyudii.tmuxweb.ui.theme.TmuxColors
 import com.tanyudii.tmuxweb.ui.theme.TmuxFonts
@@ -51,61 +55,100 @@ fun TmuxTextField(
     icon: ImageVector? = null,
     enabled: Boolean = true,
     singleLine: Boolean = true,
+    password: Boolean = false,
+    keyboardOptions: KeyboardOptions = KeyboardOptions.Default,
 ) {
     val interactionSource = remember { MutableInteractionSource() }
     val focused by interactionSource.collectIsFocusedAsState()
-    val borderColor = when {
-        error != null -> TmuxColors.red500
-        focused -> TmuxColors.accent
-        else -> TmuxColors.borderDefault
-    }
-    val textStyle = TextStyle(
-        color = TmuxColors.textPrimary,
-        fontFamily = if (mono) TmuxFonts.mono else TmuxFonts.sans,
-        fontSize = if (mono) TmuxMonoSize.base else TmuxTextSize.base,
-        letterSpacing = if (mono) TmuxTracking.normal else TmuxTracking.tight,
-    )
+    val borderColor = textFieldBorderColor(error, focused)
+    val textStyle = textFieldStyle(mono)
 
     Column(modifier = modifier.fillMaxWidth()) {
         label?.let { FieldLabel(it) }
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(40.dp)
-                .background(
-                    if (enabled) TmuxColors.bgRaised else TmuxColors.bgSurface,
-                    RoundedCornerShape(TmuxRadius.sm),
-                )
-                .border(1.dp, borderColor, RoundedCornerShape(TmuxRadius.sm))
-                .padding(horizontal = 12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            icon?.let {
-                Icon(
-                    it,
-                    contentDescription = null,
-                    tint = TmuxColors.textTertiary,
-                    modifier = Modifier.size(16.dp).padding(end = 8.dp),
-                )
-            }
-            Box {
-                if (value.isEmpty() && placeholder != null) {
-                    Text(placeholder, style = textStyle.copy(color = TmuxColors.textTertiary))
-                }
-                BasicTextField(
-                    value = value,
-                    onValueChange = onValueChange,
-                    enabled = enabled,
-                    singleLine = singleLine,
-                    textStyle = textStyle,
-                    cursorBrush = SolidColor(TmuxColors.accent),
-                    interactionSource = interactionSource,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-            }
-        }
+        TextFieldInputRow(
+            value = value,
+            onValueChange = onValueChange,
+            placeholder = placeholder,
+            icon = icon,
+            enabled = enabled,
+            singleLine = singleLine,
+            password = password,
+            keyboardOptions = keyboardOptions,
+            borderColor = borderColor,
+            textStyle = textStyle,
+            interactionSource = interactionSource,
+        )
         if (error != null || helper != null) {
             SupportingText(error, helper)
+        }
+    }
+}
+
+private fun textFieldBorderColor(error: String?, focused: Boolean): Color = when {
+    error != null -> TmuxColors.red500
+    focused -> TmuxColors.accent
+    else -> TmuxColors.borderDefault
+}
+
+private fun textFieldStyle(mono: Boolean): TextStyle = TextStyle(
+    color = TmuxColors.textPrimary,
+    fontFamily = if (mono) TmuxFonts.mono else TmuxFonts.sans,
+    fontSize = if (mono) TmuxMonoSize.base else TmuxTextSize.base,
+    letterSpacing = if (mono) TmuxTracking.normal else TmuxTracking.tight,
+)
+
+/**
+ * The bordered input row itself — split out of [TmuxTextField] purely to
+ * keep that composable's cyclomatic complexity under the project's
+ * threshold — no behavior change.
+ */
+@Composable
+private fun TextFieldInputRow(
+    value: String,
+    onValueChange: (String) -> Unit,
+    placeholder: String?,
+    icon: ImageVector?,
+    enabled: Boolean,
+    singleLine: Boolean,
+    password: Boolean,
+    keyboardOptions: KeyboardOptions,
+    borderColor: Color,
+    textStyle: TextStyle,
+    interactionSource: MutableInteractionSource,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(40.dp)
+            .background(if (enabled) TmuxColors.bgRaised else TmuxColors.bgSurface, RoundedCornerShape(TmuxRadius.sm))
+            .border(1.dp, borderColor, RoundedCornerShape(TmuxRadius.sm))
+            .padding(horizontal = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        icon?.let {
+            Icon(
+                it,
+                contentDescription = null,
+                tint = TmuxColors.textTertiary,
+                modifier = Modifier.size(16.dp).padding(end = 8.dp),
+            )
+        }
+        Box {
+            if (value.isEmpty() && placeholder != null) {
+                Text(placeholder, style = textStyle.copy(color = TmuxColors.textTertiary))
+            }
+            BasicTextField(
+                value = value,
+                onValueChange = onValueChange,
+                enabled = enabled,
+                singleLine = singleLine,
+                textStyle = textStyle,
+                cursorBrush = SolidColor(TmuxColors.accent),
+                interactionSource = interactionSource,
+                visualTransformation = if (password) PasswordVisualTransformation() else VisualTransformation.None,
+                keyboardOptions = keyboardOptions,
+                modifier = Modifier.fillMaxWidth(),
+            )
         }
     }
 }

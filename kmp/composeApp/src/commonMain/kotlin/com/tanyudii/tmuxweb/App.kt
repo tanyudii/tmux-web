@@ -96,7 +96,13 @@ private fun MainNavHost(onSwitchServer: () -> Unit) {
         composable<Route.Projects> {
             ProjectListRoute(
                 onOpenProject = { project ->
-                    navController.navigate(Route.Sessions(projectId = project.id, projectName = project.name))
+                    navController.navigate(
+                        Route.Sessions(
+                            projectId = project.id,
+                            projectName = project.name,
+                            projectRepoPath = project.repoPath,
+                        ),
+                    )
                 },
                 onSwitchServer = onSwitchServer,
             )
@@ -106,14 +112,24 @@ private fun MainNavHost(onSwitchServer: () -> Unit) {
             SessionListRoute(
                 projectId = route.projectId,
                 projectName = route.projectName,
+                projectRepoPath = route.projectRepoPath,
                 onOpenSession = { session ->
-                    navController.navigate(Route.Terminal(session.fullName, session.name))
+                    navController.navigate(
+                        Route.Terminal(session.fullName, session.name, route.projectId, route.projectName),
+                    )
                 },
+                onBack = { navController.popBackStack() },
             )
         }
         composable<Route.Terminal> { entry ->
             val route: Route.Terminal = entry.toRoute()
-            TerminalRoute(sessionFullName = route.sessionFullName, sessionName = route.sessionName)
+            TerminalRoute(
+                sessionFullName = route.sessionFullName,
+                sessionName = route.sessionName,
+                projectId = route.projectId,
+                projectName = route.projectName,
+                onBack = { navController.popBackStack() },
+            )
         }
     }
 }
