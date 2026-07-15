@@ -43,10 +43,12 @@ private val ROW_LEFT_BORDER_WIDTH = 2.dp
 
 /**
  * Tappable row for project/session lists — ports `components/data/ListRow.jsx`.
- * Leading icon badge, sans title, mono subtitle, sans meta line, and a
- * trailing slot that overrides the default chevron. [active] is the
- * web-sidebar/master-detail selected state (accent-fill background + left
- * accent border); mobile call sites simply never set it.
+ * Leading icon badge, sans title, mono subtitle, sans meta line, and an
+ * optional [trailing] slot rendered before the auto-chevron (not instead of
+ * it — see [RowTrailing]). [active] renders an accent-fill background and
+ * left accent border for a selected/master-detail row; no call site in this
+ * codebase sets it yet (both current call sites are mobile drill-down
+ * lists), it exists for a future selected-state list to opt into.
  */
 @Composable
 fun TmuxListRow(
@@ -147,7 +149,10 @@ private fun RowTexts(title: String, subtitle: String?, meta: String?, hasIcon: B
 /**
  * Trailing slot / auto-chevron — split out of [TmuxListRow] purely to
  * keep that composable's complexity under the project's threshold — no
- * behavior change.
+ * behavior change. [trailing] and the auto-chevron are additive, not
+ * mutually exclusive: a caller supplying custom [trailing] content (e.g. a
+ * status badge) still gets the chevron appended after it whenever
+ * [chevron] is true and [onClick] is set, instead of silently losing it.
  */
 @Composable
 private fun RowScope.RowTrailing(
@@ -155,9 +160,9 @@ private fun RowScope.RowTrailing(
     chevron: Boolean,
     onClick: (() -> Unit)?,
 ) {
-    when {
-        trailing != null -> trailing()
-        chevron && onClick != null -> Icon(
+    trailing?.invoke(this)
+    if (chevron && onClick != null) {
+        Icon(
             TmuxIcons.ChevronRight,
             contentDescription = null,
             tint = TmuxColors.textTertiary,

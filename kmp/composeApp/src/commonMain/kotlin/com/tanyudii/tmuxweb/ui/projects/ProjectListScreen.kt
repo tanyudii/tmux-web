@@ -13,6 +13,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
@@ -143,13 +144,20 @@ private fun ProjectsListContent(
         TmuxGroup {
             state.projects.forEachIndexed { index, project ->
                 if (index > 0) TmuxGroupDivider()
-                TmuxSwipeToDeleteRow(onDelete = { viewModel.delete(project) }) {
-                    TmuxListRow(
-                        title = project.name,
-                        icon = TmuxIcons.Folder,
-                        subtitle = project.repoPath,
-                        onClick = { onOpenProject(project) },
-                    )
+                // Keyed by identity, not loop position: without this, deleting a
+                // row shifts every row below it up by one slot, and
+                // TmuxSwipeToDeleteRow's remembered `hasFired`/dismiss-animation
+                // state (bound to the slot) leaks onto the project that now
+                // occupies it -- its next swipe is silently vetoed.
+                key(project.id) {
+                    TmuxSwipeToDeleteRow(onDelete = { viewModel.delete(project) }) {
+                        TmuxListRow(
+                            title = project.name,
+                            icon = TmuxIcons.Folder,
+                            subtitle = project.repoPath,
+                            onClick = { onOpenProject(project) },
+                        )
+                    }
                 }
             }
         }
