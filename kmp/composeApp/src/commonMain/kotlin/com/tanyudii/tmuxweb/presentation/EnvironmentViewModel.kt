@@ -21,7 +21,7 @@ data class EnvironmentUiState(
     val isBusy: Boolean = false,
     val errorMessage: String? = null,
     val isShowingStopConfirm: Boolean = false,
-    val isShowingLogs: Boolean = false,
+    val logsService: String? = null,
 )
 
 class EnvironmentViewModel(
@@ -70,12 +70,16 @@ class EnvironmentViewModel(
         }
     }
 
-    fun showLogs() {
-        _state.update { it.copy(isShowingLogs = true) }
+    fun showLogs(service: String) {
+        _state.update { it.copy(logsService = service) }
+    }
+
+    fun switchLogsService(service: String) {
+        _state.update { it.copy(logsService = service) }
     }
 
     fun hideLogs() {
-        _state.update { it.copy(isShowingLogs = false) }
+        _state.update { it.copy(logsService = null) }
     }
 
     fun dismissError() {
