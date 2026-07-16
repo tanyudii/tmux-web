@@ -46,7 +46,10 @@ private const val DIALOG_WIDTH_FRACTION = 0.85f
 private const val DIALOG_HEIGHT_FRACTION = 0.85f
 private const val BOTTOM_PROXIMITY_ITEMS = 2
 
-/** Same status->color mapping as [ServiceRow]'s private `dotColor` -- duplicated rather than made public across files for one small helper. */
+/**
+ * Same status->color mapping as [ServiceRow]'s private `dotColor` --
+ * duplicated rather than made public across files for one small helper.
+ */
 private fun serviceDotColor(state: String): Color = when (state.lowercase()) {
     "running" -> TmuxColors.statusConnected
     "starting" -> TmuxColors.statusReconnecting

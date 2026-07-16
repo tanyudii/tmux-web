@@ -200,20 +200,7 @@ private fun EnvironmentDropdownContent(
         onDismissRequest = onDismiss,
         modifier = Modifier.width(268.dp).background(TmuxColors.bgCard),
     ) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
-        ) {
-            Box(Modifier.size(7.dp).background(TmuxColors.statusConnected, CircleShape))
-            Text(
-                "Server running",
-                color = TmuxColors.textPrimary,
-                fontFamily = TmuxFonts.sans,
-                fontSize = TmuxTextSize.sm,
-                fontWeight = TmuxWeight.semibold,
-                modifier = Modifier.padding(start = 8.dp),
-            )
-        }
+        ServerRunningHeader()
         services.forEach { service ->
             ServiceRow(
                 service = service,
@@ -253,6 +240,24 @@ private fun EnvironmentDropdownContent(
                 )
             },
             onClick = onStop,
+        )
+    }
+}
+
+@Composable
+private fun ServerRunningHeader() {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
+    ) {
+        Box(Modifier.size(7.dp).background(TmuxColors.statusConnected, CircleShape))
+        Text(
+            "Server running",
+            color = TmuxColors.textPrimary,
+            fontFamily = TmuxFonts.sans,
+            fontSize = TmuxTextSize.sm,
+            fontWeight = TmuxWeight.semibold,
+            modifier = Modifier.padding(start = 8.dp),
         )
     }
 }
