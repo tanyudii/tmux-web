@@ -12,6 +12,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.viewinterop.HtmlElementView
+import com.tanyudii.tmuxweb.domain.copyResultMessage
+import com.tanyudii.tmuxweb.domain.isCopyShortcut
 import kotlin.js.ExperimentalWasmJsInterop
 import kotlinx.browser.document
 import kotlinx.browser.window
@@ -23,6 +25,7 @@ import org.w3c.dom.events.KeyboardEvent
 private const val DEFAULT_FONT_SIZE = 14
 private const val MIN_FONT_SIZE = 8
 private const val MAX_FONT_SIZE = 32
+private const val COPY_TOAST_DURATION_MS = 1800
 
 // Pure mapping, split out of PlatformTerminalView to keep that composable's
 // cyclomatic complexity under the project's threshold -- no behavior change.
@@ -31,6 +34,196 @@ private fun nextZoomFontSize(key: String, currentSize: Int): Int? = when (key) {
     "-" -> (currentSize - 1).coerceAtLeast(MIN_FONT_SIZE)
     "0" -> DEFAULT_FONT_SIZE
     else -> null
+}
+
+// Cmd+C is the Mac copy shortcut, but xterm's own hidden input textarea can
+// end up being what the browser's native copy command targets, so the
+// selected terminal text doesn't reliably reach the clipboard. Handle it
+// ourselves whenever there's an active selection -- same fix as the pre-KMP
+// public/app.js (commit 73be7a0). Ctrl+C is left alone so it still sends
+// SIGINT to the shell, matching every other terminal. Returns true if the
+// event was claimed as a copy request, so the caller can skip zoom handling.
+private fun handleCopyKeyDown(
+    keyEvent: KeyboardEvent,
+    terminal: XtermTerminal?,
+    onCopyRequested: (XtermTerminal) -> Unit,
+): Boolean {
+    val isCopy = isCopyShortcut(
+        type = keyEvent.type,
+        metaKey = keyEvent.metaKey,
+        shiftKey = keyEvent.shiftKey,
+        key = keyEvent.key,
+    )
+    if (terminal == null || !isCopy || !terminal.hasSelection()) return false
+    keyEvent.preventDefault()
+    onCopyRequested(terminal)
+    return true
+}
+
+// Ctrl/Cmd +/-/0 zoom, same convention as browsers and every desktop
+// terminal emulator. Returns true once the keystroke was recognized as a
+// zoom shortcut (even a no-op one, e.g. already at MAX_FONT_SIZE) so the
+// caller knows not to fall through to any other handling.
+private fun handleZoomKeyDown(
+    keyEvent: KeyboardEvent,
+    terminal: XtermTerminal?,
+    fontSize: Int,
+    onZoomChanged: (term: XtermTerminal, nextSize: Int) -> Unit,
+): Boolean {
+    val isZoomModifier = keyEvent.ctrlKey || keyEvent.metaKey
+    val nextSize = if (isZoomModifier) nextZoomFontSize(keyEvent.key, fontSize) else null
+    if (nextSize == null) return false
+    // preventDefault() stops the browser's own page-zoom from also firing
+    // on the same keystroke.
+    keyEvent.preventDefault()
+    if (nextSize != fontSize) terminal?.let { onZoomChanged(it, nextSize) }
+    return true
+}
+
+// A single deferred fit() (in the composable's `update` lambda) only
+// catches ONE late layout pass. In practice the container's real settled
+// size can shift more than once after mount -- Compose's own
+// weight()-based reflow of ancestors, web font load, sidebar/rail toggles
+// -- and each of those needs its own re-fit; xterm resizing itself
+// visually without re-fitting is exactly what left tmux painting to a
+// stale, smaller size while the visible black box grew underneath it.
+// ResizeObserver is the actual robust fix: re-fit and re-report on every
+// real size change, not just the first one.
+private fun attachResizeObserver(
+    container: HTMLDivElement,
+    terminal: () -> XtermTerminal?,
+    fitAddon: () -> XtermFitAddon?,
+    reportResizeIfChanged: (XtermTerminal) -> Unit,
+) {
+    newResizeObserver {
+        val current = terminal() ?: return@newResizeObserver
+        fitAddon()?.fit()
+        reportResizeIfChanged(current)
+    }.observe(container)
+}
+
+// FitAddon.fit() measures the container's current layout box. Calling it
+// synchronously right after open() races the browser's own layout pass on
+// the just-inserted <div> (often still 0x0 at this point), which renders
+// the terminal with 0 rows/cols -- invisible, no thrown error. Deferring
+// one animation frame lets layout settle before the first fit.
+private fun createAndMountTerminal(
+    container: HTMLDivElement,
+    onInput: (String) -> Unit,
+    onBell: () -> Unit,
+    onReady: (created: XtermTerminal, addon: XtermFitAddon) -> Unit,
+    onFirstFit: (created: XtermTerminal, addon: XtermFitAddon) -> Unit,
+): XtermTerminal {
+    val created = newTerminal()
+    val addon = newFitAddon()
+    created.loadAddon(addon)
+    created.open(container)
+    created.onData { data -> onInput(data.toString()) }
+    created.onBell { onBell() }
+    onReady(created, addon)
+    window.requestAnimationFrame { onFirstFit(created, addon) }
+    return created
+}
+
+/**
+ * Get/set access to the composable's `remember`ed terminal/fitAddon state.
+ * Bundled (rather than four separate params) to stay under detekt's
+ * parameter-count limit.
+ */
+private class TerminalRefs(
+    val terminal: () -> XtermTerminal?,
+    val setTerminal: (XtermTerminal) -> Unit,
+    val fitAddon: () -> XtermFitAddon?,
+    val setFitAddon: (XtermFitAddon) -> Unit,
+)
+
+/** The composable's stable callback params. Bundled for the same reason as [TerminalRefs]. */
+private class TerminalCallbacks(
+    val onInput: (String) -> Unit,
+    val onBell: () -> Unit,
+    val handleReady: (PlatformTerminalHandle) -> Unit,
+    val reportResizeIfChanged: (XtermTerminal) -> Unit,
+)
+
+private fun updateTerminalContainer(
+    container: HTMLDivElement,
+    isVisible: Boolean,
+    refs: TerminalRefs,
+    callbacks: TerminalCallbacks,
+) {
+    // visibility (not display:none) so the container keeps its real layout
+    // box -- clientWidth/clientHeight (and therefore fit()) stay accurate
+    // while hidden, instead of collapsing to 0x0 and needing a fresh fit()
+    // once shown again.
+    val visibility = if (isVisible) "visible" else "hidden"
+    container.style.visibility = visibility
+    // A failure toast has no auto-dismiss timer (see showCopyToast) -- stop
+    // it from silently resurfacing with a stale message next time the
+    // container becomes visible again (e.g. after a Popup/Dialog closes)
+    // when hiding it now for an unrelated reason.
+    if (!isVisible) hideCopyToast(container)
+    // HtmlElementView wraps `container` in ITS OWN absolutely-positioned
+    // outer <div> for interop placement, and that outer div stays
+    // `visibility: visible` no matter what we set on `container` --
+    // confirmed live via Playwright: with only the line above, the outer
+    // wrapper (empty, but still hit-testable at full terminal size) sat on
+    // top of every Popup/Dialog opened while a session was active, silently
+    // swallowing every click and keystroke aimed at the dialog with no
+    // console error, forcing a page reload to recover. Hiding
+    // `container.parentElement` too is what actually removes it from
+    // hit-testing.
+    (container.parentElement as? HTMLElement)?.style?.visibility = visibility
+    val current = refs.terminal() ?: createAndMountTerminal(
+        container = container,
+        onInput = callbacks.onInput,
+        onBell = callbacks.onBell,
+        onReady = { created, addon ->
+            refs.setTerminal(created)
+            refs.setFitAddon(addon)
+            callbacks.handleReady(PlatformTerminalHandle(created))
+        },
+        onFirstFit = { created, addon ->
+            addon.fit()
+            callbacks.reportResizeIfChanged(created)
+        },
+    )
+    refs.fitAddon()?.fit()
+    callbacks.reportResizeIfChanged(current)
+    // Same race as createAndMountTerminal's first-fit comment, but for
+    // LATER layout changes: toggling a sibling (e.g. the changes rail)
+    // resizes this container on the same frame this runs in, and that
+    // resize can still be mid-flight when the synchronous fit() above reads
+    // clientWidth/clientHeight -- leaving stale (blank/gap) dimensions
+    // until *something else* happens to trigger another fit(). The
+    // ResizeObserver in `factory` normally catches this, but re-fitting one
+    // animation frame later here too closes any gap between "container's
+    // inline style changed" and "browser actually finished the reflow",
+    // without waiting on the observer.
+    window.requestAnimationFrame {
+        refs.fitAddon()?.fit()
+        refs.terminal()?.let(callbacks.reportResizeIfChanged)
+    }
+}
+
+// The copy feedback toast is a real DOM element appended to `container`,
+// NOT a Compose composable -- Compose Multiplatform Web's canvas content
+// can't paint over this HtmlElementView's native DOM (same CMP-8521
+// limitation documented on PlatformTerminalView.isVisible/the
+// container.parentElement visibility fix above), so a Compose-rendered
+// toast sitting in the same Box as this view would be permanently hidden
+// underneath xterm's real DOM node. Confirmed live via Playwright: a first
+// attempt using a Compose Box+Text overlay never appeared on screen despite
+// the copy itself succeeding.
+private fun performCopy(term: XtermTerminal, container: HTMLDivElement) {
+    val text = term.getSelection().toString()
+    copyTextToClipboard(text) { success ->
+        val durationMs = if (success) COPY_TOAST_DURATION_MS else 0
+        showCopyToast(container, copyResultMessage(success), success, durationMs)
+        // execCommand's scratch textarea (see XtermJs.kt's copyTextToClipboard)
+        // takes focus away from xterm's own hidden input; move it back so
+        // keystrokes keep reaching the shell, win or lose.
+        term.focus()
+    }
 }
 
 // wasmJs actual for the expect in PlatformTerminalView.kt — this is Spike B
@@ -79,93 +272,41 @@ actual fun PlatformTerminalView(
             val container = document.createElement("div") as HTMLDivElement
             container.style.width = "100%"
             container.style.height = "100%"
-            // Ctrl/Cmd +/-/0 zoom, same convention as browsers and every
-            // desktop terminal emulator. preventDefault() stops the browser's
-            // own page-zoom from also firing on the same keystroke.
+            container.style.position = "relative"
             container.addEventListener("keydown", { event: Event ->
                 val keyEvent = event as KeyboardEvent
-                if (!(keyEvent.ctrlKey || keyEvent.metaKey)) return@addEventListener
-                val nextSize = nextZoomFontSize(keyEvent.key, fontSize) ?: return@addEventListener
-                keyEvent.preventDefault()
-                if (nextSize == fontSize) return@addEventListener
-                fontSize = nextSize
-                val current = terminal ?: return@addEventListener
-                setFontSize(current, nextSize)
-                fitAddon?.fit()
-                reportResizeIfChanged(current)
+                val copied = handleCopyKeyDown(keyEvent, terminal) { activeTerminal ->
+                    performCopy(activeTerminal, container)
+                }
+                if (copied) return@addEventListener
+                handleZoomKeyDown(keyEvent, terminal, fontSize) { current, nextSize ->
+                    fontSize = nextSize
+                    setFontSize(current, nextSize)
+                    fitAddon?.fit()
+                    reportResizeIfChanged(current)
+                }
             })
-            // A single deferred fit() (below, in `update`) only catches ONE
-            // late layout pass. In practice the container's real settled
-            // size can shift more than once after mount -- Compose's own
-            // weight()-based reflow of ancestors, web font load, sidebar/
-            // rail toggles -- and each of those needs its own re-fit; xterm
-            // resizing itself visually without re-fitting is exactly what
-            // left tmux painting to a stale, smaller size while the visible
-            // black box grew underneath it. ResizeObserver is the actual
-            // robust fix: re-fit and re-report on every real size change,
-            // not just the first one.
-            newResizeObserver {
-                val current = terminal ?: return@newResizeObserver
-                fitAddon?.fit()
-                reportResizeIfChanged(current)
-            }.observe(container)
+            attachResizeObserver(container, { terminal }, { fitAddon }, ::reportResizeIfChanged)
             container
         },
         modifier = modifier.fillMaxSize(),
         update = { container: HTMLDivElement ->
-            // visibility (not display:none) so the container keeps its real
-            // layout box -- clientWidth/clientHeight (and therefore fit())
-            // stay accurate while hidden, instead of collapsing to 0x0 and
-            // needing a fresh fit() once shown again.
-            val visibility = if (isVisible) "visible" else "hidden"
-            container.style.visibility = visibility
-            // HtmlElementView wraps `container` in ITS OWN absolutely-positioned
-            // outer <div> for interop placement, and that outer div stays
-            // `visibility: visible` no matter what we set on `container` --
-            // confirmed live via Playwright: with only the line above, the
-            // outer wrapper (empty, but still hit-testable at full terminal
-            // size) sat on top of every Popup/Dialog opened while a session
-            // was active, silently swallowing every click and keystroke aimed
-            // at the dialog with no console error, forcing a page reload to
-            // recover. Hiding `container.parentElement` too is what actually
-            // removes it from hit-testing.
-            (container.parentElement as? HTMLElement)?.style?.visibility = visibility
-            val current = terminal ?: newTerminal().also { created ->
-                val addon = newFitAddon()
-                created.loadAddon(addon)
-                created.open(container)
-                created.onData { data -> onInput(data.toString()) }
-                created.onBell { onBell() }
-                terminal = created
-                fitAddon = addon
-                handleReady(PlatformTerminalHandle(created))
-                // FitAddon.fit() measures the container's current layout box.
-                // Calling it synchronously right after open() races the
-                // browser's own layout pass on the just-inserted <div> (often
-                // still 0x0 at this point), which renders the terminal with
-                // 0 rows/cols -- invisible, no thrown error. Deferring one
-                // animation frame lets layout settle before the first fit.
-                window.requestAnimationFrame {
-                    addon.fit()
-                    reportResizeIfChanged(created)
-                }
-            }
-            fitAddon?.fit()
-            reportResizeIfChanged(current)
-            // Same race as the first-fit comment above, but for LATER layout
-            // changes: toggling a sibling (e.g. the changes rail) resizes this
-            // container on the same frame this `update` runs in, and that
-            // resize can still be mid-flight when the synchronous fit() above
-            // reads clientWidth/clientHeight -- leaving stale (blank/gap)
-            // dimensions until *something else* happens to trigger another
-            // fit(). The ResizeObserver in `factory` normally catches this,
-            // but re-fitting one animation frame later here too closes any
-            // gap between "container's inline style changed" and "browser
-            // actually finished the reflow", without waiting on the observer.
-            window.requestAnimationFrame {
-                fitAddon?.fit()
-                terminal?.let(::reportResizeIfChanged)
-            }
+            updateTerminalContainer(
+                container = container,
+                isVisible = isVisible,
+                refs = TerminalRefs(
+                    terminal = { terminal },
+                    setTerminal = { terminal = it },
+                    fitAddon = { fitAddon },
+                    setFitAddon = { fitAddon = it },
+                ),
+                callbacks = TerminalCallbacks(
+                    onInput = onInput,
+                    onBell = onBell,
+                    handleReady = handleReady,
+                    reportResizeIfChanged = ::reportResizeIfChanged,
+                ),
+            )
         },
     )
 }
