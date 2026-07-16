@@ -10,22 +10,6 @@
     <title>tmux-web</title>
     <link rel="stylesheet" href="vendor/xterm.css">
     <style>
-        /* Compose Multiplatform Web's own recommended reset
-           (kotlinlang.org/docs/multiplatform/compose-css-styles.html):
-           html/body need an explicit width AND height, not just height,
-           or the canvas's own measured size and the body's size can feed
-           back into each other -- body grows to fit the canvas, that
-           growth causes a scrollbar, the scrollbar shrinks the viewport,
-           Compose re-measures a smaller canvas, the scrollbar disappears,
-           Compose grows the canvas back, repeat. That loop is what put
-           both a horizontal AND vertical browser scrollbar on screen even
-           though nothing in the app actually needs to scroll.
-           `overflow: hidden` only became safe to add once `#composeApp`
-           below gives the mounted canvas a size that's anchored to the
-           viewport instead of derived from its own content -- without
-           that anchor, `overflow: hidden` alone hides real UI instead of
-           a rounding gap (that's what "cuts the app off" if this rule is
-           copied without the matching #composeApp sizing). */
         html, body {
             margin: 0;
             padding: 0;
@@ -35,26 +19,29 @@
             background: #0d1117;
         }
         /* Compose mounts into this dedicated element (see main.kt), not
-           into <body> directly -- breaks the circular sizing dependency
-           above, since #composeApp's size now comes from its CSS (100% of
-           the already-fixed html/body box), not from measuring its own
-           canvas child. */
+           into <body> directly -- without this anchor, the canvas's own
+           measured size and body's size feed back into each other (body
+           grows to fit the canvas, that growth triggers a scrollbar, the
+           scrollbar shrinks the viewport, Compose re-measures smaller,
+           repeat), which is what put both a horizontal and vertical
+           browser scrollbar on screen even though nothing here needs to
+           scroll. `overflow: hidden` above is only safe now that this
+           element gives Compose a size anchored to the viewport instead
+           of derived from its own content -- without this anchor,
+           `overflow: hidden` alone would hide real UI, not just a
+           rounding gap. */
         #composeApp {
-            width: 100%;
             height: 100%;
         }
-        /* xterm's own .xterm-viewport (vendor/xterm.css) deliberately
-           keeps `overflow-y: scroll` always-on -- that's what backs the
-           mouse-wheel-drives-tmux-copy-mode feature (see
-           TerminalViewModel/PlatformTerminalView), not a bug. Only the
-           native scrollbar *chrome* is hidden here; overflow-y stays
-           `scroll` so wheel/scroll events keep firing exactly as before.
-           Most noticeable on macOS with System Settings > Appearance >
-           "Show scroll bars: Always", which otherwise keeps a permanent
-           gray track visible inside every terminal pane. */
+        /* xterm's own .xterm-viewport (vendor/xterm.css) keeps
+           `overflow-y: scroll` always-on for its local scrollback buffer.
+           Only the native scrollbar *chrome* is hidden here; overflow-y
+           stays `scroll` so that local scrollback keeps working exactly
+           as before -- most noticeable on macOS with "Show scroll bars:
+           Always", which otherwise keeps a permanent gray track visible
+           inside every terminal pane. */
         .xterm-viewport {
             scrollbar-width: none;
-            -ms-overflow-style: none;
         }
         .xterm-viewport::-webkit-scrollbar {
             display: none;
