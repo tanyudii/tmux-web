@@ -50,6 +50,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Default Xcode on this runner (16.4) links iOS-simulator test binaries
+      # against a mismatched SDK, failing with "Undefined symbols ...
+      # _OBJC_CLASS_$_UIViewLayoutRegion" from Compose Multiplatform's
+      # ui-uikit-cache.a (a Compose 1.11.x/Xcode 16.4 interop bug, reproduced
+      # on every run since this module's first commit -- unrelated to any
+      # PR's own changes). Xcode 26.x is already preinstalled on this same
+      # runner image; selecting it as an experiment to see whether its newer
+      # linker/SDK resolves the symbol.
+      - name: Select Xcode 26.3
+        run: sudo xcode-select -s /Applications/Xcode_26.3.app
+
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
