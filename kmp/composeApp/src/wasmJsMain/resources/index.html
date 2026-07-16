@@ -5,8 +5,11 @@
     <!-- Without this, mobile/tablet browsers render at a desktop-width
          layout and zoom out instead of sizing to the device's actual
          viewport -- needed for the "auto-fit whatever device this runs
-         on" requirement, not just the desktop scrollbar fix below. -->
-    <meta name="viewport" content="width=device-width, initial-scale=1">
+         on" requirement, not just the desktop scrollbar fix below.
+         `viewport-fit=cover` opts into drawing under the iOS safe areas
+         (notch/home-indicator) instead of leaving the OS reserve an
+         unfilled strip there -- see the safe-area-inset padding below. -->
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
     <title>tmux-web</title>
     <link rel="stylesheet" href="vendor/xterm.css">
     <style>
@@ -14,9 +17,32 @@
             margin: 0;
             padding: 0;
             width: 100%;
+            /* 100dvh (dynamic viewport height) tracks Safari's
+               show/hide address bar and bottom toolbar on iOS; 100%
+               (the old value) resolves against the layout viewport,
+               which does NOT track that -- leaving a gap the height of
+               whatever chrome Safari is currently showing. `height:
+               100%` stays as a fallback for browsers without `dvh`
+               support. */
             height: 100%;
+            height: 100dvh;
             overflow: hidden;
             background: #0d1117;
+        }
+        body {
+            /* border-box so the safe-area padding below is carved out of
+               the 100dvh height already set above instead of adding to
+               it -- with the default content-box, that padding would
+               push body's total box taller than 100dvh and `overflow:
+               hidden` would then clip that same amount off the bottom
+               of #composeApp instead of fixing anything. */
+            box-sizing: border-box;
+            /* Fills the home-indicator safe area on notched/home-indicator
+               iPhones and iPads instead of leaving it as a visible gap
+               below the app's own background -- see viewport-fit=cover
+               above, required for env() to resolve to anything nonzero.
+               0 on devices without a safe area. */
+            padding-bottom: env(safe-area-inset-bottom);
         }
         /* Compose mounts into this dedicated element (see main.kt), not
            into <body> directly -- without this anchor, the canvas's own
