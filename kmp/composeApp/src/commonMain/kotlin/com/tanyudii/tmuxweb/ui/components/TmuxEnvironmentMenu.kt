@@ -65,6 +65,7 @@ fun TmuxEnvironmentMenu(
     isBusy: Boolean,
     onRun: () -> Unit,
     onStop: () -> Unit,
+    onViewLogs: (String) -> Unit,
     modifier: Modifier = Modifier,
     onOpenChanged: (Boolean) -> Unit = {},
 ) {
@@ -98,6 +99,7 @@ fun TmuxEnvironmentMenu(
                 open = false
                 onStop()
             },
+            onViewLogs = onViewLogs,
         )
     }
 }
@@ -189,6 +191,7 @@ private fun EnvironmentDropdownContent(
     onDismiss: () -> Unit,
     onLinkOpened: () -> Unit,
     onStop: () -> Unit,
+    onViewLogs: (String) -> Unit,
 ) {
     val linksByService = openLinks.associateBy { it.service }
     val unmatchedLinks = openLinks.filter { link -> services.none { it.service == link.service } }
@@ -197,25 +200,20 @@ private fun EnvironmentDropdownContent(
         onDismissRequest = onDismiss,
         modifier = Modifier.width(268.dp).background(TmuxColors.bgCard),
     ) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
-        ) {
-            Box(Modifier.size(7.dp).background(TmuxColors.statusConnected, CircleShape))
-            Text(
-                "Server running",
-                color = TmuxColors.textPrimary,
-                fontFamily = TmuxFonts.sans,
-                fontSize = TmuxTextSize.sm,
-                fontWeight = TmuxWeight.semibold,
-                modifier = Modifier.padding(start = 8.dp),
-            )
-        }
+        ServerRunningHeader()
         services.forEach { service ->
-            ServiceRow(service, openLink = linksByService[service.service]) { link ->
-                uriHandler.openUri(link.url)
-                onLinkOpened()
-            }
+            ServiceRow(
+                service = service,
+                openLink = linksByService[service.service],
+                onOpen = { link ->
+                    uriHandler.openUri(link.url)
+                    onLinkOpened()
+                },
+                onViewLogs = {
+                    onDismiss()
+                    onViewLogs(service.service)
+                },
+            )
         }
         unmatchedLinks.forEach { link ->
             OpenLinkRow(link) {
@@ -242,6 +240,24 @@ private fun EnvironmentDropdownContent(
                 )
             },
             onClick = onStop,
+        )
+    }
+}
+
+@Composable
+private fun ServerRunningHeader() {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
+    ) {
+        Box(Modifier.size(7.dp).background(TmuxColors.statusConnected, CircleShape))
+        Text(
+            "Server running",
+            color = TmuxColors.textPrimary,
+            fontFamily = TmuxFonts.sans,
+            fontSize = TmuxTextSize.sm,
+            fontWeight = TmuxWeight.semibold,
+            modifier = Modifier.padding(start = 8.dp),
         )
     }
 }
@@ -279,7 +295,12 @@ private fun OpenLinkRow(link: EnvOpenLink, onOpen: () -> Unit) {
 }
 
 @Composable
-private fun ServiceRow(service: ComposeServiceStatus, openLink: EnvOpenLink?, onOpen: (EnvOpenLink) -> Unit) {
+private fun ServiceRow(
+    service: ComposeServiceStatus,
+    openLink: EnvOpenLink?,
+    onOpen: (EnvOpenLink) -> Unit,
+    onViewLogs: () -> Unit,
+) {
     DropdownMenuItem(
         text = {
             Text(
@@ -292,20 +313,28 @@ private fun ServiceRow(service: ComposeServiceStatus, openLink: EnvOpenLink?, on
         },
         leadingIcon = { Box(Modifier.size(7.dp).background(dotColor(service.state), CircleShape)) },
         trailingIcon = {
-            if (openLink != null) {
-                Icon(
-                    TmuxIcons.ExternalLink,
-                    contentDescription = "Open ${service.service} in a new tab",
-                    tint = TmuxColors.accent,
-                    modifier = Modifier.size(15.dp),
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                TmuxIconButton(
+                    icon = TmuxIcons.Logs,
+                    contentDescription = "View ${service.service} logs",
+                    onClick = onViewLogs,
+                    size = TmuxIconButtonSize.SM,
                 )
-            } else {
-                Text(
-                    service.state,
-                    color = TmuxColors.textTertiary,
-                    fontFamily = TmuxFonts.mono,
-                    fontSize = TmuxTextSize.xs,
-                )
+                if (openLink != null) {
+                    Icon(
+                        TmuxIcons.ExternalLink,
+                        contentDescription = "Open ${service.service} in a new tab",
+                        tint = TmuxColors.accent,
+                        modifier = Modifier.size(15.dp),
+                    )
+                } else {
+                    Text(
+                        service.state,
+                        color = TmuxColors.textTertiary,
+                        fontFamily = TmuxFonts.mono,
+                        fontSize = TmuxTextSize.xs,
+                    )
+                }
             }
         },
         onClick = { openLink?.let(onOpen) },

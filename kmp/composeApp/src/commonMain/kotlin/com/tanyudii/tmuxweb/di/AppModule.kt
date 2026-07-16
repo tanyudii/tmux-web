@@ -6,6 +6,8 @@ import com.tanyudii.tmuxweb.data.remote.ConnectionTester
 import com.tanyudii.tmuxweb.data.remote.KtorConnectionTester
 import com.tanyudii.tmuxweb.data.remote.TmuxWebHttpClient
 import com.tanyudii.tmuxweb.data.remote.createTmuxWebHttpClient
+import com.tanyudii.tmuxweb.data.remote.logs.KtorLogsSocket
+import com.tanyudii.tmuxweb.data.remote.logs.LogsSocket
 import com.tanyudii.tmuxweb.data.remote.terminal.KtorTerminalSocket
 import com.tanyudii.tmuxweb.data.remote.terminal.TerminalSocket
 import com.tanyudii.tmuxweb.domain.repository.BrowseRepository
@@ -56,6 +58,11 @@ val commonModule: Module = module {
     factory<TerminalSocket> {
         val settings = get<TmuxWebSessionHolder>().require()
         KtorTerminalSocket(httpClient = get(), baseUrl = settings.baseUrl, token = settings.token)
+    }
+
+    factory<LogsSocket> {
+        val settings = get<TmuxWebSessionHolder>().require()
+        KtorLogsSocket(httpClient = get(), baseUrl = settings.baseUrl, token = settings.token)
     }
 }
 

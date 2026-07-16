@@ -167,6 +167,10 @@ kover {
                 // scope for this pass; ClientMessage.kt's pure wire-format
                 // logic in the same package is still fully tested.
                 classes("com.tanyudii.tmuxweb.data.remote.terminal.KtorTerminalSocket")
+                // KtorLogsSocket: same untested-network-wrapper reasoning as
+                // KtorTerminalSocket immediately above (identical channelFlow
+                // + Ktor webSocket{} shape, same MockEngine WebSocket gap).
+                classes("com.tanyudii.tmuxweb.data.remote.logs.KtorLogsSocket")
             }
         }
         verify {
