@@ -139,7 +139,7 @@ class EnvironmentViewModelTest {
     }
 
     @Test
-    fun `showLogs sets the selected service, switchLogsService changes it, hideLogs clears it`() = runTest {
+    fun `showLogs sets the selected service -- switchLogsService changes it -- hideLogs clears it`() = runTest {
         val repository = FakeEnvironmentRepository()
         val viewModel = viewModel(repository)
         runCurrent()

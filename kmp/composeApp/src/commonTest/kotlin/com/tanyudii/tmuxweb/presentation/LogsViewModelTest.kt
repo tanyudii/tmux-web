@@ -56,7 +56,7 @@ class LogsViewModelTest {
     }
 
     @Test
-    fun `Closed event with a cause clears isConnected, sets errorMessage, keeps accumulated output`() = runTest {
+    fun `Closed event with a cause clears isConnected -- sets errorMessage -- keeps accumulated output`() = runTest {
         val socket = FakeLogsSocket()
         val viewModel = viewModel(socket)
         runCurrent()
@@ -88,7 +88,7 @@ class LogsViewModelTest {
     }
 
     @Test
-    fun `switchService closes the current socket, reconnects with the new service, and resets the buffer`() = runTest {
+    fun `switchService closes the current socket -- reconnects with the new service -- resets the buffer`() = runTest {
         val socket = FakeLogsSocket()
         val viewModel = viewModel(socket, service = "web")
         runCurrent()
