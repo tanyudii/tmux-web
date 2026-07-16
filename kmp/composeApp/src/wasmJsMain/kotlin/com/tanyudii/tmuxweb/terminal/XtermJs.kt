@@ -64,10 +64,23 @@ fun newFitAddon(): XtermFitAddon =
 // rightClickSelectsWord: false -- xterm.js defaults this to true on macOS,
 // which replaces an existing multi-line selection with a single word on
 // right-click. Same fix as public/app.js commit 73be7a0.
+// macOptionClickForcesSelection: true -- tmux runs with `mouse on` (see
+// src/tmux.ts), so a plain drag is captured by tmux's own mouse-reporting
+// (which enters tmux's copy-mode and copies into tmux's *own* internal
+// paste buffer -- the "copied N chars to tmux buffer" status message a
+// user sees is tmux's, not this app's). xterm.js's own vendored source
+// (vendor/xterm.js) forces local browser-side selection instead via
+// `isMac ? e.altKey && macOptionClickForcesSelection : e.shiftKey` -- i.e.
+// Shift+drag already worked on Windows/Linux without this option, but on
+// macOS the bypass modifier is Option/Alt, and it does nothing at all
+// unless this option is explicitly enabled (it's not part of xterm.js's
+// own defaults). Without it, every Mac user's drag falls through to tmux
+// every time, and hasSelection() (XtermTerminal) is always false, so
+// Cmd+C in PlatformTerminalView.wasmJs.kt never has anything to copy.
 fun newTerminal(): XtermTerminal =
     js(
         "new Terminal({ cursorBlink: true, fontFamily: 'monospace', fontSize: 14, bellStyle: 'none'," +
-            " rightClickSelectsWord: false })",
+            " rightClickSelectsWord: false, macOptionClickForcesSelection: true })",
     )
 
 // navigator.clipboard.writeText needs a secure context (HTTPS/localhost),
