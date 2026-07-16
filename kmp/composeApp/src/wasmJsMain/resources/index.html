@@ -50,6 +50,48 @@
 </head>
 <body>
     <div id="composeApp"></div>
+    <script>
+      // iOS Safari does not shrink the layout viewport (what `height: 100%`
+      // above resolves against) when the on-screen keyboard opens -- only
+      // the *visual* viewport (window.visualViewport) shrinks to the area
+      // actually visible above the keyboard. Without this, #composeApp
+      // (and therefore the whole Compose canvas, including the terminal
+      // pane) kept its full pre-keyboard height and the keyboard simply
+      // painted over its bottom portion instead of the layout making room.
+      // Driving #composeApp's height from visualViewport.height instead
+      // makes the canvas genuinely shrink to the visible area, which
+      // PlatformTerminalView.wasmJs.kt's existing ResizeObserver (see its
+      // `attachResizeObserver` comment) already reacts to by re-fitting
+      // xterm and reporting the new size to the PTY -- no Kotlin change
+      // needed, this is purely "give Compose the right container size".
+      //
+      // visualViewport.offsetTop is compensated too: iOS can offset the
+      // visual viewport from the layout viewport's origin (most commonly
+      // from pinch-zoom, but iOS 26 has a documented bug -- WebKit#265578 --
+      // where this can also happen transiently around keyboard show/hide),
+      // and without the translateY here #composeApp would stay pinned to
+      // the layout viewport's (0,0) while the actually-visible area shifted
+      // out from under it.
+      (function () {
+        var appEl = document.getElementById("composeApp");
+        function applyVisualViewportSize() {
+          var vv = window.visualViewport;
+          if (vv) {
+            appEl.style.height = vv.height + "px";
+            appEl.style.transform = vv.offsetTop ? "translateY(" + vv.offsetTop + "px)" : "";
+          } else {
+            appEl.style.height = window.innerHeight + "px";
+            appEl.style.transform = "";
+          }
+        }
+        if (window.visualViewport) {
+          window.visualViewport.addEventListener("resize", applyVisualViewportSize);
+          window.visualViewport.addEventListener("scroll", applyVisualViewportSize);
+        }
+        window.addEventListener("resize", applyVisualViewportSize);
+        applyVisualViewportSize();
+      })();
+    </script>
     <!-- UMD globals (Terminal, FitAddon) — same vendored assets as public/vendor/,
          loaded as plain scripts so wasmJsMain's XtermJs.kt externals resolve against
          globalThis with no npm/webpack module wiring. See Spike B (docs/adr/0002-*). -->
