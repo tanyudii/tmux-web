@@ -261,3 +261,58 @@ This build is intentionally **not** re-run through `kmp-ci.yml`'s
 `kmp-ci.yml` run (which runs on every push touching `kmp/**`) plus the
 implicit smoke test that a broken `kmp/` fails `wasmJsBrowserDistribution`
 outright rather than shipping silently.
+
+## Clipboard paste into Web text fields is impossible on insecure origins -- not a Compose bug, not fixable in-app
+
+Investigated live (headless Chromium, real Ctrl+V/right-click/`execCommand`
+round trips, not guesswork) after a report that the Connect screen's Access
+token field "can't paste". The obvious suspects were both wrong: it is not
+a secure-context issue *specific to Ctrl+V being unwired* (an earlier draft
+of this investigation concluded that, then had to retract it -- see below),
+and it is not a Compose Multiplatform Web bug at all.
+
+**What actually happens, confirmed live:**
+- On a secure origin (`https://`, or `http://localhost`/`127.0.0.1`)
+  Ctrl+V paste, and right-click "Paste" from Compose's own context menu,
+  both work correctly -- including replacing an active selection. An
+  earlier pass of this same investigation used Playwright to fire
+  `Ctrl+A` immediately followed by `Ctrl+V` with zero delay between the
+  two key events and saw the paste silently no-op, and wrongly concluded
+  Ctrl+V wasn't wired to Compose's paste action at all. That's a
+  synthetic-automation artifact, not a real bug: no human keyboard user
+  produces true 0ms between two chorded shortcuts. Re-running the exact
+  same sequence with a realistic ~80ms gap between the two key presses
+  pastes correctly every time. If you're debugging input issues here with
+  Playwright/CDP, budget a small delay between distinct key presses or you
+  will chase phantom bugs like this one.
+- On an insecure origin (plain HTTP on anything other than
+  localhost/127.0.0.1 -- e.g. this project's own recommended
+  WireGuard/Tailscale-tunnel deployment, see the README and
+  `XtermJs.kt`'s `copyTextToClipboard` comment) paste is **completely
+  unavailable, full stop**: `navigator.clipboard` does not exist on
+  `window` at all, Compose's own context menu omits the "Paste" item
+  entirely (only "Select all" remains -- Compose itself detects this and
+  adapts), and the legacy `document.execCommand("paste")` fallback
+  returns `false` (blocked by the browser; unlike `execCommand("copy")`,
+  which browsers still allow and which is why the terminal's own
+  Cmd+C-to-clipboard feature works fine on the same insecure origins).
+  There is no JS-level workaround for reading the clipboard on paste here
+  -- this is a hard browser platform restriction, identical in spirit to
+  why `navigator.clipboard.writeText` needs a secure context for the
+  terminal's copy feature, just on the read side instead of write.
+
+**What shipped instead of a paste "fix" (because there is no code fix for
+the real-world case):** `domain/SecureContext.kt`'s `isSecureContext()`
+expect/actual (wasmJs actual reads `window.isSecureContext`; jvm/ios
+actuals return `true`, since neither has this restriction) feeds
+`ConnectionSettingsUiState.pasteRestricted`, which `SettingsScreen.kt`
+surfaces as a helper hint under the Access token field on insecure
+origins: "Clipboard paste isn't available on this connection (needs
+HTTPS or localhost) -- type the token instead." Separately (and
+independent of the paste investigation), `domain/DefaultServerUrl.kt`'s
+`defaultServerUrl()` expect/actual prefills the Server URL field from
+`window.location.origin` on wasmJs (null/unchanged on jvm/ios) -- since
+`src/main.ts` always serves the API and this Compose bundle from the same
+origin, this removes the *need* to type or paste the Server URL at all,
+leaving only the Access token as something that must be typed by hand on
+an insecure-origin deployment.
