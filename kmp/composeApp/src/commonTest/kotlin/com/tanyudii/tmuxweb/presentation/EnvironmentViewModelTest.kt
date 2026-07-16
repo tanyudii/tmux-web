@@ -139,16 +139,19 @@ class EnvironmentViewModelTest {
     }
 
     @Test
-    fun `showLogs and hideLogs toggle the logs sheet`() = runTest {
+    fun `showLogs sets the selected service -- switchLogsService changes it -- hideLogs clears it`() = runTest {
         val repository = FakeEnvironmentRepository()
         val viewModel = viewModel(repository)
         runCurrent()
 
-        viewModel.showLogs()
-        assertTrue(viewModel.state.value.isShowingLogs)
+        viewModel.showLogs("web")
+        assertEquals("web", viewModel.state.value.logsService)
+
+        viewModel.switchLogsService("worker")
+        assertEquals("worker", viewModel.state.value.logsService)
 
         viewModel.hideLogs()
-        assertFalse(viewModel.state.value.isShowingLogs)
+        assertNull(viewModel.state.value.logsService)
     }
 
     @Test
