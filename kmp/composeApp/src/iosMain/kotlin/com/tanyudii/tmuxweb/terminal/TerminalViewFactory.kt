@@ -27,11 +27,26 @@ interface TerminalViewFactory {
      * - call [onResize] when its own column/row count changes (from rotation,
      *   Slide Over, or an initial layout pass) so TerminalViewModel.onResize
      *   can send the server a `resize` message
+     * - call [onScroll] for trackpad/touch scroll gestures (SwiftTerm's own
+     *   local scrollback is unreliable for a tmux pane — same reason the web
+     *   target drives scroll through tmux copy-mode instead of xterm.js's
+     *   native scrollback — so the view must NOT let SwiftTerm apply the
+     *   scroll to its own buffer; it only reports the delta here). [onScroll]'s
+     *   direction crosses as a plain "up"/"down" string (the same vocabulary
+     *   ClientMessage's own JSON wire encoding uses, see
+     *   commonMain/.../ClientMessage.kt's parseScrollDirection) rather than
+     *   the Kotlin ScrollDirection enum directly -- this file's own Obj-C
+     *   export names can only be confirmed against a real build of
+     *   ComposeApp.framework (see the file-level comment on
+     *   SwiftTermViewFactory.swift), which isn't possible from this
+     *   Linux-only dev environment. A String avoids depending on a
+     *   Kotlin-enum-to-Obj-C bridged name that can't be verified here.
      */
     fun createTerminalView(
         onInput: (String) -> Unit,
         onBell: () -> Unit,
         onResize: (cols: Int, rows: Int) -> Unit,
+        onScroll: (direction: String, lines: Int) -> Unit,
     ): UIView
 }
 
