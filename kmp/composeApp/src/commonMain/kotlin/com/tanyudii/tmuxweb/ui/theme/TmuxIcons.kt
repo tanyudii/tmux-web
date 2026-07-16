@@ -2,6 +2,7 @@ package com.tanyudii.tmuxweb.ui.theme
 
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
+import androidx.compose.material.icons.automirrored.outlined.Article
 import androidx.compose.material.icons.automirrored.outlined.InsertDriveFile
 import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowLeft
 import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowRight
@@ -69,4 +70,5 @@ object TmuxIcons {
     val Box: ImageVector = Icons.Outlined.Widgets
     val ExternalLink: ImageVector = Icons.AutoMirrored.Outlined.OpenInNew
     val Edit: ImageVector = Icons.Outlined.Edit
+    val Logs: ImageVector = Icons.AutoMirrored.Outlined.Article
 }

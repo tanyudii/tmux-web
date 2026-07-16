@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -12,14 +13,18 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import com.tanyudii.tmuxweb.data.remote.logs.LogsSocket
+import com.tanyudii.tmuxweb.domain.model.ComposeServiceStatus
 import com.tanyudii.tmuxweb.domain.repository.EnvironmentRepository
 import com.tanyudii.tmuxweb.presentation.EnvironmentViewModel
+import com.tanyudii.tmuxweb.presentation.LogsViewModel
 import com.tanyudii.tmuxweb.terminal.PlatformTerminalHandle
 import com.tanyudii.tmuxweb.terminal.PlatformTerminalView
 import com.tanyudii.tmuxweb.ui.components.TmuxConfirmDialog
 import com.tanyudii.tmuxweb.ui.components.TmuxConnectionBanner
 import com.tanyudii.tmuxweb.ui.components.TmuxConnectionStatus
 import com.tanyudii.tmuxweb.ui.components.TmuxEnvironmentMenu
+import com.tanyudii.tmuxweb.ui.components.TmuxLogsDialog
 import com.tanyudii.tmuxweb.ui.components.TmuxNavBar
 import com.tanyudii.tmuxweb.ui.components.TmuxNavBarBack
 import com.tanyudii.tmuxweb.ui.theme.TmuxColors
@@ -41,6 +46,8 @@ fun TerminalRoute(
         backLabel = projectName,
         isConnected = session.isConnected,
         environment = environment,
+        projectId = projectId,
+        sessionName = sessionName,
         onInput = session::onInput,
         onResize = session::onResize,
         onBell = session::onBell,
@@ -56,6 +63,8 @@ private fun TerminalScreen(
     backLabel: String,
     isConnected: Boolean,
     environment: EnvironmentViewModel,
+    projectId: String,
+    sessionName: String,
     onInput: (String) -> Unit,
     onResize: (cols: Int, rows: Int) -> Unit,
     onBell: () -> Unit,
@@ -81,6 +90,7 @@ private fun TerminalScreen(
                     isBusy = envState.isBusy,
                     onRun = environment::setup,
                     onStop = environment::requestStop,
+                    onViewLogs = environment::showLogs,
                     onOpenChanged = { environmentMenuOpen = it },
                 )
             },
@@ -94,7 +104,7 @@ private fun TerminalScreen(
             onBell = onBell,
             onResize = onResize,
             handleReady = onHandleReady,
-            isVisible = !environmentMenuOpen && !envState.isShowingStopConfirm,
+            isVisible = !environmentMenuOpen && !envState.isShowingStopConfirm && envState.logsService == null,
         )
         QuickKeysBar(onKeyTap = onInput)
     }
@@ -108,6 +118,52 @@ private fun TerminalScreen(
             onCancel = environment::cancelStop,
         )
     }
+
+    envState.logsService?.let { service ->
+        TerminalLogsDialog(
+            projectId = projectId,
+            sessionName = sessionName,
+            service = service,
+            services = envState.status?.services.orEmpty(),
+            onDismiss = environment::hideLogs,
+            onSwitchService = environment::switchLogsService,
+        )
+    }
+}
+
+/**
+ * Owns one [LogsViewModel] per selected service -- `remember(service)` means
+ * switching services (via [TmuxLogsDialog]'s header dropdown) tears down the
+ * old socket and starts a fresh one automatically, same lifecycle idiom as
+ * [rememberEnvironment] below. [DisposableEffect] closes the socket when the
+ * dialog is dismissed or the composable leaves the tree, mirroring the
+ * `handleReady`/close cleanup [PlatformTerminalView] already relies on.
+ */
+@Composable
+private fun TerminalLogsDialog(
+    projectId: String,
+    sessionName: String,
+    service: String,
+    services: List<ComposeServiceStatus>,
+    onDismiss: () -> Unit,
+    onSwitchService: (String) -> Unit,
+) {
+    val logsSocket: LogsSocket = koinInject()
+    val scope = rememberCoroutineScope()
+    val logsViewModel = remember(projectId, sessionName, service) {
+        LogsViewModel(projectId, sessionName, service, logsSocket, scope)
+    }
+    DisposableEffect(logsViewModel) { onDispose { logsViewModel.close() } }
+    val logsState by logsViewModel.state.collectAsState()
+
+    TmuxLogsDialog(
+        selectedService = service,
+        services = services,
+        lines = logsState.lines,
+        isConnected = logsState.isConnected,
+        onDismiss = onDismiss,
+        onSwitchService = onSwitchService,
+    )
 }
 
 @Composable

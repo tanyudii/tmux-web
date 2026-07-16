@@ -99,6 +99,7 @@ fun WebShellScreen(onSwitchServer: () -> Unit) {
                 changes = changesState?.changes,
                 environment = environmentState?.status,
                 environmentBusy = environmentState?.isBusy ?: false,
+                logsService = environmentState?.logsService,
                 railOpen = railOpen,
                 activeWindow = activeWindow,
                 onSelectWindow = { activeWindow = it },
@@ -107,6 +108,9 @@ fun WebShellScreen(onSwitchServer: () -> Unit) {
                 onNewSession = { state.selectedProjectId?.let(viewModel::showNewSessionDialog) },
                 onEnvironmentRun = { environmentState?.viewModel?.setup() },
                 onEnvironmentStop = { environmentState?.viewModel?.stop() },
+                onViewLogs = { service -> environmentState?.viewModel?.showLogs(service) },
+                onSwitchLogsService = { service -> environmentState?.viewModel?.switchLogsService(service) },
+                onHideLogs = { environmentState?.viewModel?.hideLogs() },
                 modifier = Modifier.weight(1f),
                 isTerminalVisible = !state.hasOpenDialog,
             )
@@ -185,7 +189,12 @@ private fun rememberChangesState(projectId: String, sessionName: String): Change
     return remember(viewModel, state.changes) { ChangesState(viewModel, state.changes) }
 }
 
-private class EnvironmentState(val viewModel: EnvironmentViewModel, val status: EnvStatus?, val isBusy: Boolean)
+private class EnvironmentState(
+    val viewModel: EnvironmentViewModel,
+    val status: EnvStatus?,
+    val isBusy: Boolean,
+    val logsService: String?,
+)
 
 @Composable
 private fun rememberEnvironmentState(projectId: String, sessionName: String): EnvironmentState {
@@ -193,7 +202,9 @@ private fun rememberEnvironmentState(projectId: String, sessionName: String): En
     val scope = rememberCoroutineScope()
     val viewModel = remember(projectId, sessionName) { EnvironmentViewModel(projectId, sessionName, repository, scope) }
     val state by viewModel.state.collectAsState()
-    return remember(viewModel, state.status, state.isBusy) { EnvironmentState(viewModel, state.status, state.isBusy) }
+    return remember(viewModel, state.status, state.isBusy, state.logsService) {
+        EnvironmentState(viewModel, state.status, state.isBusy, state.logsService)
+    }
 }
 
 @Composable

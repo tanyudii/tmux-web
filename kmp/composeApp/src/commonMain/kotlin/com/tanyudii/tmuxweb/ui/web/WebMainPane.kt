@@ -15,6 +15,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
@@ -27,7 +28,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.tanyudii.tmuxweb.data.remote.logs.LogsSocket
 import com.tanyudii.tmuxweb.domain.model.ChangedFile
+import com.tanyudii.tmuxweb.domain.model.ComposeServiceStatus
 import com.tanyudii.tmuxweb.domain.model.DiffMode
 import com.tanyudii.tmuxweb.domain.model.EnvStatus
 import com.tanyudii.tmuxweb.domain.model.GroupedChanges
@@ -35,6 +38,7 @@ import com.tanyudii.tmuxweb.domain.model.Project
 import com.tanyudii.tmuxweb.domain.model.ProjectSession
 import com.tanyudii.tmuxweb.domain.repository.ChangesRepository
 import com.tanyudii.tmuxweb.presentation.DiffViewModel
+import com.tanyudii.tmuxweb.presentation.LogsViewModel
 import com.tanyudii.tmuxweb.terminal.PlatformTerminalView
 import com.tanyudii.tmuxweb.ui.components.TmuxButton
 import com.tanyudii.tmuxweb.ui.components.TmuxButtonVariant
@@ -44,6 +48,7 @@ import com.tanyudii.tmuxweb.ui.components.TmuxDiffDialog
 import com.tanyudii.tmuxweb.ui.components.TmuxEnvironmentMenu
 import com.tanyudii.tmuxweb.ui.components.TmuxIconButton
 import com.tanyudii.tmuxweb.ui.components.TmuxIconButtonVariant
+import com.tanyudii.tmuxweb.ui.components.TmuxLogsDialog
 import com.tanyudii.tmuxweb.ui.components.TmuxStatusBadge
 import com.tanyudii.tmuxweb.ui.components.TmuxStatusTone
 import com.tanyudii.tmuxweb.ui.terminal.TerminalSession
@@ -72,6 +77,7 @@ fun WebMainPane(
     changes: GroupedChanges?,
     environment: EnvStatus?,
     environmentBusy: Boolean,
+    logsService: String?,
     railOpen: Boolean,
     activeWindow: Int,
     onSelectWindow: (Int) -> Unit,
@@ -80,6 +86,9 @@ fun WebMainPane(
     onNewSession: () -> Unit,
     onEnvironmentRun: () -> Unit,
     onEnvironmentStop: () -> Unit,
+    onViewLogs: (String) -> Unit,
+    onSwitchLogsService: (String) -> Unit,
+    onHideLogs: () -> Unit,
     modifier: Modifier = Modifier,
     isTerminalVisible: Boolean = true,
 ) {
@@ -116,7 +125,9 @@ fun WebMainPane(
                 onToggleRail = onToggleRail,
                 onEnvironmentRun = onEnvironmentRun,
                 onEnvironmentStop = onEnvironmentStop,
-                terminalVisible = isTerminalVisible && !environmentMenuOpen && !windowDialogOpen && diffTarget == null,
+                onViewLogs = onViewLogs,
+                terminalVisible = isTerminalVisible && !environmentMenuOpen && !windowDialogOpen &&
+                    diffTarget == null && logsService == null,
                 onEnvironmentMenuOpenChanged = { environmentMenuOpen = it },
                 onDialogOpenChanged = { windowDialogOpen = it },
                 modifier = Modifier.weight(1f).fillMaxHeight(),
@@ -131,6 +142,15 @@ fun WebMainPane(
             sessionName = session.name,
             diffTarget = diffTarget,
             onDismiss = { diffTarget = null },
+        )
+
+        MainPaneLogsDialog(
+            projectId = project?.id,
+            sessionName = session.name,
+            service = logsService,
+            services = environment?.services.orEmpty(),
+            onDismiss = onHideLogs,
+            onSwitchService = onSwitchLogsService,
         )
     }
 }
@@ -157,6 +177,7 @@ private fun MainContent(
     onToggleRail: () -> Unit,
     onEnvironmentRun: () -> Unit,
     onEnvironmentStop: () -> Unit,
+    onViewLogs: (String) -> Unit,
     terminalVisible: Boolean,
     onEnvironmentMenuOpenChanged: (Boolean) -> Unit,
     onDialogOpenChanged: (Boolean) -> Unit,
@@ -172,6 +193,7 @@ private fun MainContent(
             onToggleRail = onToggleRail,
             onEnvironmentRun = onEnvironmentRun,
             onEnvironmentStop = onEnvironmentStop,
+            onViewLogs = onViewLogs,
             onEnvironmentMenuOpenChanged = onEnvironmentMenuOpenChanged,
         )
         WindowTabs(
@@ -250,6 +272,61 @@ private fun DiffDialogHost(
     )
 }
 
+/** Hosts [LogsDialogHost] once a service's logs popup is requested -- split out purely to keep [WebMainPane] short. */
+@Composable
+private fun MainPaneLogsDialog(
+    projectId: String?,
+    sessionName: String,
+    service: String?,
+    services: List<ComposeServiceStatus>,
+    onDismiss: () -> Unit,
+    onSwitchService: (String) -> Unit,
+) {
+    if (projectId == null || service == null) return
+    LogsDialogHost(
+        projectId = projectId,
+        sessionName = sessionName,
+        service = service,
+        services = services,
+        onDismiss = onDismiss,
+        onSwitchService = onSwitchService,
+    )
+}
+
+/**
+ * Owns the [LogsViewModel] for one open logs popup -- a fresh instance per
+ * selected service (`remember(service)`), mirroring [DiffDialogHost]. A
+ * [DisposableEffect] closes the underlying socket on dismiss/recreate,
+ * mirroring [PlatformTerminalView]'s handle-based cleanup elsewhere in this
+ * file.
+ */
+@Composable
+private fun LogsDialogHost(
+    projectId: String,
+    sessionName: String,
+    service: String,
+    services: List<ComposeServiceStatus>,
+    onDismiss: () -> Unit,
+    onSwitchService: (String) -> Unit,
+) {
+    val logsSocket: LogsSocket = koinInject()
+    val scope = rememberCoroutineScope()
+    val viewModel = remember(projectId, sessionName, service) {
+        LogsViewModel(projectId, sessionName, service, logsSocket, scope)
+    }
+    DisposableEffect(viewModel) { onDispose { viewModel.close() } }
+    val state by viewModel.state.collectAsState()
+
+    TmuxLogsDialog(
+        selectedService = service,
+        services = services,
+        lines = state.lines,
+        isConnected = state.isConnected,
+        onDismiss = onDismiss,
+        onSwitchService = onSwitchService,
+    )
+}
+
 private val DiffMode.label: String
     get() = when (this) {
         DiffMode.STAGED -> "staged"
@@ -274,6 +351,7 @@ private fun TopBar(
     onToggleRail: () -> Unit,
     onEnvironmentRun: () -> Unit,
     onEnvironmentStop: () -> Unit,
+    onViewLogs: (String) -> Unit,
     onEnvironmentMenuOpenChanged: (Boolean) -> Unit,
 ) {
     Row(
@@ -304,6 +382,7 @@ private fun TopBar(
             isBusy = environmentBusy,
             onRun = onEnvironmentRun,
             onStop = onEnvironmentStop,
+            onViewLogs = onViewLogs,
             onOpenChanged = onEnvironmentMenuOpenChanged,
         )
         TmuxIconButton(
