@@ -20,6 +20,7 @@ import com.tanyudii.tmuxweb.presentation.EnvironmentViewModel
 import com.tanyudii.tmuxweb.presentation.LogsViewModel
 import com.tanyudii.tmuxweb.terminal.PlatformTerminalHandle
 import com.tanyudii.tmuxweb.terminal.PlatformTerminalView
+import com.tanyudii.tmuxweb.terminal.observeAppForeground
 import com.tanyudii.tmuxweb.ui.components.TmuxConfirmDialog
 import com.tanyudii.tmuxweb.ui.components.TmuxConnectionBanner
 import com.tanyudii.tmuxweb.ui.components.TmuxConnectionStatus
@@ -52,6 +53,7 @@ fun TerminalRoute(
         onResize = session::onResize,
         onBell = session::onBell,
         onHandleReady = session.onHandleReady,
+        onRetry = session::onRetry,
         onBack = onBack,
     )
 }
@@ -69,6 +71,7 @@ private fun TerminalScreen(
     onResize: (cols: Int, rows: Int) -> Unit,
     onBell: () -> Unit,
     onHandleReady: (PlatformTerminalHandle) -> Unit,
+    onRetry: () -> Unit,
     onBack: () -> Unit,
 ) {
     val envState by environment.state.collectAsState()
@@ -96,7 +99,11 @@ private fun TerminalScreen(
             },
         )
         if (!isConnected) {
-            TmuxConnectionBanner(status = TmuxConnectionStatus.RECONNECTING, message = "Reconnecting…")
+            TmuxConnectionBanner(
+                status = TmuxConnectionStatus.RECONNECTING,
+                message = "Reconnecting…",
+                onRetry = onRetry,
+            )
         }
         PlatformTerminalView(
             modifier = Modifier.fillMaxWidth().weight(1f),
@@ -154,6 +161,12 @@ private fun TerminalLogsDialog(
         LogsViewModel(projectId, sessionName, service, logsSocket, scope)
     }
     DisposableEffect(logsViewModel) { onDispose { logsViewModel.close() } }
+    DisposableEffect(logsViewModel) {
+        val dispose = observeAppForeground {
+            if (!logsViewModel.state.value.isConnected) logsViewModel.reconnect()
+        }
+        onDispose(dispose)
+    }
     val logsState by logsViewModel.state.collectAsState()
 
     TmuxLogsDialog(

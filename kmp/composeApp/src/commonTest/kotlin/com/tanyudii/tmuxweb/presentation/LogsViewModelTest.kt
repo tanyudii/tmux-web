@@ -3,6 +3,7 @@ package com.tanyudii.tmuxweb.presentation
 import com.tanyudii.tmuxweb.data.remote.logs.LogsEvent
 import com.tanyudii.tmuxweb.presentation.fakes.FakeLogsSocket
 import kotlinx.coroutines.test.TestScope
+import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
@@ -85,6 +86,55 @@ class LogsViewModelTest {
 
         assertFalse(viewModel.state.value.isConnected)
         assertNull(viewModel.state.value.errorMessage)
+    }
+
+    @Test
+    fun `an unexpected close automatically reconnects to the same service after the backoff delay`() = runTest {
+        val socket = FakeLogsSocket()
+        val viewModel = viewModel(socket)
+        runCurrent()
+
+        socket.events.emit(LogsEvent.Closed(RuntimeException("dropped")))
+        advanceTimeBy(1001)
+
+        assertEquals(
+            listOf(
+                FakeLogsSocket.ConnectCall("proj-1", "main", "web"),
+                FakeLogsSocket.ConnectCall("proj-1", "main", "web"),
+            ),
+            socket.connectedCalls,
+        )
+    }
+
+    @Test
+    fun `close does not schedule an automatic reconnect`() = runTest {
+        val socket = FakeLogsSocket()
+        val viewModel = viewModel(socket)
+        runCurrent()
+
+        viewModel.close()
+        advanceTimeBy(15_000)
+
+        assertEquals(listOf(FakeLogsSocket.ConnectCall("proj-1", "main", "web")), socket.connectedCalls)
+    }
+
+    @Test
+    fun `repeated unexpected closes back off exponentially before each reconnect`() = runTest {
+        val socket = FakeLogsSocket()
+        val viewModel = viewModel(socket)
+        runCurrent()
+
+        socket.events.emit(LogsEvent.Closed(null))
+        advanceTimeBy(999)
+        assertEquals(1, socket.connectedCalls.size)
+        advanceTimeBy(2)
+        assertEquals(2, socket.connectedCalls.size)
+
+        socket.events.emit(LogsEvent.Closed(null))
+        advanceTimeBy(1999)
+        assertEquals(2, socket.connectedCalls.size)
+        advanceTimeBy(2)
+        assertEquals(3, socket.connectedCalls.size)
     }
 
     @Test

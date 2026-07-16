@@ -6,6 +6,7 @@ import com.tanyudii.tmuxweb.data.remote.terminal.TerminalSocket
 import com.tanyudii.tmuxweb.domain.shouldPlayBellAlert
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -39,24 +40,36 @@ class TerminalViewModel(
     val output: SharedFlow<ByteArray> = _output.asSharedFlow()
 
     private var connectionJob: Job? = null
+    private var retryJob: Job? = null
     private var connectedSessionFullName: String? = null
     private var lastBellAlertAt: Long? = null
     private var lastRequestedSize: Pair<Int, Int>? = null
+    private var isManualDisconnect = false
+    private var retryDelayMs = INITIAL_RETRY_DELAY_MS
 
     fun connect(sessionFullName: String) {
+        isManualDisconnect = false
         connectedSessionFullName = sessionFullName
+        retryJob?.cancel()
         connectionJob?.cancel()
         connectionJob = scope.launch {
             socket.connect(sessionFullName).collect(::handleEvent)
         }
     }
 
-    /** Re-attaches to the same session — iOS suspends the socket while backgrounded, see TerminalSocket.swift. */
+    /**
+     * Re-attaches to the same session — iOS Safari (and the native app) suspends/closes the
+     * socket while backgrounded, unlike a desktop tab. Also invoked automatically: see
+     * [scheduleReconnect] for the unexpected-close retry loop, and `ObserveAppForeground` for the
+     * foreground fast path.
+     */
     fun reconnect() {
         connectedSessionFullName?.let(::connect)
     }
 
     fun disconnect() {
+        isManualDisconnect = true
+        retryJob?.cancel()
         connectionJob?.cancel()
         scope.launch { socket.close() }
     }
@@ -91,6 +104,7 @@ class TerminalViewModel(
     private suspend fun handleEvent(event: TerminalEvent) {
         when (event) {
             is TerminalEvent.Opened -> {
+                retryDelayMs = INITIAL_RETRY_DELAY_MS
                 _state.update { it.copy(isConnected = true) }
                 // TerminalSocket.send() (KtorTerminalSocket) silently no-ops
                 // until its underlying WS session exists -- and the platform
@@ -103,11 +117,34 @@ class TerminalViewModel(
                 lastRequestedSize?.let { (cols, rows) -> socket.send(ClientMessage.Resize(cols, rows)) }
             }
             is TerminalEvent.Output -> _output.emit(event.bytes)
-            is TerminalEvent.Closed -> _state.update { it.copy(isConnected = false) }
+            is TerminalEvent.Closed -> {
+                _state.update { it.copy(isConnected = false) }
+                scheduleReconnect()
+            }
+        }
+    }
+
+    // The socket can legitimately drop for reasons outside our control (iOS
+    // Safari suspending/closing a backgrounded tab's WS being the motivating
+    // case -- see reconnect()'s doc comment): without this, isConnected just
+    // stays false forever and the "Reconnecting..." banner never resolves,
+    // since nothing else re-invokes connect(). Capped exponential backoff
+    // avoids hammering the server when it's genuinely down; the delay resets
+    // to the initial value the moment a connection actually succeeds again
+    // (see the Opened branch above).
+    private fun scheduleReconnect() {
+        if (isManualDisconnect) return
+        val delayMs = retryDelayMs
+        retryDelayMs = (retryDelayMs * 2).coerceAtMost(MAX_RETRY_DELAY_MS)
+        retryJob = scope.launch {
+            delay(delayMs)
+            reconnect()
         }
     }
 
     private companion object {
         const val OUTPUT_BUFFER_CAPACITY = 64
+        const val INITIAL_RETRY_DELAY_MS = 1000L
+        const val MAX_RETRY_DELAY_MS = 10_000L
     }
 }

@@ -12,6 +12,7 @@ import androidx.compose.runtime.setValue
 import com.tanyudii.tmuxweb.data.remote.terminal.TerminalSocket
 import com.tanyudii.tmuxweb.presentation.TerminalViewModel
 import com.tanyudii.tmuxweb.terminal.PlatformTerminalHandle
+import com.tanyudii.tmuxweb.terminal.observeAppForeground
 import com.tanyudii.tmuxweb.terminal.triggerBellFeedback
 import kotlinx.coroutines.launch
 import org.koin.compose.koinInject
@@ -34,6 +35,9 @@ class TerminalSession internal constructor(
     fun onInput(text: String) = viewModel.onInput(text)
 
     fun onResize(cols: Int, rows: Int) = viewModel.onResize(cols, rows)
+
+    /** Manual fallback for the connection banner's "Retry" action -- see TmuxConnectionBanner. */
+    fun onRetry() = viewModel.reconnect()
 
     @OptIn(ExperimentalTime::class)
     fun onBell() {
@@ -61,6 +65,17 @@ fun rememberTerminalSession(sessionFullName: String): TerminalSession {
         viewModel.connect(sessionFullName)
     }
     DisposableEffect(sessionFullName) { onDispose { viewModel.disconnect() } }
+    // Fast path for the reported iOS Safari bug (and the equivalent gap on
+    // the native iOS app, see AppForegroundObserver.ios.kt): the moment the
+    // tab/app comes back to the foreground, try to reconnect immediately
+    // instead of waiting out TerminalViewModel's own backoff timer (see
+    // TerminalViewModel.scheduleReconnect for the general-case fallback).
+    DisposableEffect(viewModel) {
+        val dispose = observeAppForeground {
+            if (!viewModel.state.value.isConnected) viewModel.reconnect()
+        }
+        onDispose(dispose)
+    }
 
     return remember(viewModel, state.isConnected) {
         TerminalSession(viewModel = viewModel, isConnected = state.isConnected, onHandleReady = { handle = it })

@@ -40,6 +40,7 @@ import com.tanyudii.tmuxweb.domain.repository.ChangesRepository
 import com.tanyudii.tmuxweb.presentation.DiffViewModel
 import com.tanyudii.tmuxweb.presentation.LogsViewModel
 import com.tanyudii.tmuxweb.terminal.PlatformTerminalView
+import com.tanyudii.tmuxweb.terminal.observeAppForeground
 import com.tanyudii.tmuxweb.ui.components.TmuxButton
 import com.tanyudii.tmuxweb.ui.components.TmuxButtonVariant
 import com.tanyudii.tmuxweb.ui.components.TmuxConnectionBanner
@@ -210,6 +211,7 @@ private fun MainContent(
             TmuxConnectionBanner(
                 status = TmuxConnectionStatus.RECONNECTING,
                 message = "Reconnecting to the server…",
+                onRetry = terminal::onRetry,
             )
         }
 
@@ -315,6 +317,12 @@ private fun LogsDialogHost(
         LogsViewModel(projectId, sessionName, service, logsSocket, scope)
     }
     DisposableEffect(viewModel) { onDispose { viewModel.close() } }
+    DisposableEffect(viewModel) {
+        val dispose = observeAppForeground {
+            if (!viewModel.state.value.isConnected) viewModel.reconnect()
+        }
+        onDispose(dispose)
+    }
     val state by viewModel.state.collectAsState()
 
     TmuxLogsDialog(

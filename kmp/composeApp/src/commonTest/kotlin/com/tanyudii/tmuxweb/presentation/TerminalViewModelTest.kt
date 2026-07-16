@@ -6,7 +6,10 @@ import com.tanyudii.tmuxweb.data.remote.terminal.TerminalEvent
 import com.tanyudii.tmuxweb.domain.BELL_COOLDOWN_MS
 import com.tanyudii.tmuxweb.presentation.fakes.FakeTerminalSocket
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
+import kotlinx.coroutines.test.advanceTimeBy
+import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
@@ -16,8 +19,12 @@ import kotlin.test.assertTrue
 
 /** Ports TerminalSocket.swift's connect/resize/receive-loop behavior and public/notify.js's bell cooldown. */
 class TerminalViewModelTest {
-    private fun viewModel(socket: FakeTerminalSocket): TerminalViewModel {
-        val scope = CoroutineScope(UnconfinedTestDispatcher())
+    // Shares runTest's own virtual-time scheduler (not a fresh independent one) --
+    // required so advanceTimeBy/advanceUntilIdle below actually drive the
+    // scheduleReconnect()'s delay(), instead of it hanging forever on an
+    // unrelated scheduler nothing ever advances.
+    private fun TestScope.viewModel(socket: FakeTerminalSocket): TerminalViewModel {
+        val scope = CoroutineScope(UnconfinedTestDispatcher(testScheduler))
         return TerminalViewModel(socket, scope)
     }
 
@@ -151,6 +158,66 @@ class TerminalViewModelTest {
         viewModel.reconnect()
 
         assertEquals(listOf("proj__main", "proj__main"), socket.connectedSessions)
+    }
+
+    @Test
+    fun `an unexpected close automatically reconnects after the backoff delay`() = runTest {
+        val socket = FakeTerminalSocket()
+        val viewModel = viewModel(socket)
+        viewModel.connect("proj__main")
+
+        socket.events.emit(TerminalEvent.Closed(RuntimeException("dropped")))
+        advanceUntilIdle()
+
+        assertEquals(listOf("proj__main", "proj__main"), socket.connectedSessions)
+    }
+
+    @Test
+    fun `disconnect does not schedule an automatic reconnect`() = runTest {
+        val socket = FakeTerminalSocket()
+        val viewModel = viewModel(socket)
+        viewModel.connect("proj__main")
+
+        viewModel.disconnect()
+        advanceUntilIdle()
+
+        assertEquals(listOf("proj__main"), socket.connectedSessions)
+    }
+
+    @Test
+    fun `repeated unexpected closes back off exponentially before each reconnect`() = runTest {
+        val socket = FakeTerminalSocket()
+        val viewModel = viewModel(socket)
+        viewModel.connect("proj__main")
+
+        socket.events.emit(TerminalEvent.Closed(null))
+        advanceTimeBy(999)
+        assertEquals(listOf("proj__main"), socket.connectedSessions)
+        advanceTimeBy(2)
+        assertEquals(listOf("proj__main", "proj__main"), socket.connectedSessions)
+
+        socket.events.emit(TerminalEvent.Closed(null))
+        advanceTimeBy(1999)
+        assertEquals(listOf("proj__main", "proj__main"), socket.connectedSessions)
+        advanceTimeBy(2)
+        assertEquals(listOf("proj__main", "proj__main", "proj__main"), socket.connectedSessions)
+    }
+
+    @Test
+    fun `a successful reconnect resets the backoff delay to its initial value`() = runTest {
+        val socket = FakeTerminalSocket()
+        val viewModel = viewModel(socket)
+        viewModel.connect("proj__main")
+
+        socket.events.emit(TerminalEvent.Closed(null))
+        advanceUntilIdle()
+        socket.events.emit(TerminalEvent.Opened)
+
+        socket.events.emit(TerminalEvent.Closed(null))
+        advanceTimeBy(999)
+        assertEquals(listOf("proj__main", "proj__main"), socket.connectedSessions)
+        advanceTimeBy(2)
+        assertEquals(listOf("proj__main", "proj__main", "proj__main"), socket.connectedSessions)
     }
 
     @Test
