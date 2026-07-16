@@ -2,6 +2,7 @@ package com.tanyudii.tmuxweb.ui.components
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -64,6 +65,14 @@ private fun serviceDotColor(state: String): Color = when (state.lowercase()) {
  * output only while already near the bottom. Ports [TmuxDiffDialog]'s
  * structural shape (same Dialog sizing/background/radius) -- a dumb
  * composable, all state comes from the caller's [com.tanyudii.tmuxweb.presentation.LogsViewModel].
+ *
+ * Wrapped in a [TmuxColors.scrim] backdrop (same pattern as [TmuxSheet]),
+ * since the terminal behind this dialog is fully hidden (`visibility:
+ * hidden`, not just covered) for the duration -- see
+ * [com.tanyudii.tmuxweb.terminal.PlatformTerminalView]'s `isVisible` kdoc.
+ * Without a dim scrim, the margin around this dialog (it's sized to 85% of
+ * the screen, not full-bleed) reads as a blank/broken area rather than a
+ * deliberately dimmed backdrop -- reported as a bug once real users hit it.
  */
 @Composable
 fun TmuxLogsDialog(
@@ -75,14 +84,31 @@ fun TmuxLogsDialog(
     onSwitchService: (String) -> Unit,
 ) {
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
-        Column(
+        Box(
             modifier = Modifier
-                .fillMaxWidth(DIALOG_WIDTH_FRACTION)
-                .fillMaxHeight(DIALOG_HEIGHT_FRACTION)
-                .background(TmuxColors.bgCard, RoundedCornerShape(TmuxRadius.lg)),
+                .fillMaxSize()
+                .background(TmuxColors.scrim)
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                    onClick = onDismiss,
+                ),
+            contentAlignment = Alignment.Center,
         ) {
-            LogsDialogHeader(selectedService, services, isConnected, onDismiss, onSwitchService)
-            LogsDialogBody(lines = lines, modifier = Modifier.weight(1f))
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth(DIALOG_WIDTH_FRACTION)
+                    .fillMaxHeight(DIALOG_HEIGHT_FRACTION)
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null,
+                        onClick = {},
+                    )
+                    .background(TmuxColors.bgCard, RoundedCornerShape(TmuxRadius.lg)),
+            ) {
+                LogsDialogHeader(selectedService, services, isConnected, onDismiss, onSwitchService)
+                LogsDialogBody(lines = lines, modifier = Modifier.weight(1f))
+            }
         }
     }
 }
