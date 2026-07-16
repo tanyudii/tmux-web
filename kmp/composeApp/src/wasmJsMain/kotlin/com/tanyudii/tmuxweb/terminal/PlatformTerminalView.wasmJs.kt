@@ -12,6 +12,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.viewinterop.HtmlElementView
+import com.tanyudii.tmuxweb.data.remote.terminal.ClientMessage
 import com.tanyudii.tmuxweb.domain.copyResultMessage
 import com.tanyudii.tmuxweb.domain.isCopyShortcut
 import kotlin.js.ExperimentalWasmJsInterop
@@ -239,6 +240,9 @@ actual fun PlatformTerminalView(
     onResize: (cols: Int, rows: Int) -> Unit,
     handleReady: (PlatformTerminalHandle) -> Unit,
     isVisible: Boolean,
+    // Not wired on wasmJs: xterm.js's own wheel handling stays as-is for
+    // this change. See the expect declaration's kdoc.
+    onScroll: (direction: ClientMessage.ScrollDirection, lines: Int) -> Unit,
 ) {
     var terminal by remember { mutableStateOf<XtermTerminal?>(null) }
     var fitAddon by remember { mutableStateOf<XtermFitAddon?>(null) }

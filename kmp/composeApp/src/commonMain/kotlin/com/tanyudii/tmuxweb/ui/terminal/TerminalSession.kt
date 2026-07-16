@@ -9,6 +9,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import com.tanyudii.tmuxweb.data.remote.terminal.ClientMessage
 import com.tanyudii.tmuxweb.data.remote.terminal.TerminalSocket
 import com.tanyudii.tmuxweb.presentation.TerminalViewModel
 import com.tanyudii.tmuxweb.terminal.PlatformTerminalHandle
@@ -38,6 +39,8 @@ class TerminalSession internal constructor(
 
     /** Manual fallback for the connection banner's "Retry" action -- see TmuxConnectionBanner. */
     fun onRetry() = viewModel.reconnect()
+
+    fun onScroll(direction: ClientMessage.ScrollDirection, lines: Int) = viewModel.onScroll(direction, lines)
 
     @OptIn(ExperimentalTime::class)
     fun onBell() {

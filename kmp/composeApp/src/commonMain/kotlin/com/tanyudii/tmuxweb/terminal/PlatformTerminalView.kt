@@ -2,6 +2,7 @@ package com.tanyudii.tmuxweb.terminal
 
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import com.tanyudii.tmuxweb.data.remote.terminal.ClientMessage
 
 /**
  * A platform-native terminal emulator widget embedded inside shared Compose UI.
@@ -19,6 +20,13 @@ import androidx.compose.ui.Modifier
  * duration so the dialog isn't visually covered; the terminal instance itself
  * stays mounted (no reconnect/blank flash) since this only toggles CSS
  * visibility, not composition.
+ *
+ * [onScroll] fires for trackpad/touch scroll gestures the platform widget
+ * captures, so the caller can drive tmux's own copy-mode scrollback (see
+ * [com.tanyudii.tmuxweb.presentation.TerminalViewModel.onScroll]) instead of
+ * relying on the widget's local scrollback, which doesn't reflect a tmux
+ * pane's repaint-by-cursor-addressing rendering correctly. Only the iOS
+ * actual wires this up today; it defaults to a no-op elsewhere.
  */
 @Composable
 expect fun PlatformTerminalView(
@@ -28,6 +36,7 @@ expect fun PlatformTerminalView(
     onResize: (cols: Int, rows: Int) -> Unit,
     handleReady: (PlatformTerminalHandle) -> Unit,
     isVisible: Boolean = true,
+    onScroll: (direction: ClientMessage.ScrollDirection, lines: Int) -> Unit = { _, _ -> },
 )
 
 expect class PlatformTerminalHandle {

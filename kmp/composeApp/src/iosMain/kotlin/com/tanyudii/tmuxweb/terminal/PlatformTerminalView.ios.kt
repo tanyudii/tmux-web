@@ -5,6 +5,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.viewinterop.UIKitView
+import com.tanyudii.tmuxweb.data.remote.terminal.ClientMessage
 
 // iOS actual for the expect in PlatformTerminalView.kt — Spike A. UNVERIFIED
 // locally (no macOS in this dev environment); see
@@ -21,6 +22,7 @@ actual fun PlatformTerminalView(
     onResize: (cols: Int, rows: Int) -> Unit,
     handleReady: (PlatformTerminalHandle) -> Unit,
     isVisible: Boolean,
+    onScroll: (direction: ClientMessage.ScrollDirection, lines: Int) -> Unit,
 ) {
     // isVisible is a web-only workaround (see kdoc on the expect declaration)
     // for interop DOM views always painting above Compose Popups -- native
@@ -33,7 +35,16 @@ actual fun PlatformTerminalView(
     }
     UIKitView(
         factory = {
-            val view = factory.createTerminalView(onInput, onBell, onResize)
+            val view = factory.createTerminalView(onInput, onBell, onResize) { direction, lines ->
+                // Swift crosses direction as a plain "up"/"down" string (see
+                // TerminalViewFactory.kt's onScroll kdoc for why); this is
+                // the one place that maps it back onto the shared enum.
+                val scrollDirection = when (direction) {
+                    "up" -> ClientMessage.ScrollDirection.UP
+                    else -> ClientMessage.ScrollDirection.DOWN
+                }
+                onScroll(scrollDirection, lines)
+            }
             val handle = view as? TerminalViewHandle
                 ?: error(
                     "${view::class} must conform to TerminalViewHandle " +

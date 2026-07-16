@@ -4,6 +4,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Modifier
+import com.tanyudii.tmuxweb.data.remote.terminal.ClientMessage
 
 // Coverage-only target (see composeApp/build.gradle.kts) — no real terminal
 // widget ships from this target, so this renders an empty box and hands back
@@ -16,6 +17,7 @@ actual fun PlatformTerminalView(
     onResize: (cols: Int, rows: Int) -> Unit,
     handleReady: (PlatformTerminalHandle) -> Unit,
     isVisible: Boolean,
+    onScroll: (direction: ClientMessage.ScrollDirection, lines: Int) -> Unit,
 ) {
     LaunchedEffect(Unit) { handleReady(PlatformTerminalHandle()) }
     Box(modifier = modifier)

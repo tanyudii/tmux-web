@@ -14,6 +14,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import com.tanyudii.tmuxweb.data.remote.logs.LogsSocket
+import com.tanyudii.tmuxweb.data.remote.terminal.ClientMessage
 import com.tanyudii.tmuxweb.domain.model.ComposeServiceStatus
 import com.tanyudii.tmuxweb.domain.repository.EnvironmentRepository
 import com.tanyudii.tmuxweb.presentation.EnvironmentViewModel
@@ -52,6 +53,7 @@ fun TerminalRoute(
         onInput = session::onInput,
         onResize = session::onResize,
         onBell = session::onBell,
+        onScroll = session::onScroll,
         onHandleReady = session.onHandleReady,
         onRetry = session::onRetry,
         onBack = onBack,
@@ -70,6 +72,7 @@ private fun TerminalScreen(
     onInput: (String) -> Unit,
     onResize: (cols: Int, rows: Int) -> Unit,
     onBell: () -> Unit,
+    onScroll: (direction: ClientMessage.ScrollDirection, lines: Int) -> Unit,
     onHandleReady: (PlatformTerminalHandle) -> Unit,
     onRetry: () -> Unit,
     onBack: () -> Unit,
@@ -112,6 +115,7 @@ private fun TerminalScreen(
             onResize = onResize,
             handleReady = onHandleReady,
             isVisible = !environmentMenuOpen && !envState.isShowingStopConfirm && envState.logsService == null,
+            onScroll = onScroll,
         )
         QuickKeysBar(onKeyTap = onInput)
     }
