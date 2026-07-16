@@ -1,6 +1,6 @@
 {
   "name": "tmux-web",
-  "version": "2.5.1",
+  "version": "2.5.2",
   "private": true,
   "description": "Self-hosted browser GUI for switching between tmux sessions, no cloud account required.",
   "type": "module",
