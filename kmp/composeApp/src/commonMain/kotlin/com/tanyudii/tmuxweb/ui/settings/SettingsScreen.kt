@@ -81,6 +81,7 @@ private fun SettingsScreen(
                         password = true,
                         placeholder = "ghp_…",
                         error = state.errorMessage,
+                        helper = pasteRestrictedHelper(state),
                         enabled = !state.isTesting,
                     )
                 }
@@ -99,6 +100,15 @@ private fun SettingsScreen(
         }
     }
 }
+
+// error takes visual priority over helper (see TmuxTextField's
+// SupportingText), so this only surfaces once there's no real error to show.
+private fun pasteRestrictedHelper(state: ConnectionSettingsUiState): String? =
+    if (state.errorMessage == null && state.pasteRestricted) {
+        "Clipboard paste isn't available on this connection (needs HTTPS or localhost) — type the token instead."
+    } else {
+        null
+    }
 
 @Composable
 private fun Wordmark() {

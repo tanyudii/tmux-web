@@ -1,6 +1,8 @@
 package com.tanyudii.tmuxweb.presentation
 
 import com.tanyudii.tmuxweb.data.remote.ConnectionTester
+import com.tanyudii.tmuxweb.domain.defaultServerUrl
+import com.tanyudii.tmuxweb.domain.isSecureContext
 import com.tanyudii.tmuxweb.domain.model.ConnectionSettings
 import com.tanyudii.tmuxweb.domain.parseServerUrl
 import com.tanyudii.tmuxweb.domain.repository.ConnectionSettingsStore
@@ -22,6 +24,12 @@ data class ConnectionSettingsUiState(
     // needs this to avoid flashing the Settings screen for a frame while
     // settingsStore.load() is still resolving.
     val isLoaded: Boolean = false,
+    // True when the app was loaded over an origin where the browser's
+    // Clipboard API is unavailable (plain HTTP on a non-localhost host --
+    // see domain/SecureContext.kt). Ctrl+V paste into the Access token
+    // field cannot work there; SettingsScreen surfaces this as a helper
+    // hint instead of leaving it looking silently broken.
+    val pasteRestricted: Boolean = false,
 ) {
     val canSubmit: Boolean get() = !isTesting && serverUrlText.isNotEmpty() && token.isNotEmpty()
 }
@@ -30,9 +38,16 @@ class ConnectionSettingsViewModel(
     private val settingsStore: ConnectionSettingsStore,
     private val connectionTester: ConnectionTester,
     private val scope: CoroutineScope,
+    private val defaultServerUrl: () -> String? = ::defaultServerUrl,
+    private val isSecureContext: () -> Boolean = ::isSecureContext,
 ) {
-    private val _state = MutableStateFlow(ConnectionSettingsUiState())
+    private val _state = MutableStateFlow(initialState())
     val state: StateFlow<ConnectionSettingsUiState> = _state.asStateFlow()
+
+    private fun initialState(): ConnectionSettingsUiState = ConnectionSettingsUiState(
+        serverUrlText = defaultServerUrl() ?: "http://",
+        pasteRestricted = !isSecureContext(),
+    )
 
     init {
         scope.launch {
@@ -74,7 +89,7 @@ class ConnectionSettingsViewModel(
             settingsStore.clear()
             // isLoaded stays true: "Switch Server" should land straight on
             // the Settings screen, not flash App()'s not-loaded-yet spinner.
-            _state.update { ConnectionSettingsUiState(isLoaded = true) }
+            _state.update { initialState().copy(isLoaded = true) }
         }
     }
 }

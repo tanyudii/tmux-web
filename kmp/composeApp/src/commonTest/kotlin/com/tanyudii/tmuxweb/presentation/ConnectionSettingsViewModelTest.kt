@@ -18,9 +18,11 @@ class ConnectionSettingsViewModelTest {
     private fun viewModel(
         store: FakeConnectionSettingsStore = FakeConnectionSettingsStore(),
         tester: ConnectionTester = ConnectionTester { _, _ -> },
+        defaultServerUrl: () -> String? = { null },
+        isSecureContext: () -> Boolean = { true },
     ): ConnectionSettingsViewModel {
         val scope = CoroutineScope(UnconfinedTestDispatcher())
-        return ConnectionSettingsViewModel(store, tester, scope)
+        return ConnectionSettingsViewModel(store, tester, scope, defaultServerUrl, isSecureContext)
     }
 
     @Test
@@ -98,6 +100,44 @@ class ConnectionSettingsViewModelTest {
         assertNull(viewModel.state.value.current)
         assertEquals("http://", viewModel.state.value.serverUrlText)
         assertTrue(viewModel.state.value.isLoaded)
+    }
+
+    @Test
+    fun `initial serverUrlText uses the injected default when present`() = runTest {
+        val state = viewModel(defaultServerUrl = { "http://10.8.0.2:5309" }).state.value
+
+        assertEquals("http://10.8.0.2:5309", state.serverUrlText)
+    }
+
+    @Test
+    fun `initial serverUrlText falls back to http when no default is available`() = runTest {
+        val state = viewModel(defaultServerUrl = { null }).state.value
+
+        assertEquals("http://", state.serverUrlText)
+    }
+
+    @Test
+    fun `pasteRestricted reflects an insecure context`() = runTest {
+        val state = viewModel(isSecureContext = { false }).state.value
+
+        assertTrue(state.pasteRestricted)
+    }
+
+    @Test
+    fun `pasteRestricted is false on a secure context`() = runTest {
+        val state = viewModel(isSecureContext = { true }).state.value
+
+        assertFalse(state.pasteRestricted)
+    }
+
+    @Test
+    fun `clear re-applies the injected default server URL`() = runTest {
+        val store = FakeConnectionSettingsStore(ConnectionSettings("http://host:5309", "secret"))
+        val viewModel = viewModel(store = store, defaultServerUrl = { "http://10.8.0.2:5309" })
+
+        viewModel.clear()
+
+        assertEquals("http://10.8.0.2:5309", viewModel.state.value.serverUrlText)
     }
 
     @Test
