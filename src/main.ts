@@ -15,7 +15,7 @@ import {
 } from "./projects.ts";
 import { isGitRepo, addWorktree, removeWorktree } from "./worktree.ts";
 import { listDirectory as listDirectoryImpl } from "./directory-browser.ts";
-import { getChangedFiles, getFileDiff } from "./git-status.ts";
+import { getChangedFiles, getFileDiff, stageFile, unstageFile, discardFile } from "./git-status.ts";
 import {
   listProjectSessions as listProjectSessionsImpl,
   startProjectSessionCreation as startProjectSessionCreationImpl,
@@ -24,6 +24,9 @@ import {
   killProjectSession as killProjectSessionImpl,
   getProjectSessionChanges as getProjectSessionChangesImpl,
   getProjectSessionDiff as getProjectSessionDiffImpl,
+  stageProjectSessionFile as stageProjectSessionFileImpl,
+  unstageProjectSessionFile as unstageProjectSessionFileImpl,
+  discardProjectSessionFile as discardProjectSessionFileImpl,
   type ProjectSessionsDeps,
 } from "./project-sessions.ts";
 import { loadEnvConfig } from "./env-config.ts";
@@ -99,6 +102,9 @@ export async function main(): Promise<void> {
     removeWorktree,
     getChangedFiles,
     getFileDiff,
+    stageFile,
+    unstageFile,
+    discardFile,
     stopSessionEnv: (project, sessionSlug) =>
       stopSessionEnvImpl(project, sessionSlug, sessionEnvDeps, sessionEnvStore),
     worktreesRoot,
@@ -142,6 +148,12 @@ export async function main(): Promise<void> {
       getProjectSessionChangesImpl(project, slug, projectSessionsDeps),
     getProjectSessionDiff: (project, slug, filePath, mode) =>
       getProjectSessionDiffImpl(project, slug, filePath, mode, projectSessionsDeps),
+    stageProjectSessionFile: (project, slug, filePath) =>
+      stageProjectSessionFileImpl(project, slug, filePath, projectSessionsDeps),
+    unstageProjectSessionFile: (project, slug, filePath) =>
+      unstageProjectSessionFileImpl(project, slug, filePath, projectSessionsDeps),
+    discardProjectSessionFile: (project, slug, filePath, mode) =>
+      discardProjectSessionFileImpl(project, slug, filePath, mode, projectSessionsDeps),
 
     getProjectSessionEnvStatus: (project, slug, requestHost) =>
       getSessionEnvStatusImpl(project, slug, sessionEnvDeps, sessionEnvStore, requestHost),

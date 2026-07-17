@@ -9,6 +9,9 @@ import {
   killProjectSession,
   getProjectSessionChanges,
   getProjectSessionDiff,
+  stageProjectSessionFile,
+  unstageProjectSessionFile,
+  discardProjectSessionFile,
   SessionCreationInProgressError,
   SessionCreationNotFoundError,
   type ProjectSessionsDeps,
@@ -35,6 +38,9 @@ function makeDeps(overrides: Partial<ProjectSessionsDeps> = {}): ProjectSessions
     removeWorktree: async () => {},
     getChangedFiles: async () => ({ staged: [], unstaged: [], untracked: [] }),
     getFileDiff: async () => ({ diff: "", isUntracked: false, isBinary: false }),
+    stageFile: async () => {},
+    unstageFile: async () => {},
+    discardFile: async () => {},
     worktreesRoot: "/data/worktrees",
     ...overrides,
   };
@@ -290,6 +296,51 @@ test("getProjectSessionDiff resolves the worktree path and delegates to getFileD
     { worktreePath: "/data/worktrees/proj1-ab12cd/feature-x", filePath: "src/index.ts", mode: "staged" },
   ]);
   assert.equal(result.diff, "diff text");
+});
+
+test("stageProjectSessionFile resolves the worktree path and delegates to stageFile", async () => {
+  const calls: Array<{ worktreePath: string; filePath: string }> = [];
+  const deps = makeDeps({
+    stageFile: async (worktreePath: string, filePath: string) => {
+      calls.push({ worktreePath, filePath });
+    },
+  });
+
+  await stageProjectSessionFile(PROJECT, "feature-x", "src/index.ts", deps);
+
+  assert.deepEqual(calls, [
+    { worktreePath: "/data/worktrees/proj1-ab12cd/feature-x", filePath: "src/index.ts" },
+  ]);
+});
+
+test("unstageProjectSessionFile resolves the worktree path and delegates to unstageFile", async () => {
+  const calls: Array<{ worktreePath: string; filePath: string }> = [];
+  const deps = makeDeps({
+    unstageFile: async (worktreePath: string, filePath: string) => {
+      calls.push({ worktreePath, filePath });
+    },
+  });
+
+  await unstageProjectSessionFile(PROJECT, "feature-x", "src/index.ts", deps);
+
+  assert.deepEqual(calls, [
+    { worktreePath: "/data/worktrees/proj1-ab12cd/feature-x", filePath: "src/index.ts" },
+  ]);
+});
+
+test("discardProjectSessionFile resolves the worktree path and delegates to discardFile", async () => {
+  const calls: Array<{ worktreePath: string; filePath: string; mode: string }> = [];
+  const deps = makeDeps({
+    discardFile: async (worktreePath: string, filePath: string, mode: "staged" | "unstaged" | "untracked") => {
+      calls.push({ worktreePath, filePath, mode });
+    },
+  });
+
+  await discardProjectSessionFile(PROJECT, "feature-x", "src/index.ts", "unstaged", deps);
+
+  assert.deepEqual(calls, [
+    { worktreePath: "/data/worktrees/proj1-ab12cd/feature-x", filePath: "src/index.ts", mode: "unstaged" },
+  ]);
 });
 
 test("startProjectSessionCreation returns {name, fullName} immediately without waiting for the background work", async () => {

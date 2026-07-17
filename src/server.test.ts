@@ -57,6 +57,9 @@ function makeDeps(overrides: Partial<ServerDeps> = {}): ServerDeps {
     killProjectSession: async () => {},
     getProjectSessionChanges: async () => ({ staged: [], unstaged: [], untracked: [] }),
     getProjectSessionDiff: async () => ({ diff: "", isUntracked: false, isBinary: false }),
+    stageProjectSessionFile: async () => {},
+    unstageProjectSessionFile: async () => {},
+    discardProjectSessionFile: async () => {},
     getProjectSessionEnvStatus: async () => ({ phase: "unavailable" }),
     startProjectSessionEnv: async () => {},
     stopProjectSessionEnv: async () => {},
@@ -671,6 +674,120 @@ test("GET /api/projects/:id/sessions/:name/diff returns 404 for an unknown proje
       `${baseUrl}/api/projects/unknown-id/sessions/feature-x/diff?path=a.txt&mode=unstaged`,
       { headers: authHeaders() },
     );
+    assert.equal(res.status, 404);
+  });
+});
+
+test("POST /api/projects/:id/sessions/:name/stage without a token returns 401", async () => {
+  await withServer(makeDeps(), async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/projects/${SAMPLE_PROJECT.id}/sessions/feature-x/stage`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path: "a.txt" }),
+    });
+    assert.equal(res.status, 401);
+  });
+});
+
+test("POST /api/projects/:id/sessions/:name/stage stages the requested file", async () => {
+  const calls: Array<{ slug: string; path: string }> = [];
+  const deps = makeDeps({
+    stageProjectSessionFile: async (_project: Project, slug: string, filePath: string) => {
+      calls.push({ slug, path: filePath });
+    },
+  });
+  await withServer(deps, async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/projects/${SAMPLE_PROJECT.id}/sessions/feature-x/stage`, {
+      method: "POST",
+      headers: { ...authHeaders(), "Content-Type": "application/json" },
+      body: JSON.stringify({ path: "src/index.ts" }),
+    });
+    assert.equal(res.status, 204);
+    assert.deepEqual(calls, [{ slug: "feature-x", path: "src/index.ts" }]);
+  });
+});
+
+test("POST /api/projects/:id/sessions/:name/stage returns 400 when path is missing", async () => {
+  await withServer(makeDeps(), async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/projects/${SAMPLE_PROJECT.id}/sessions/feature-x/stage`, {
+      method: "POST",
+      headers: { ...authHeaders(), "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    assert.equal(res.status, 400);
+  });
+});
+
+test("POST /api/projects/:id/sessions/:name/stage returns 400 for a path-traversal attempt (GitStatusError)", async () => {
+  const deps = makeDeps({
+    stageProjectSessionFile: async () => {
+      throw new GitStatusError("escapes the worktree");
+    },
+  });
+  await withServer(deps, async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/projects/${SAMPLE_PROJECT.id}/sessions/feature-x/stage`, {
+      method: "POST",
+      headers: { ...authHeaders(), "Content-Type": "application/json" },
+      body: JSON.stringify({ path: "../../etc/passwd" }),
+    });
+    assert.equal(res.status, 400);
+  });
+});
+
+test("POST /api/projects/:id/sessions/:name/unstage unstages the requested file", async () => {
+  const calls: Array<{ slug: string; path: string }> = [];
+  const deps = makeDeps({
+    unstageProjectSessionFile: async (_project: Project, slug: string, filePath: string) => {
+      calls.push({ slug, path: filePath });
+    },
+  });
+  await withServer(deps, async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/projects/${SAMPLE_PROJECT.id}/sessions/feature-x/unstage`, {
+      method: "POST",
+      headers: { ...authHeaders(), "Content-Type": "application/json" },
+      body: JSON.stringify({ path: "src/index.ts" }),
+    });
+    assert.equal(res.status, 204);
+    assert.deepEqual(calls, [{ slug: "feature-x", path: "src/index.ts" }]);
+  });
+});
+
+test("POST /api/projects/:id/sessions/:name/discard discards the requested file", async () => {
+  const calls: Array<{ slug: string; path: string; mode: string }> = [];
+  const deps = makeDeps({
+    discardProjectSessionFile: async (_project: Project, slug: string, filePath: string, mode: string) => {
+      calls.push({ slug, path: filePath, mode });
+    },
+  });
+  await withServer(deps, async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/projects/${SAMPLE_PROJECT.id}/sessions/feature-x/discard`, {
+      method: "POST",
+      headers: { ...authHeaders(), "Content-Type": "application/json" },
+      body: JSON.stringify({ path: "src/index.ts", mode: "unstaged" }),
+    });
+    assert.equal(res.status, 204);
+    assert.deepEqual(calls, [{ slug: "feature-x", path: "src/index.ts", mode: "unstaged" }]);
+  });
+});
+
+test("POST /api/projects/:id/sessions/:name/discard returns 400 when mode is invalid", async () => {
+  await withServer(makeDeps(), async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/projects/${SAMPLE_PROJECT.id}/sessions/feature-x/discard`, {
+      method: "POST",
+      headers: { ...authHeaders(), "Content-Type": "application/json" },
+      body: JSON.stringify({ path: "a.txt", mode: "bogus" }),
+    });
+    assert.equal(res.status, 400);
+  });
+});
+
+test("POST /api/projects/:id/sessions/:name/discard returns 404 for an unknown project", async () => {
+  await withServer(makeDeps(), async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/projects/unknown-id/sessions/feature-x/discard`, {
+      method: "POST",
+      headers: { ...authHeaders(), "Content-Type": "application/json" },
+      body: JSON.stringify({ path: "a.txt", mode: "unstaged" }),
+    });
     assert.equal(res.status, 404);
   });
 });

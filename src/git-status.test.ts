@@ -2,13 +2,16 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFile as execFileCb, execFileSync } from "node:child_process";
 import { promisify } from "node:util";
-import { mkdtemp, writeFile, rm, mkdir } from "node:fs/promises";
+import { mkdtemp, writeFile, readFile, rm, mkdir, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   parseStatusPorcelain,
   getChangedFiles,
   getFileDiff,
+  stageFile,
+  unstageFile,
+  discardFile,
   WorktreeNotFoundError,
   GitStatusError,
 } from "./git-status.ts";
@@ -132,6 +135,87 @@ test("getFileDiff detects a binary diff and omits the raw (garbled) output", asy
   assert.deepEqual(result, { diff: "", isUntracked: false, isBinary: true });
 });
 
+// --- stageFile / unstageFile / discardFile (fake exec) ---
+
+test("stageFile runs git add scoped to the worktree", async () => {
+  const calls: string[][] = [];
+  const fakeExec = async (_file: string, args: string[]) => {
+    calls.push(args);
+    return { stdout: "" };
+  };
+  await stageFile("/repo", "src/index.ts", fakeExec);
+  assert.deepEqual(calls, [["-C", "/repo", "add", "--", "src/index.ts"]]);
+});
+
+test("stageFile rejects a path that escapes the worktree", async () => {
+  await assert.rejects(() => stageFile("/repo", "../../etc/passwd"), GitStatusError);
+});
+
+test("unstageFile runs git restore --staged scoped to the worktree", async () => {
+  const calls: string[][] = [];
+  const fakeExec = async (_file: string, args: string[]) => {
+    calls.push(args);
+    return { stdout: "" };
+  };
+  await unstageFile("/repo", "src/index.ts", fakeExec);
+  assert.deepEqual(calls, [["-C", "/repo", "restore", "--staged", "--", "src/index.ts"]]);
+});
+
+test("unstageFile rejects a path that escapes the worktree", async () => {
+  await assert.rejects(() => unstageFile("/repo", "../../etc/passwd"), GitStatusError);
+});
+
+test("discardFile runs git checkout HEAD for a staged/unstaged file", async () => {
+  const calls: string[][] = [];
+  const fakeExec = async (_file: string, args: string[]) => {
+    calls.push(args);
+    return { stdout: "" };
+  };
+  await discardFile("/repo", "src/index.ts", "unstaged", fakeExec);
+  assert.deepEqual(calls, [["-C", "/repo", "checkout", "HEAD", "--", "src/index.ts"]]);
+});
+
+test("discardFile falls back to reset + delete when the path doesn't exist in HEAD", async () => {
+  await withTempDir(async (dir) => {
+    await writeFile(join(dir, "new.txt"), "brand new\n");
+    const calls: string[][] = [];
+    const fakeExec = async (_file: string, args: string[]) => {
+      calls.push(args);
+      if (args[2] === "checkout") {
+        throw new Error("error: pathspec 'new.txt' did not match any file(s) known to git");
+      }
+      return { stdout: "" };
+    };
+    await discardFile(dir, "new.txt", "staged", fakeExec);
+    assert.deepEqual(calls, [
+      ["-C", dir, "checkout", "HEAD", "--", "new.txt"],
+      ["-C", dir, "reset", "--", "new.txt"],
+    ]);
+    await assert.rejects(() => stat(join(dir, "new.txt")));
+  });
+});
+
+test("discardFile rethrows unrelated git errors instead of swallowing them", async () => {
+  const fakeExec = async () => {
+    throw new Error("fatal: not a git repository");
+  };
+  await assert.rejects(() => discardFile("/repo", "x.txt", "unstaged", fakeExec), /not a git repository/);
+});
+
+test("discardFile deletes the file directly for untracked mode", async () => {
+  await withTempDir(async (dir) => {
+    await writeFile(join(dir, "scratch.txt"), "not added\n");
+    await discardFile(dir, "scratch.txt", "untracked", async () => {
+      throw new Error("exec must not be called for untracked discards");
+    });
+    await assert.rejects(() => stat(join(dir, "scratch.txt")));
+  });
+});
+
+test("discardFile rejects a path that escapes the worktree", async () => {
+  await assert.rejects(() => discardFile("/repo", "../../etc/passwd", "unstaged"), GitStatusError);
+});
+
 // --- getFileDiff (untracked, real fs) ---
 
 async function withTempDir(fn: (dir: string) => Promise<void>): Promise<void> {
@@ -226,6 +310,54 @@ test(
 
       const binaryDiff = await getFileDiff(dir, "image.bin", "untracked");
       assert.equal(binaryDiff.isBinary, true);
+    });
+  },
+);
+
+test(
+  "real git integration: stage, unstage, and discard round-trip correctly",
+  { skip: !isGitAvailable() },
+  async () => {
+    await withTempDir(async (dir) => {
+      await execFileAsync("git", ["init", "--quiet", dir]);
+      await execFileAsync("git", ["-C", dir, "config", "user.email", "test@example.com"]);
+      await execFileAsync("git", ["-C", dir, "config", "user.name", "Test"]);
+      await writeFile(join(dir, "tracked.txt"), "original\n");
+      await execFileAsync("git", ["-C", dir, "add", "tracked.txt"]);
+      await execFileAsync("git", ["-C", dir, "commit", "--quiet", "-m", "initial"]);
+
+      // stageFile: an untracked file becomes staged
+      await writeFile(join(dir, "new.txt"), "brand new\n");
+      await stageFile(dir, "new.txt");
+      let changes = await getChangedFiles(dir);
+      assert.deepEqual(changes.staged.map((f) => f.path), ["new.txt"]);
+
+      // unstageFile: back to untracked
+      await unstageFile(dir, "new.txt");
+      changes = await getChangedFiles(dir);
+      assert.deepEqual(changes.staged, []);
+      assert.deepEqual(changes.untracked.map((f) => f.path), ["new.txt"]);
+
+      // discardFile (staged, not in HEAD): fully removed
+      await stageFile(dir, "new.txt");
+      await discardFile(dir, "new.txt", "staged");
+      changes = await getChangedFiles(dir);
+      assert.deepEqual(changes.staged, []);
+      assert.deepEqual(changes.untracked, []);
+      await assert.rejects(() => stat(join(dir, "new.txt")));
+
+      // discardFile (unstaged, tracked): working tree change reverted
+      await writeFile(join(dir, "tracked.txt"), "changed\n");
+      await discardFile(dir, "tracked.txt", "unstaged");
+      changes = await getChangedFiles(dir);
+      assert.deepEqual(changes.unstaged, []);
+      const content = await readFile(join(dir, "tracked.txt"), "utf-8");
+      assert.equal(content, "original\n");
+
+      // discardFile (untracked): file deleted directly
+      await writeFile(join(dir, "scratch.txt"), "temp\n");
+      await discardFile(dir, "scratch.txt", "untracked");
+      await assert.rejects(() => stat(join(dir, "scratch.txt")));
     });
   },
 );

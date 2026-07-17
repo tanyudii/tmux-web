@@ -1,6 +1,6 @@
 import { execFile as execFileCb } from "node:child_process";
 import { promisify } from "node:util";
-import { readFile, stat } from "node:fs/promises";
+import { readFile, rm, stat } from "node:fs/promises";
 import { resolve, sep } from "node:path";
 
 const execFileAsync = promisify(execFileCb);
@@ -164,4 +164,54 @@ export async function getFileDiff(
   const { stdout } = await exec("git", args);
   const isBinary = BINARY_DIFF_PATTERN.test(stdout);
   return { diff: isBinary ? "" : stdout, isUntracked: false, isBinary };
+}
+
+export async function stageFile(
+  worktreePath: string,
+  filePath: string,
+  exec: ExecFn = defaultExec,
+): Promise<void> {
+  resolveSafeFilePath(worktreePath, filePath);
+  await exec("git", ["-C", worktreePath, "add", "--", filePath]);
+}
+
+export async function unstageFile(
+  worktreePath: string,
+  filePath: string,
+  exec: ExecFn = defaultExec,
+): Promise<void> {
+  resolveSafeFilePath(worktreePath, filePath);
+  await exec("git", ["-C", worktreePath, "restore", "--staged", "--", filePath]);
+}
+
+const NOT_IN_HEAD_PATTERN = /did not match any file/i;
+
+export async function discardFile(
+  worktreePath: string,
+  filePath: string,
+  mode: DiffMode,
+  exec: ExecFn = defaultExec,
+): Promise<void> {
+  const safePath = resolveSafeFilePath(worktreePath, filePath);
+
+  if (mode === "untracked") {
+    await rm(safePath, { force: true });
+    return;
+  }
+
+  try {
+    // Resets both the index and the working tree for this path back to
+    // HEAD in one shot, so a file with both staged and unstaged changes is
+    // fully discarded regardless of which section (staged/unstaged) the
+    // user discarded from.
+    await exec("git", ["-C", worktreePath, "checkout", "HEAD", "--", filePath]);
+  } catch (error) {
+    // The path doesn't exist in HEAD yet (a newly staged/added file), so
+    // there's nothing for "checkout HEAD" to restore from -- discarding it
+    // means unstaging it and deleting it from disk instead.
+    const message = error instanceof Error ? error.message : String(error);
+    if (!NOT_IN_HEAD_PATTERN.test(message)) throw error;
+    await exec("git", ["-C", worktreePath, "reset", "--", filePath]);
+    await rm(safePath, { force: true });
+  }
 }

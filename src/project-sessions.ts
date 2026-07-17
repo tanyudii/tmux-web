@@ -44,6 +44,9 @@ export interface ProjectSessionsDeps {
   removeWorktree: (repoPath: string, worktreePath: string, options?: RemoveWorktreeOptions) => Promise<void>;
   getChangedFiles: (worktreePath: string) => Promise<GroupedChanges>;
   getFileDiff: (worktreePath: string, filePath: string, mode: DiffMode) => Promise<FileDiff>;
+  stageFile: (worktreePath: string, filePath: string) => Promise<void>;
+  unstageFile: (worktreePath: string, filePath: string) => Promise<void>;
+  discardFile: (worktreePath: string, filePath: string, mode: DiffMode) => Promise<void>;
   // Optional: tears down the session's docker-compose environment (see
   // session-env.ts). Best-effort -- a session with no environment, or a
   // docker daemon that's gone away, must not block killing the session.
@@ -232,4 +235,35 @@ export async function getProjectSessionDiff(
 ): Promise<FileDiff> {
   const worktreePath = resolveWorktreePath(project.id, sessionSlug, deps.worktreesRoot);
   return deps.getFileDiff(worktreePath, filePath, mode);
+}
+
+export async function stageProjectSessionFile(
+  project: Project,
+  sessionSlug: string,
+  filePath: string,
+  deps: ProjectSessionsDeps,
+): Promise<void> {
+  const worktreePath = resolveWorktreePath(project.id, sessionSlug, deps.worktreesRoot);
+  return deps.stageFile(worktreePath, filePath);
+}
+
+export async function unstageProjectSessionFile(
+  project: Project,
+  sessionSlug: string,
+  filePath: string,
+  deps: ProjectSessionsDeps,
+): Promise<void> {
+  const worktreePath = resolveWorktreePath(project.id, sessionSlug, deps.worktreesRoot);
+  return deps.unstageFile(worktreePath, filePath);
+}
+
+export async function discardProjectSessionFile(
+  project: Project,
+  sessionSlug: string,
+  filePath: string,
+  mode: DiffMode,
+  deps: ProjectSessionsDeps,
+): Promise<void> {
+  const worktreePath = resolveWorktreePath(project.id, sessionSlug, deps.worktreesRoot);
+  return deps.discardFile(worktreePath, filePath, mode);
 }

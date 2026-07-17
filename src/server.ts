@@ -55,6 +55,14 @@ export interface ServerDeps {
     filePath: string,
     mode: DiffMode,
   ) => Promise<FileDiff>;
+  stageProjectSessionFile: (project: Project, sessionSlug: string, filePath: string) => Promise<void>;
+  unstageProjectSessionFile: (project: Project, sessionSlug: string, filePath: string) => Promise<void>;
+  discardProjectSessionFile: (
+    project: Project,
+    sessionSlug: string,
+    filePath: string,
+    mode: DiffMode,
+  ) => Promise<void>;
 
   getProjectSessionEnvStatus: (project: Project, sessionSlug: string, requestHost?: string) => Promise<EnvStatus>;
   startProjectSessionEnv: (project: Project, sessionSlug: string) => Promise<void>;
@@ -354,6 +362,87 @@ export function createServer(deps: ServerDeps): Server {
           if (sendMappedError(res, error)) return;
           throw error;
         }
+      }
+
+      const stageMatch = path.match(/^\/api\/projects\/([^/]+)\/sessions\/([^/]+)\/stage$/);
+      if (stageMatch && req.method === "POST") {
+        if (!isAuthorized(req, deps.token)) return sendEmpty(res, 401);
+
+        const project = await deps.getProject(decodeURIComponent(stageMatch[1]));
+        if (!project) return sendJson(res, 404, { error: "Project not found" });
+
+        let body: unknown;
+        try {
+          body = await readJsonBody(req);
+        } catch {
+          return sendJson(res, 400, { error: "Malformed JSON body" });
+        }
+        const filePath = (body as { path?: unknown })?.path;
+        if (typeof filePath !== "string") return sendJson(res, 400, { error: "Missing path" });
+
+        const sessionSlug = decodeURIComponent(stageMatch[2]);
+        try {
+          await deps.stageProjectSessionFile(project, sessionSlug, filePath);
+        } catch (error) {
+          if (sendMappedError(res, error)) return;
+          throw error;
+        }
+        return sendEmpty(res, 204);
+      }
+
+      const unstageMatch = path.match(/^\/api\/projects\/([^/]+)\/sessions\/([^/]+)\/unstage$/);
+      if (unstageMatch && req.method === "POST") {
+        if (!isAuthorized(req, deps.token)) return sendEmpty(res, 401);
+
+        const project = await deps.getProject(decodeURIComponent(unstageMatch[1]));
+        if (!project) return sendJson(res, 404, { error: "Project not found" });
+
+        let body: unknown;
+        try {
+          body = await readJsonBody(req);
+        } catch {
+          return sendJson(res, 400, { error: "Malformed JSON body" });
+        }
+        const filePath = (body as { path?: unknown })?.path;
+        if (typeof filePath !== "string") return sendJson(res, 400, { error: "Missing path" });
+
+        const sessionSlug = decodeURIComponent(unstageMatch[2]);
+        try {
+          await deps.unstageProjectSessionFile(project, sessionSlug, filePath);
+        } catch (error) {
+          if (sendMappedError(res, error)) return;
+          throw error;
+        }
+        return sendEmpty(res, 204);
+      }
+
+      const discardMatch = path.match(/^\/api\/projects\/([^/]+)\/sessions\/([^/]+)\/discard$/);
+      if (discardMatch && req.method === "POST") {
+        if (!isAuthorized(req, deps.token)) return sendEmpty(res, 401);
+
+        const project = await deps.getProject(decodeURIComponent(discardMatch[1]));
+        if (!project) return sendJson(res, 404, { error: "Project not found" });
+
+        let body: unknown;
+        try {
+          body = await readJsonBody(req);
+        } catch {
+          return sendJson(res, 400, { error: "Malformed JSON body" });
+        }
+        const { path: filePath, mode } = body as { path?: unknown; mode?: unknown };
+        if (typeof filePath !== "string") return sendJson(res, 400, { error: "Missing path" });
+        if (typeof mode !== "string" || !DIFF_MODES.includes(mode as DiffMode)) {
+          return sendJson(res, 400, { error: `Invalid mode, expected one of: ${DIFF_MODES.join(", ")}` });
+        }
+
+        const sessionSlug = decodeURIComponent(discardMatch[2]);
+        try {
+          await deps.discardProjectSessionFile(project, sessionSlug, filePath, mode as DiffMode);
+        } catch (error) {
+          if (sendMappedError(res, error)) return;
+          throw error;
+        }
+        return sendEmpty(res, 204);
       }
 
       const envMatch = path.match(/^\/api\/projects\/([^/]+)\/sessions\/([^/]+)\/env$/);
