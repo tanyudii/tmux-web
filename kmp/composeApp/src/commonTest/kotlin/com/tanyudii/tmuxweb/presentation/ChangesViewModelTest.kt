@@ -2,6 +2,7 @@ package com.tanyudii.tmuxweb.presentation
 
 import com.tanyudii.tmuxweb.data.remote.ApiError
 import com.tanyudii.tmuxweb.domain.model.ChangedFile
+import com.tanyudii.tmuxweb.domain.model.DiffMode
 import com.tanyudii.tmuxweb.domain.model.FileStatus
 import com.tanyudii.tmuxweb.domain.model.GroupedChanges
 import com.tanyudii.tmuxweb.presentation.fakes.FakeChangesRepository
@@ -111,5 +112,116 @@ class ChangesViewModelTest {
         viewModel.dismissError()
 
         assertNull(viewModel.state.value.errorMessage)
+    }
+
+    private fun file(path: String) = ChangedFile(path = path, oldPath = null, status = FileStatus.MODIFIED, staged = false)
+
+    @Test
+    fun `stage calls the repository and reloads changes`() = runTest {
+        val repository = FakeChangesRepository()
+        repository.changesQueue.add(Result.success(changes()))
+        val viewModel = viewModel(repository)
+        runCurrent()
+        repository.changesQueue.add(Result.success(changes("a.txt")))
+
+        viewModel.stage(file("a.txt"))
+        runCurrent()
+
+        assertEquals(listOf("a.txt"), repository.stageCalls)
+        assertEquals(changes("a.txt"), viewModel.state.value.changes)
+    }
+
+    @Test
+    fun `stage failure surfaces an error`() = runTest {
+        val repository = FakeChangesRepository()
+        repository.stageResult = Result.failure(ApiError.Server(500, "stage failed"))
+        val viewModel = viewModel(repository)
+        runCurrent()
+
+        viewModel.stage(file("a.txt"))
+        runCurrent()
+
+        assertEquals("stage failed", viewModel.state.value.errorMessage)
+    }
+
+    @Test
+    fun `unstage calls the repository and reloads changes`() = runTest {
+        val repository = FakeChangesRepository()
+        val viewModel = viewModel(repository)
+        runCurrent()
+
+        viewModel.unstage(file("a.txt"))
+        runCurrent()
+
+        assertEquals(listOf("a.txt"), repository.unstageCalls)
+    }
+
+    @Test
+    fun `requestDiscard sets pendingDiscard without calling the repository`() = runTest {
+        val repository = FakeChangesRepository()
+        val viewModel = viewModel(repository)
+        runCurrent()
+
+        viewModel.requestDiscard(file("a.txt"), DiffMode.UNSTAGED)
+
+        assertEquals(PendingDiscard(file("a.txt"), DiffMode.UNSTAGED), viewModel.state.value.pendingDiscard)
+        assertEquals(emptyList(), repository.discardCalls)
+    }
+
+    @Test
+    fun `cancelDiscard clears pendingDiscard without calling the repository`() = runTest {
+        val repository = FakeChangesRepository()
+        val viewModel = viewModel(repository)
+        runCurrent()
+        viewModel.requestDiscard(file("a.txt"), DiffMode.UNSTAGED)
+
+        viewModel.cancelDiscard()
+
+        assertNull(viewModel.state.value.pendingDiscard)
+        assertEquals(emptyList(), repository.discardCalls)
+    }
+
+    @Test
+    fun `confirmDiscard calls the repository, clears pendingDiscard, and reloads`() = runTest {
+        val repository = FakeChangesRepository()
+        repository.changesQueue.add(Result.success(changes("a.txt")))
+        val viewModel = viewModel(repository)
+        runCurrent()
+        viewModel.requestDiscard(file("a.txt"), DiffMode.STAGED)
+        repository.changesQueue.add(Result.success(changes()))
+
+        viewModel.confirmDiscard()
+        runCurrent()
+
+        assertEquals(listOf("a.txt" to DiffMode.STAGED), repository.discardCalls)
+        assertNull(viewModel.state.value.pendingDiscard)
+        assertEquals(changes(), viewModel.state.value.changes)
+    }
+
+    @Test
+    fun `confirmDiscard failure clears pendingDiscard and surfaces an error`() = runTest {
+        val repository = FakeChangesRepository()
+        repository.discardResult = Result.failure(ApiError.Server(500, "discard failed"))
+        val viewModel = viewModel(repository)
+        runCurrent()
+        viewModel.requestDiscard(file("a.txt"), DiffMode.UNTRACKED)
+
+        viewModel.confirmDiscard()
+        runCurrent()
+
+        assertNull(viewModel.state.value.pendingDiscard)
+        assertEquals("discard failed", viewModel.state.value.errorMessage)
+    }
+
+    @Test
+    fun `confirmDiscard without a pending discard does nothing`() = runTest {
+        val repository = FakeChangesRepository()
+        val viewModel = viewModel(repository)
+        runCurrent()
+
+        viewModel.confirmDiscard()
+        runCurrent()
+
+        assertEquals(emptyList(), repository.discardCalls)
     }
 }

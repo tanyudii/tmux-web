@@ -22,6 +22,7 @@ import androidx.compose.material.icons.outlined.Link
 import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.PlayArrow
 import androidx.compose.material.icons.outlined.Refresh
+import androidx.compose.material.icons.outlined.Remove
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.Stop
 import androidx.compose.material.icons.outlined.Terminal
@@ -45,6 +46,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 object TmuxIcons {
     val Server: ImageVector = Icons.Outlined.Dns
     val Plus: ImageVector = Icons.Outlined.Add
+    val Minus: ImageVector = Icons.Outlined.Remove
     val Trash: ImageVector = Icons.Outlined.DeleteOutline
     val ChevronRight: ImageVector = Icons.AutoMirrored.Outlined.KeyboardArrowRight
     val ChevronLeft: ImageVector = Icons.AutoMirrored.Outlined.KeyboardArrowLeft

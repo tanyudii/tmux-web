@@ -1,5 +1,7 @@
 package com.tanyudii.tmuxweb.presentation
 
+import com.tanyudii.tmuxweb.domain.model.ChangedFile
+import com.tanyudii.tmuxweb.domain.model.DiffMode
 import com.tanyudii.tmuxweb.domain.model.GroupedChanges
 import com.tanyudii.tmuxweb.domain.repository.ChangesRepository
 import kotlinx.coroutines.CoroutineScope
@@ -18,7 +20,14 @@ import kotlinx.coroutines.launch
 data class ChangesUiState(
     val changes: GroupedChanges? = null,
     val errorMessage: String? = null,
+    // Set by requestDiscard() while a destructive discard awaits the
+    // TmuxConfirmDialog in ChangesRail's host -- see EMB-204. Stage/unstage
+    // are non-destructive (reversible with the counterpart action) so they
+    // fire immediately without this confirmation step.
+    val pendingDiscard: PendingDiscard? = null,
 )
+
+data class PendingDiscard(val file: ChangedFile, val mode: DiffMode)
 
 class ChangesViewModel(
     private val projectId: String,
@@ -45,6 +54,43 @@ class ChangesViewModel(
 
     fun dismissError() {
         _state.update { it.copy(errorMessage = null) }
+    }
+
+    fun stage(file: ChangedFile) {
+        scope.launch {
+            runSuspendCatching { repository.stage(projectId, sessionName, file.path) }
+                .onSuccess { load() }
+                .onFailure { error -> _state.update { it.copy(errorMessage = error.toUiMessage()) } }
+        }
+    }
+
+    fun unstage(file: ChangedFile) {
+        scope.launch {
+            runSuspendCatching { repository.unstage(projectId, sessionName, file.path) }
+                .onSuccess { load() }
+                .onFailure { error -> _state.update { it.copy(errorMessage = error.toUiMessage()) } }
+        }
+    }
+
+    /** Discard is destructive and irreversible, so it waits for confirmDiscard() rather than firing immediately. */
+    fun requestDiscard(file: ChangedFile, mode: DiffMode) {
+        _state.update { it.copy(pendingDiscard = PendingDiscard(file, mode)) }
+    }
+
+    fun cancelDiscard() {
+        _state.update { it.copy(pendingDiscard = null) }
+    }
+
+    fun confirmDiscard() {
+        val pending = _state.value.pendingDiscard ?: return
+        scope.launch {
+            runSuspendCatching { repository.discard(projectId, sessionName, pending.file.path, pending.mode) }
+                .onSuccess {
+                    _state.update { it.copy(pendingDiscard = null) }
+                    load()
+                }
+                .onFailure { error -> _state.update { it.copy(pendingDiscard = null, errorMessage = error.toUiMessage()) } }
+        }
     }
 
     private suspend fun load() {

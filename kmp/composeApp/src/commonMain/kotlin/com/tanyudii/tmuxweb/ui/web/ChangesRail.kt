@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -25,6 +26,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.tanyudii.tmuxweb.domain.FileTreeNode
@@ -54,7 +56,13 @@ import com.tanyudii.tmuxweb.ui.theme.TmuxWeight
  * `WindowTabs.kt` -- no behavior change from that split itself.
  */
 @Composable
-internal fun ChangesRail(changes: GroupedChanges?, onFileClick: (ChangedFile, DiffMode) -> Unit) {
+internal fun ChangesRail(
+    changes: GroupedChanges?,
+    onFileClick: (ChangedFile, DiffMode) -> Unit,
+    onStage: (ChangedFile) -> Unit = {},
+    onUnstage: (ChangedFile) -> Unit = {},
+    onDiscard: (ChangedFile, DiffMode) -> Unit = { _, _ -> },
+) {
     var collapsedKeys by remember { mutableStateOf(emptySet<String>()) }
     val rows = buildChangeRows(changes, collapsedKeys)
 
@@ -90,6 +98,9 @@ internal fun ChangesRail(changes: GroupedChanges?, onFileClick: (ChangedFile, Di
                     collapsed = row.key in collapsedKeys,
                     onToggle = { key -> collapsedKeys = collapsedKeys.toggled(key) },
                     onFileClick = onFileClick,
+                    onStage = onStage,
+                    onUnstage = onUnstage,
+                    onDiscard = onDiscard,
                 )
             }
         }
@@ -111,6 +122,9 @@ private fun ChangeRowItem(
     collapsed: Boolean,
     onToggle: (String) -> Unit,
     onFileClick: (ChangedFile, DiffMode) -> Unit,
+    onStage: (ChangedFile) -> Unit,
+    onUnstage: (ChangedFile) -> Unit,
+    onDiscard: (ChangedFile, DiffMode) -> Unit,
 ) {
     when (row) {
         is ChangeRow.GroupHeader -> ChangeGroupHeaderRow(
@@ -121,6 +135,7 @@ private fun ChangeRowItem(
         )
         is ChangeRow.Node -> ChangeNodeRow(
             node = row.node,
+            mode = row.mode,
             depth = row.depth,
             collapsed = collapsed,
             onClick = {
@@ -130,6 +145,9 @@ private fun ChangeRowItem(
                     row.node.file?.let { onFileClick(it, row.mode) }
                 }
             },
+            onStage = { row.node.file?.let(onStage) },
+            onUnstage = { row.node.file?.let(onUnstage) },
+            onDiscard = { row.node.file?.let { onDiscard(it, row.mode) } },
         )
     }
 }
@@ -165,16 +183,30 @@ private fun ChangeGroupHeaderRow(label: String, count: Int, collapsed: Boolean, 
 
 /**
  * A folder (collapsible, chevron) or file (status marker) node, indented by
- * [depth] -- mirrors [WebSidebar]'s `SidebarRow`.
+ * [depth] -- mirrors [WebSidebar]'s `SidebarRow`. File rows carry trailing
+ * stage/unstage + discard [TmuxIconButton]s (EMB-204) -- stage/unstage is
+ * whichever direction moves the file OUT of [mode]'s section (a staged file
+ * only offers unstage, an unstaged/untracked file only offers stage), plus
+ * discard, always offered since a partially-staged file can still have
+ * unstaged content left to discard after unstaging.
  */
 @Composable
-private fun ChangeNodeRow(node: FileTreeNode, depth: Int, collapsed: Boolean, onClick: () -> Unit) {
+private fun ChangeNodeRow(
+    node: FileTreeNode,
+    mode: DiffMode,
+    depth: Int,
+    collapsed: Boolean,
+    onClick: () -> Unit,
+    onStage: () -> Unit,
+    onUnstage: () -> Unit,
+    onDiscard: () -> Unit,
+) {
     Row(
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier
             .fillMaxWidth()
             .clickable(onClick = onClick)
-            .padding(start = (14 + depth * 16).dp, end = 14.dp, top = 6.dp, bottom = 6.dp),
+            .padding(start = (14 + depth * 16).dp, end = 6.dp, top = 4.dp, bottom = 4.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         if (node.isFolder) {
@@ -204,6 +236,22 @@ private fun ChangeNodeRow(node: FileTreeNode, depth: Int, collapsed: Boolean, on
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f),
         )
+        if (!node.isFolder && node.file != null) {
+            if (mode == DiffMode.STAGED) {
+                TmuxIconButton(icon = TmuxIcons.Minus, contentDescription = "Unstage ${node.name}", onClick = onUnstage)
+            } else {
+                TmuxIconButton(icon = TmuxIcons.Plus, contentDescription = "Stage ${node.name}", onClick = onStage)
+            }
+            TmuxIconButton(icon = TmuxIcons.Trash, contentDescription = "Discard ${node.name}", onClick = onDiscard)
+        }
+    }
+}
+
+/** Small trailing row action button — 22dp hit target keeps a dense tree row from feeling cramped. */
+@Composable
+private fun TmuxIconButton(icon: ImageVector, contentDescription: String, onClick: () -> Unit) {
+    IconButton(onClick = onClick, modifier = Modifier.size(22.dp)) {
+        Icon(icon, contentDescription = contentDescription, tint = TmuxColors.textTertiary, modifier = Modifier.size(13.dp))
     }
 }
 

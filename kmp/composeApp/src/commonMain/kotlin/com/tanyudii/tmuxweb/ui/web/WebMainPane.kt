@@ -90,6 +90,10 @@ fun WebMainPane(
     onViewLogs: (String) -> Unit,
     onSwitchLogsService: (String) -> Unit,
     onHideLogs: () -> Unit,
+    onStageFile: (ChangedFile) -> Unit = {},
+    onUnstageFile: (ChangedFile) -> Unit = {},
+    onDiscardFile: (ChangedFile, DiffMode) -> Unit = { _, _ -> },
+    hasPendingDiscard: Boolean = false,
     modifier: Modifier = Modifier,
     isTerminalVisible: Boolean = true,
 ) {
@@ -128,13 +132,19 @@ fun WebMainPane(
                 onEnvironmentStop = onEnvironmentStop,
                 onViewLogs = onViewLogs,
                 terminalVisible = isTerminalVisible && !environmentMenuOpen && !windowDialogOpen &&
-                    diffTarget == null && logsService == null,
+                    diffTarget == null && logsService == null && !hasPendingDiscard,
                 onEnvironmentMenuOpenChanged = { environmentMenuOpen = it },
                 onDialogOpenChanged = { windowDialogOpen = it },
                 modifier = Modifier.weight(1f).fillMaxHeight(),
             )
             if (railOpen) {
-                ChangesRail(changes = changes, onFileClick = { file, mode -> diffTarget = DiffTarget(file, mode) })
+                ChangesRail(
+                    changes = changes,
+                    onFileClick = { file, mode -> diffTarget = DiffTarget(file, mode) },
+                    onStage = onStageFile,
+                    onUnstage = onUnstageFile,
+                    onDiscard = onDiscardFile,
+                )
             }
         }
 

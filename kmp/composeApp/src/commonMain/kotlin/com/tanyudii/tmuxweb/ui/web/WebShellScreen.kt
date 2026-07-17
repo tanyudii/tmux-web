@@ -24,6 +24,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import com.tanyudii.tmuxweb.di.TmuxWebSessionHolder
+import com.tanyudii.tmuxweb.domain.model.DiffMode
 import com.tanyudii.tmuxweb.domain.model.EnvStatus
 import com.tanyudii.tmuxweb.domain.model.GroupedChanges
 import com.tanyudii.tmuxweb.domain.repository.ChangesRepository
@@ -32,6 +33,7 @@ import com.tanyudii.tmuxweb.domain.repository.ProjectsRepository
 import com.tanyudii.tmuxweb.domain.repository.SessionsRepository
 import com.tanyudii.tmuxweb.presentation.ChangesViewModel
 import com.tanyudii.tmuxweb.presentation.EnvironmentViewModel
+import com.tanyudii.tmuxweb.presentation.PendingDiscard
 import com.tanyudii.tmuxweb.presentation.WebShellUiState
 import com.tanyudii.tmuxweb.presentation.WebShellViewModel
 import com.tanyudii.tmuxweb.ui.components.TmuxButton
@@ -111,6 +113,10 @@ fun WebShellScreen(onSwitchServer: () -> Unit) {
                 onViewLogs = { service -> environmentState?.viewModel?.showLogs(service) },
                 onSwitchLogsService = { service -> environmentState?.viewModel?.switchLogsService(service) },
                 onHideLogs = { environmentState?.viewModel?.hideLogs() },
+                onStageFile = { file -> changesState?.viewModel?.stage(file) },
+                onUnstageFile = { file -> changesState?.viewModel?.unstage(file) },
+                onDiscardFile = { file, mode -> changesState?.viewModel?.requestDiscard(file, mode) },
+                hasPendingDiscard = changesState?.pendingDiscard != null,
                 modifier = Modifier.weight(1f),
                 isTerminalVisible = !state.hasOpenDialog,
             )
@@ -118,6 +124,25 @@ fun WebShellScreen(onSwitchServer: () -> Unit) {
     }
 
     WebShellDialogs(state = state, viewModel = viewModel)
+
+    changesState?.pendingDiscard?.let { pending ->
+        TmuxConfirmDialog(
+            title = "Discard changes?",
+            message = discardConfirmMessage(pending),
+            confirmLabel = "Discard",
+            onConfirm = { changesState.viewModel.confirmDiscard() },
+            onCancel = { changesState.viewModel.cancelDiscard() },
+        )
+    }
+}
+
+private fun discardConfirmMessage(pending: PendingDiscard): String {
+    val fileName = pending.file.path.substringAfterLast('/')
+    return if (pending.mode == DiffMode.UNTRACKED) {
+        "“$fileName” will be deleted. This can't be undone."
+    } else {
+        "Uncommitted changes to “$fileName” will be reverted. This can't be undone."
+    }
 }
 
 /**
@@ -178,7 +203,11 @@ private fun pendingDeleteCopy(pending: WebShellUiState.PendingDelete): Pair<Stri
         "Delete session?" to (pending.message ?: "“${pending.session.name}” will be closed.")
 }
 
-private class ChangesState(val viewModel: ChangesViewModel, val changes: GroupedChanges?)
+private class ChangesState(
+    val viewModel: ChangesViewModel,
+    val changes: GroupedChanges?,
+    val pendingDiscard: PendingDiscard?,
+)
 
 @Composable
 private fun rememberChangesState(projectId: String, sessionName: String): ChangesState {
@@ -186,7 +215,9 @@ private fun rememberChangesState(projectId: String, sessionName: String): Change
     val scope = rememberCoroutineScope()
     val viewModel = remember(projectId, sessionName) { ChangesViewModel(projectId, sessionName, repository, scope) }
     val state by viewModel.state.collectAsState()
-    return remember(viewModel, state.changes) { ChangesState(viewModel, state.changes) }
+    return remember(viewModel, state.changes, state.pendingDiscard) {
+        ChangesState(viewModel, state.changes, state.pendingDiscard)
+    }
 }
 
 private class EnvironmentState(
