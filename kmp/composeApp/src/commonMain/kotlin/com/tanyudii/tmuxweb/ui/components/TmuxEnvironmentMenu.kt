@@ -3,6 +3,7 @@ package com.tanyudii.tmuxweb.ui.components
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -69,6 +70,7 @@ fun TmuxEnvironmentMenu(
     modifier: Modifier = Modifier,
     onOpenChanged: (Boolean) -> Unit = {},
     onCancel: () -> Unit = {},
+    onEditConfig: () -> Unit = {},
 ) {
     if (status == null || status.phase == EnvPhase.UNAVAILABLE) return
     var open by remember { mutableStateOf(false) }
@@ -87,16 +89,28 @@ fun TmuxEnvironmentMenu(
     val uriHandler = LocalUriHandler.current
 
     Box(modifier = modifier) {
-        EnvironmentToggleRow(
-            running = running,
-            starting = starting,
-            canCancel = canCancel,
-            upCount = upCount,
-            serviceCount = services.size,
-            onToggleOpen = { open = !open },
-            onRun = onRun,
-            onCancel = onCancel,
-        )
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+            EnvironmentToggleRow(
+                running = running,
+                starting = starting,
+                canCancel = canCancel,
+                upCount = upCount,
+                serviceCount = services.size,
+                onToggleOpen = { open = !open },
+                onRun = onRun,
+                onCancel = onCancel,
+            )
+            // Always available regardless of run state -- EMB-210. Editing
+            // config makes sense before the first Setup (nothing to show a
+            // dropdown for yet) just as much as while running, so this lives
+            // outside EnvironmentToggleRow's running/starting-gated row.
+            TmuxIconButton(
+                icon = TmuxIcons.Edit,
+                contentDescription = "Edit environment config",
+                onClick = onEditConfig,
+                size = TmuxIconButtonSize.SM,
+            )
+        }
         EnvironmentDropdownContent(
             open = open,
             running = running,

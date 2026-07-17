@@ -7,6 +7,7 @@ import io.ktor.client.request.get
 import io.ktor.client.request.header
 import io.ktor.client.request.parameter
 import io.ktor.client.request.post
+import io.ktor.client.request.put
 import io.ktor.client.request.setBody
 import io.ktor.client.statement.HttpResponse
 import io.ktor.client.statement.bodyAsText
@@ -43,6 +44,16 @@ class TmuxWebHttpClient(
         }
         checkStatus(response)
         return decodeBody(response)
+    }
+
+    suspend inline fun <reified TBody> putJson(path: String, body: TBody): HttpResponse {
+        val response = httpClient.put(baseUrl + path) {
+            header("Authorization", "Bearer $token")
+            contentType(ContentType.Application.Json)
+            setBody(body)
+        }
+        checkStatus(response)
+        return response
     }
 
     suspend fun post(path: String, params: Map<String, String> = emptyMap()): HttpResponse {

@@ -37,7 +37,9 @@ import com.tanyudii.tmuxweb.domain.model.GroupedChanges
 import com.tanyudii.tmuxweb.domain.model.Project
 import com.tanyudii.tmuxweb.domain.model.ProjectSession
 import com.tanyudii.tmuxweb.domain.repository.ChangesRepository
+import com.tanyudii.tmuxweb.domain.repository.EnvironmentRepository
 import com.tanyudii.tmuxweb.presentation.DiffViewModel
+import com.tanyudii.tmuxweb.presentation.EnvFileEditorViewModel
 import com.tanyudii.tmuxweb.presentation.LogsViewModel
 import com.tanyudii.tmuxweb.terminal.PlatformTerminalView
 import com.tanyudii.tmuxweb.terminal.observeAppForeground
@@ -46,6 +48,7 @@ import com.tanyudii.tmuxweb.ui.components.TmuxButtonVariant
 import com.tanyudii.tmuxweb.ui.components.TmuxConnectionBanner
 import com.tanyudii.tmuxweb.ui.components.TmuxConnectionStatus
 import com.tanyudii.tmuxweb.ui.components.TmuxDiffDialog
+import com.tanyudii.tmuxweb.ui.components.TmuxEnvFileEditorDialog
 import com.tanyudii.tmuxweb.ui.components.TmuxEnvironmentMenu
 import com.tanyudii.tmuxweb.ui.components.TmuxIconButton
 import com.tanyudii.tmuxweb.ui.components.TmuxIconButtonVariant
@@ -110,6 +113,7 @@ fun WebMainPane(
     var environmentMenuOpen by remember { mutableStateOf(false) }
     var windowDialogOpen by remember { mutableStateOf(false) }
     var diffTarget by remember(session?.name) { mutableStateOf<DiffTarget?>(null) }
+    var envEditorOpen by remember(session?.name) { mutableStateOf(false) }
 
     Column(modifier = modifier.fillMaxSize().background(TmuxColors.bgApp)) {
         if (session == null || terminal == null) {
@@ -136,9 +140,10 @@ fun WebMainPane(
                 onEnvironmentRun = onEnvironmentRun,
                 onEnvironmentStop = onEnvironmentStop,
                 onEnvironmentCancel = onEnvironmentCancel,
+                onEnvironmentEditConfig = { envEditorOpen = true },
                 onViewLogs = onViewLogs,
                 terminalVisible = isTerminalVisible && !environmentMenuOpen && !windowDialogOpen &&
-                    diffTarget == null && logsService == null && !hasPendingDiscard,
+                    diffTarget == null && logsService == null && !hasPendingDiscard && !envEditorOpen,
                 onEnvironmentMenuOpenChanged = { environmentMenuOpen = it },
                 onDialogOpenChanged = { windowDialogOpen = it },
                 modifier = Modifier.weight(1f).fillMaxHeight(),
@@ -173,10 +178,37 @@ fun WebMainPane(
             onDismiss = onHideLogs,
             onSwitchService = onSwitchLogsService,
         )
+
+        MainPaneEnvFileEditorDialog(
+            projectId = project?.id,
+            sessionName = session.name,
+            open = envEditorOpen,
+            onDismiss = { envEditorOpen = false },
+        )
     }
 }
 
 private data class DiffTarget(val file: ChangedFile, val mode: DiffMode)
+
+/** Hosts the `.tmux-web-env/` file editor once opened -- EMB-210. Split out purely to keep [WebMainPane] short. */
+@Composable
+private fun MainPaneEnvFileEditorDialog(projectId: String?, sessionName: String, open: Boolean, onDismiss: () -> Unit) {
+    if (projectId == null || !open) return
+    val repository: EnvironmentRepository = koinInject()
+    val scope = rememberCoroutineScope()
+    val viewModel = remember(projectId, sessionName) {
+        EnvFileEditorViewModel(projectId, sessionName, repository, scope)
+    }
+    val state by viewModel.state.collectAsState()
+
+    TmuxEnvFileEditorDialog(
+        state = state,
+        onDismiss = onDismiss,
+        onSelectFile = viewModel::selectFile,
+        onDraftChange = viewModel::updateDraft,
+        onSave = viewModel::save,
+    )
+}
 
 /**
  * Top bar, tmux window tabs, terminal viewport, and status footer -- the
@@ -199,6 +231,7 @@ private fun MainContent(
     onEnvironmentRun: () -> Unit,
     onEnvironmentStop: () -> Unit,
     onEnvironmentCancel: () -> Unit,
+    onEnvironmentEditConfig: () -> Unit,
     onViewLogs: (String) -> Unit,
     terminalVisible: Boolean,
     onEnvironmentMenuOpenChanged: (Boolean) -> Unit,
@@ -216,6 +249,7 @@ private fun MainContent(
             onEnvironmentRun = onEnvironmentRun,
             onEnvironmentStop = onEnvironmentStop,
                 onEnvironmentCancel = onEnvironmentCancel,
+                onEnvironmentEditConfig = onEnvironmentEditConfig,
             onViewLogs = onViewLogs,
             onEnvironmentMenuOpenChanged = onEnvironmentMenuOpenChanged,
         )
@@ -382,6 +416,7 @@ private fun TopBar(
     onEnvironmentRun: () -> Unit,
     onEnvironmentStop: () -> Unit,
     onEnvironmentCancel: () -> Unit,
+    onEnvironmentEditConfig: () -> Unit,
     onViewLogs: (String) -> Unit,
     onEnvironmentMenuOpenChanged: (Boolean) -> Unit,
 ) {
@@ -414,6 +449,7 @@ private fun TopBar(
             onRun = onEnvironmentRun,
             onStop = onEnvironmentStop,
             onCancel = onEnvironmentCancel,
+            onEditConfig = onEnvironmentEditConfig,
             onViewLogs = onViewLogs,
             onOpenChanged = onEnvironmentMenuOpenChanged,
         )
