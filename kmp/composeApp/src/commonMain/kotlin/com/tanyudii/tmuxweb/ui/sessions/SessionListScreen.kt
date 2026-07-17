@@ -1,6 +1,7 @@
 package com.tanyudii.tmuxweb.ui.sessions
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -8,6 +9,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
@@ -104,12 +106,27 @@ private fun SessionListScreen(
             title = projectName,
             back = TmuxNavBarBack(label = "Projects", onClick = onBack),
             right = {
-                TmuxIconButton(
-                    icon = TmuxIcons.Plus,
-                    contentDescription = "New session",
-                    size = TmuxIconButtonSize.LG,
-                    onClick = onNewSessionClick,
-                )
+                if (state.isSelectionMode) {
+                    TmuxIconButton(
+                        icon = TmuxIcons.Close,
+                        contentDescription = "Cancel selection",
+                        size = TmuxIconButtonSize.LG,
+                        onClick = viewModel.bulkDelete::toggleSelectionMode,
+                    )
+                } else {
+                    TmuxIconButton(
+                        icon = TmuxIcons.CheckboxChecked,
+                        contentDescription = "Select sessions",
+                        size = TmuxIconButtonSize.LG,
+                        onClick = viewModel.bulkDelete::toggleSelectionMode,
+                    )
+                    TmuxIconButton(
+                        icon = TmuxIcons.Plus,
+                        contentDescription = "New session",
+                        size = TmuxIconButtonSize.LG,
+                        onClick = onNewSessionClick,
+                    )
+                }
             },
         )
         Text(
@@ -152,6 +169,10 @@ private fun SessionsBody(
 ) {
     Column(modifier = modifier.verticalScroll(rememberScrollState()).padding(top = 8.dp)) {
         state.sessionCreation?.let { creation -> CreatingSessionCard(creation.progressMessage) }
+        if (state.sessions.isNotEmpty()) {
+            SessionFilterBar(state, viewModel)
+        }
+        val visibleSessions = state.filteredSessions
         when {
             state.sessions.isEmpty() && state.sessionCreation == null -> {
                 TmuxEmptyState(
@@ -162,7 +183,19 @@ private fun SessionsBody(
                     titleSize = TmuxTextSize.base,
                 )
             }
-            else -> SessionsGroup(state.sessions, viewModel, onOpenSession)
+            visibleSessions.isEmpty() -> {
+                TmuxEmptyState(
+                    icon = TmuxIcons.Terminal,
+                    title = "No sessions match filters",
+                    subtitle = "Try a different status or branch.",
+                    titleColor = TmuxColors.textPrimary,
+                    titleSize = TmuxTextSize.base,
+                )
+            }
+            else -> SessionsGroup(visibleSessions, state, viewModel, onOpenSession)
+        }
+        if (state.isSelectionMode) {
+            BulkDeleteBar(state, viewModel)
         }
         Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
             TmuxButton(
@@ -196,6 +229,33 @@ private fun SessionListConfirmDialogs(
             onCancel = viewModel::cancelForceDelete,
         )
     }
+    state.pendingBulkDelete?.let { pending ->
+        TmuxConfirmDialog(
+            title = "Delete ${pending.names.size} session(s)?",
+            message = "This closes ${pending.names.size} session(s) and removes their worktrees.",
+            onConfirm = viewModel.bulkDelete::confirmBulkDelete,
+            onCancel = viewModel.bulkDelete::cancelBulkDelete,
+        )
+    }
+    state.pendingBulkForceDelete?.let { pending ->
+        TmuxConfirmDialog(
+            title = "Force delete ${pending.sessions.size} session(s)?",
+            message = "These have uncommitted changes or are still active -- deleting force-closes them.",
+            force = true,
+            onConfirm = viewModel.bulkDelete::confirmBulkForceDelete,
+            onCancel = viewModel.bulkDelete::cancelBulkForceDelete,
+            content = {
+                pending.sessions.forEach { session ->
+                    Text(
+                        session.name,
+                        color = TmuxColors.textSecondary,
+                        fontFamily = TmuxFonts.mono,
+                        fontSize = TmuxMonoSize.sm,
+                    )
+                }
+            },
+        )
+    }
     deleteProjectState.pendingForceMessage?.let { message ->
         TmuxConfirmDialog(
             title = "Delete project?",
@@ -210,6 +270,7 @@ private fun SessionListConfirmDialogs(
 @Composable
 private fun SessionsGroup(
     sessions: List<ProjectSession>,
+    state: SessionListUiState,
     viewModel: SessionListViewModel,
     onOpenSession: (ProjectSession) -> Unit,
 ) {
@@ -222,24 +283,56 @@ private fun SessionsGroup(
             // state (bound to the slot) leaks onto the session that now
             // occupies it -- its next swipe is silently vetoed.
             key(session.fullName) {
-                TmuxSwipeToDeleteRow(onDelete = { viewModel.delete(session) }) {
-                    TmuxListRow(
-                        title = session.name,
-                        icon = TmuxIcons.Terminal,
-                        subtitle = sessionSubtitle(session),
-                        trailing = {
-                            TmuxStatusBadge(
-                                text = if (session.attached) "attached" else "detached",
-                                tone = if (session.attached) TmuxStatusTone.ATTACHED else TmuxStatusTone.IDLE,
-                                dot = session.attached,
-                            )
-                        },
-                        onClick = { onOpenSession(session) },
-                    )
+                // EMB-221: selection mode swaps swipe-to-delete for a leading
+                // checkbox + tap-to-toggle -- the two gestures (swipe vs. tap
+                // select) shouldn't coexist on the same row at once.
+                if (state.isSelectionMode) {
+                    SelectableSessionRow(session, isSelected = session.name in state.selectedNames, viewModel)
+                } else {
+                    TmuxSwipeToDeleteRow(onDelete = { viewModel.delete(session) }) {
+                        TmuxListRow(
+                            title = session.name,
+                            icon = TmuxIcons.Terminal,
+                            subtitle = sessionSubtitle(session),
+                            trailing = { SessionStatusTrailingBadge(session) },
+                            onClick = { onOpenSession(session) },
+                        )
+                    }
                 }
             }
         }
     }
+}
+
+@Composable
+private fun SelectableSessionRow(session: ProjectSession, isSelected: Boolean, viewModel: SessionListViewModel) {
+    TmuxListRow(
+        title = session.name,
+        icon = TmuxIcons.Terminal,
+        subtitle = sessionSubtitle(session),
+        leading = {
+            Icon(
+                if (isSelected) TmuxIcons.CheckboxChecked else TmuxIcons.CheckboxUnchecked,
+                contentDescription = if (isSelected) "Selected" else "Not selected",
+                tint = if (isSelected) TmuxColors.accent else TmuxColors.textTertiary,
+                modifier = Modifier
+                    .padding(end = 4.dp)
+                    .clickable { viewModel.bulkDelete.toggleSessionSelected(session.name) },
+            )
+        },
+        trailing = { SessionStatusTrailingBadge(session) },
+        chevron = false,
+        onClick = { viewModel.bulkDelete.toggleSessionSelected(session.name) },
+    )
+}
+
+@Composable
+private fun SessionStatusTrailingBadge(session: ProjectSession) {
+    TmuxStatusBadge(
+        text = if (session.attached) "attached" else "detached",
+        tone = if (session.attached) TmuxStatusTone.ATTACHED else TmuxStatusTone.IDLE,
+        dot = session.attached,
+    )
 }
 
 @Composable

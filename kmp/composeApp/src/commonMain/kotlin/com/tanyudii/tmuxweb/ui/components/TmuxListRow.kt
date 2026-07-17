@@ -57,6 +57,10 @@ fun TmuxListRow(
     icon: ImageVector? = null,
     subtitle: String? = null,
     meta: String? = null,
+    // EMB-221: optional slot rendered before the icon badge, for a bulk-select
+    // checkbox -- additive/opt-in like [trailing], so every existing call site
+    // is unaffected.
+    leading: (@Composable RowScope.() -> Unit)? = null,
     trailing: (@Composable RowScope.() -> Unit)? = null,
     chevron: Boolean = true,
     active: Boolean = false,
@@ -86,6 +90,7 @@ fun TmuxListRow(
             .padding(vertical = 10.dp, horizontal = 14.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
+        leading?.invoke(this)
         if (icon != null) {
             RowIconBadge(icon = icon, active = active)
         }

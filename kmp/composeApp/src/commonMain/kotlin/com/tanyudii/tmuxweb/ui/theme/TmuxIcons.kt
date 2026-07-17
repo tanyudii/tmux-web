@@ -11,6 +11,8 @@ import androidx.compose.material.icons.outlined.AccountTree
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Autorenew
 import androidx.compose.material.icons.outlined.Check
+import androidx.compose.material.icons.outlined.CheckBox
+import androidx.compose.material.icons.outlined.CheckBoxOutlineBlank
 import androidx.compose.material.icons.outlined.Circle
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.DeleteOutline
@@ -81,4 +83,6 @@ object TmuxIcons {
     val BellOff: ImageVector = Icons.Outlined.NotificationsOff
     val SplitView: ImageVector = Icons.Outlined.VerticalSplit
     val History: ImageVector = Icons.Outlined.History
+    val CheckboxChecked: ImageVector = Icons.Outlined.CheckBox
+    val CheckboxUnchecked: ImageVector = Icons.Outlined.CheckBoxOutlineBlank
 }

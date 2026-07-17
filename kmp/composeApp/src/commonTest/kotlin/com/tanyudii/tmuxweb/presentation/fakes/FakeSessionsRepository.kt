@@ -9,6 +9,10 @@ class FakeSessionsRepository(initialSessions: List<ProjectSession> = emptyList()
     val sessions = initialSessions.toMutableList()
     var listError: Throwable? = null
     var deleteError: Throwable? = null
+
+    /** Per-session override checked before the global [deleteError] -- lets bulk-delete
+     * tests script "session A conflicts, session B succeeds" in one repository instance. */
+    val deleteErrors: MutableMap<String, Throwable> = mutableMapOf()
     var startCreationError: Throwable? = null
     var closeSplitPaneError: Throwable? = null
     val closeSplitPaneCalls = mutableListOf<Pair<String, String>>()
@@ -42,7 +46,7 @@ class FakeSessionsRepository(initialSessions: List<ProjectSession> = emptyList()
 
     override suspend fun deleteSession(projectId: String, sessionName: String, force: Boolean, deleteBranch: Boolean) {
         deleteSessionCalls.add(Triple(sessionName, force, deleteBranch))
-        deleteError?.let { throw it }
+        (deleteErrors[sessionName] ?: deleteError)?.let { throw it }
         sessions.removeAll { it.name == sessionName }
     }
 
