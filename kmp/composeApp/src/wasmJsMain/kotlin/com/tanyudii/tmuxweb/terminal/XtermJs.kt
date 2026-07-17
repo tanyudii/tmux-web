@@ -164,6 +164,30 @@ fun hideCopyToast(container: HTMLElement): Unit = js(
     }""",
 )
 
+// xterm.js's hidden `.xterm-helper-textarea` (vendor/xterm.js) is the real
+// DOM node that receives focus when a user taps/clicks the terminal, but
+// the library only sets autocorrect/autocapitalize/spellcheck on it -- no
+// `autocomplete` and no `name`. On iOS/iPadOS Safari, a lone unclassified
+// textarea like that (not inside a <form>, no sibling username/password
+// inputs to trigger the login-form heuristic) falls back to the generic
+// AutoFill QuickType bar (Passwords / Credit Cards / Contacts-Location) on
+// every focus. Patching these attributes right after `open()` is the
+// standard fix used by other browser-based terminal projects for this
+// exact issue.
+@Suppress("UnusedParameter")
+fun suppressAutofillHints(container: HTMLElement): Unit = js(
+    """{
+        var ta = container.querySelector('.xterm-helper-textarea');
+        if (!ta) return;
+        ta.setAttribute('autocomplete', 'off');
+        ta.setAttribute('name', 'tmux-terminal-input');
+        ta.setAttribute('data-lpignore', 'true');
+        ta.setAttribute('data-1p-ignore', 'true');
+        ta.setAttribute('data-bwignore', 'true');
+        ta.setAttribute('data-form-type', 'other');
+    }""",
+)
+
 // xterm.js exposes font size as a mutable property on `.options`, not a
 // method -- there's nothing to bind as an `external class` member for it,
 // so this is a small JS shim in the same style as newFitAddon()/newTerminal().

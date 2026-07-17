@@ -119,6 +119,7 @@ private fun createAndMountTerminal(
     val addon = newFitAddon()
     created.loadAddon(addon)
     created.open(container)
+    suppressAutofillHints(container)
     created.onData { data -> onInput(data.toString()) }
     created.onBell { onBell() }
     onReady(created, addon)
