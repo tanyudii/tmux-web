@@ -94,6 +94,10 @@ fun WebMainPane(
     onUnstageFile: (ChangedFile) -> Unit = {},
     onDiscardFile: (ChangedFile, DiffMode) -> Unit = { _, _ -> },
     hasPendingDiscard: Boolean = false,
+    commitMessage: String = "",
+    onCommitMessageChange: (String) -> Unit = {},
+    isCommitting: Boolean = false,
+    onCommit: () -> Unit = {},
     modifier: Modifier = Modifier,
     isTerminalVisible: Boolean = true,
 ) {
@@ -144,6 +148,10 @@ fun WebMainPane(
                     onStage = onStageFile,
                     onUnstage = onUnstageFile,
                     onDiscard = onDiscardFile,
+                    commitMessage = commitMessage,
+                    onCommitMessageChange = onCommitMessageChange,
+                    isCommitting = isCommitting,
+                    onCommit = onCommit,
                 )
             }
         }

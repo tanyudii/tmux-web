@@ -16,6 +16,7 @@ interface ChangesRepository {
     suspend fun stage(projectId: String, sessionName: String, filePath: String)
     suspend fun unstage(projectId: String, sessionName: String, filePath: String)
     suspend fun discard(projectId: String, sessionName: String, filePath: String, mode: DiffMode)
+    suspend fun commit(projectId: String, sessionName: String, message: String)
 }
 
 @Serializable
@@ -23,6 +24,9 @@ private data class PathRequest(val path: String)
 
 @Serializable
 private data class DiscardRequest(val path: String, val mode: String)
+
+@Serializable
+private data class CommitRequest(val message: String)
 
 class KtorChangesRepository(private val client: TmuxWebHttpClient) : ChangesRepository {
     override suspend fun changes(projectId: String, sessionName: String): GroupedChanges =
@@ -52,6 +56,13 @@ class KtorChangesRepository(private val client: TmuxWebHttpClient) : ChangesRepo
         client.postJson<DiscardRequest, Unit>(
             "/api/projects/$projectId/sessions/$sessionName/discard",
             DiscardRequest(filePath, mode.wireValue),
+        )
+    }
+
+    override suspend fun commit(projectId: String, sessionName: String, message: String) {
+        client.postJson<CommitRequest, Unit>(
+            "/api/projects/$projectId/sessions/$sessionName/commit",
+            CommitRequest(message),
         )
     }
 }

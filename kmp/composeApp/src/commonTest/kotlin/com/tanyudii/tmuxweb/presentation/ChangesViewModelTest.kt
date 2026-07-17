@@ -224,4 +224,60 @@ class ChangesViewModelTest {
 
         assertEquals(emptyList(), repository.discardCalls)
     }
+
+    @Test
+    fun `updateCommitMessage updates state`() = runTest {
+        val repository = FakeChangesRepository()
+        val viewModel = viewModel(repository)
+        runCurrent()
+
+        viewModel.updateCommitMessage("fix: a bug")
+
+        assertEquals("fix: a bug", viewModel.state.value.commitMessage)
+    }
+
+    @Test
+    fun `commit calls the repository, clears the message, and reloads`() = runTest {
+        val repository = FakeChangesRepository()
+        repository.changesQueue.add(Result.success(changes()))
+        val viewModel = viewModel(repository)
+        runCurrent()
+        viewModel.updateCommitMessage("fix: a bug")
+
+        viewModel.commit()
+        runCurrent()
+
+        assertEquals(listOf("fix: a bug"), repository.commitCalls)
+        assertEquals("", viewModel.state.value.commitMessage)
+        assertEquals(false, viewModel.state.value.isCommitting)
+    }
+
+    @Test
+    fun `commit with a blank message does nothing`() = runTest {
+        val repository = FakeChangesRepository()
+        val viewModel = viewModel(repository)
+        runCurrent()
+        viewModel.updateCommitMessage("   ")
+
+        viewModel.commit()
+        runCurrent()
+
+        assertEquals(emptyList(), repository.commitCalls)
+    }
+
+    @Test
+    fun `commit failure clears isCommitting and surfaces an error without clearing the message`() = runTest {
+        val repository = FakeChangesRepository()
+        repository.commitResult = Result.failure(ApiError.Conflict("No staged changes to commit", null))
+        val viewModel = viewModel(repository)
+        runCurrent()
+        viewModel.updateCommitMessage("fix: a bug")
+
+        viewModel.commit()
+        runCurrent()
+
+        assertEquals(false, viewModel.state.value.isCommitting)
+        assertEquals("fix: a bug", viewModel.state.value.commitMessage)
+        assertEquals("No staged changes to commit", viewModel.state.value.errorMessage)
+    }
 }

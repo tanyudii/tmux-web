@@ -25,6 +25,10 @@ data class ChangesUiState(
     // are non-destructive (reversible with the counterpart action) so they
     // fire immediately without this confirmation step.
     val pendingDiscard: PendingDiscard? = null,
+    // EMB-205: commit message draft lives here (not local Compose state) so
+    // it survives ChangesRail recomposition and clears itself on success.
+    val commitMessage: String = "",
+    val isCommitting: Boolean = false,
 )
 
 data class PendingDiscard(val file: ChangedFile, val mode: DiffMode)
@@ -90,6 +94,25 @@ class ChangesViewModel(
                     load()
                 }
                 .onFailure { error -> _state.update { it.copy(pendingDiscard = null, errorMessage = error.toUiMessage()) } }
+        }
+    }
+
+    fun updateCommitMessage(message: String) {
+        _state.update { it.copy(commitMessage = message) }
+    }
+
+    /** No-op if a commit is already in flight or the message is blank -- callers gate the button on canCommit anyway. */
+    fun commit() {
+        val message = _state.value.commitMessage.trim()
+        if (message.isEmpty() || _state.value.isCommitting) return
+        _state.update { it.copy(isCommitting = true) }
+        scope.launch {
+            runSuspendCatching { repository.commit(projectId, sessionName, message) }
+                .onSuccess {
+                    _state.update { it.copy(isCommitting = false, commitMessage = "") }
+                    load()
+                }
+                .onFailure { error -> _state.update { it.copy(isCommitting = false, errorMessage = error.toUiMessage()) } }
         }
     }
 

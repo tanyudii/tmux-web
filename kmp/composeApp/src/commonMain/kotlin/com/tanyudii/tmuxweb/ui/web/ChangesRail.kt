@@ -38,6 +38,7 @@ import com.tanyudii.tmuxweb.presentation.ChangeRow
 import com.tanyudii.tmuxweb.presentation.buildChangeRows
 import com.tanyudii.tmuxweb.ui.components.TmuxButton
 import com.tanyudii.tmuxweb.ui.components.TmuxButtonVariant
+import com.tanyudii.tmuxweb.ui.components.TmuxTextField
 import com.tanyudii.tmuxweb.ui.theme.TmuxColors
 import com.tanyudii.tmuxweb.ui.theme.TmuxFonts
 import com.tanyudii.tmuxweb.ui.theme.TmuxIcons
@@ -62,6 +63,10 @@ internal fun ChangesRail(
     onStage: (ChangedFile) -> Unit = {},
     onUnstage: (ChangedFile) -> Unit = {},
     onDiscard: (ChangedFile, DiffMode) -> Unit = { _, _ -> },
+    commitMessage: String = "",
+    onCommitMessageChange: (String) -> Unit = {},
+    isCommitting: Boolean = false,
+    onCommit: () -> Unit = {},
 ) {
     var collapsedKeys by remember { mutableStateOf(emptySet<String>()) }
     val rows = buildChangeRows(changes, collapsedKeys)
@@ -104,15 +109,42 @@ internal fun ChangesRail(
                 )
             }
         }
-        Box(modifier = Modifier.fillMaxWidth().padding(12.dp)) {
-            TmuxButton(
-                onClick = {},
-                text = "Stage all · commit",
-                variant = TmuxButtonVariant.SECONDARY,
-                icon = TmuxIcons.GitBranch,
-                fillWidth = true,
-            )
-        }
+        val hasStagedChanges = !changes?.staged.isNullOrEmpty()
+        CommitFooter(
+            message = commitMessage,
+            onMessageChange = onCommitMessageChange,
+            enabled = hasStagedChanges && !isCommitting,
+            isCommitting = isCommitting,
+            onCommit = onCommit,
+        )
+    }
+}
+
+/** Commit-message input + commit button (EMB-205) -- disabled while nothing is staged or a commit is already in flight. */
+@Composable
+private fun CommitFooter(
+    message: String,
+    onMessageChange: (String) -> Unit,
+    enabled: Boolean,
+    isCommitting: Boolean,
+    onCommit: () -> Unit,
+) {
+    Column(modifier = Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        TmuxTextField(
+            value = message,
+            onValueChange = onMessageChange,
+            placeholder = "Commit message",
+            enabled = enabled,
+        )
+        TmuxButton(
+            onClick = onCommit,
+            text = "Commit",
+            variant = TmuxButtonVariant.SECONDARY,
+            icon = TmuxIcons.GitBranch,
+            fillWidth = true,
+            enabled = enabled && message.isNotBlank(),
+            loading = isCommitting,
+        )
     }
 }
 

@@ -14,10 +14,12 @@ class FakeChangesRepository(private var default: GroupedChanges = EMPTY_CHANGES)
     var stageResult: Result<Unit> = Result.success(Unit)
     var unstageResult: Result<Unit> = Result.success(Unit)
     var discardResult: Result<Unit> = Result.success(Unit)
+    var commitResult: Result<Unit> = Result.success(Unit)
 
     val stageCalls = mutableListOf<String>()
     val unstageCalls = mutableListOf<String>()
     val discardCalls = mutableListOf<Pair<String, DiffMode>>()
+    val commitCalls = mutableListOf<String>()
 
     override suspend fun changes(projectId: String, sessionName: String): GroupedChanges =
         (changesQueue.removeFirstOrNull() ?: Result.success(default)).getOrThrow()
@@ -38,5 +40,10 @@ class FakeChangesRepository(private var default: GroupedChanges = EMPTY_CHANGES)
     override suspend fun discard(projectId: String, sessionName: String, filePath: String, mode: DiffMode) {
         discardCalls.add(filePath to mode)
         discardResult.getOrThrow()
+    }
+
+    override suspend fun commit(projectId: String, sessionName: String, message: String) {
+        commitCalls.add(message)
+        commitResult.getOrThrow()
     }
 }

@@ -117,6 +117,10 @@ fun WebShellScreen(onSwitchServer: () -> Unit) {
                 onUnstageFile = { file -> changesState?.viewModel?.unstage(file) },
                 onDiscardFile = { file, mode -> changesState?.viewModel?.requestDiscard(file, mode) },
                 hasPendingDiscard = changesState?.pendingDiscard != null,
+                commitMessage = changesState?.commitMessage.orEmpty(),
+                onCommitMessageChange = { message -> changesState?.viewModel?.updateCommitMessage(message) },
+                isCommitting = changesState?.isCommitting ?: false,
+                onCommit = { changesState?.viewModel?.commit() },
                 modifier = Modifier.weight(1f),
                 isTerminalVisible = !state.hasOpenDialog,
             )
@@ -207,6 +211,8 @@ private class ChangesState(
     val viewModel: ChangesViewModel,
     val changes: GroupedChanges?,
     val pendingDiscard: PendingDiscard?,
+    val commitMessage: String,
+    val isCommitting: Boolean,
 )
 
 @Composable
@@ -215,8 +221,8 @@ private fun rememberChangesState(projectId: String, sessionName: String): Change
     val scope = rememberCoroutineScope()
     val viewModel = remember(projectId, sessionName) { ChangesViewModel(projectId, sessionName, repository, scope) }
     val state by viewModel.state.collectAsState()
-    return remember(viewModel, state.changes, state.pendingDiscard) {
-        ChangesState(viewModel, state.changes, state.pendingDiscard)
+    return remember(viewModel, state.changes, state.pendingDiscard, state.commitMessage, state.isCommitting) {
+        ChangesState(viewModel, state.changes, state.pendingDiscard, state.commitMessage, state.isCommitting)
     }
 }
 
