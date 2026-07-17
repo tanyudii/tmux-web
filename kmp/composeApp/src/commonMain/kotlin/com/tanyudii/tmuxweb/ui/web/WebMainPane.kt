@@ -35,6 +35,7 @@ import com.tanyudii.tmuxweb.domain.model.EnvStatus
 import com.tanyudii.tmuxweb.domain.model.GroupedChanges
 import com.tanyudii.tmuxweb.domain.model.Project
 import com.tanyudii.tmuxweb.domain.model.ProjectSession
+import com.tanyudii.tmuxweb.domain.model.SessionResourceUsage
 import com.tanyudii.tmuxweb.domain.repository.ChangesRepository
 import com.tanyudii.tmuxweb.domain.repository.EnvironmentRepository
 import com.tanyudii.tmuxweb.domain.repository.SessionEventsRepository
@@ -84,6 +85,7 @@ fun WebMainPane(
     environment: EnvStatus?,
     environmentBusy: Boolean,
     logsService: String?,
+    resourceUsage: SessionResourceUsage?,
     railOpen: Boolean,
     activeWindow: Int,
     onSelectWindow: (Int) -> Unit,
@@ -136,6 +138,7 @@ fun WebMainPane(
                 terminal = terminal,
                 environment = environment,
                 environmentBusy = environmentBusy,
+                resourceUsage = resourceUsage,
                 railOpen = railOpen,
                 activeWindow = activeWindow,
                 onSelectWindow = onSelectWindow,
@@ -257,6 +260,7 @@ private fun MainContent(
     terminal: TerminalSession,
     environment: EnvStatus?,
     environmentBusy: Boolean,
+    resourceUsage: SessionResourceUsage?,
     railOpen: Boolean,
     activeWindow: Int,
     onSelectWindow: (Int) -> Unit,
@@ -281,6 +285,7 @@ private fun MainContent(
             session = session,
             environment = environment,
             environmentBusy = environmentBusy,
+            resourceUsage = resourceUsage,
             railOpen = railOpen,
             onToggleRail = onToggleRail,
             onEnvironmentRun = onEnvironmentRun,
@@ -447,6 +452,7 @@ private fun TopBar(
     session: ProjectSession,
     environment: EnvStatus?,
     environmentBusy: Boolean,
+    resourceUsage: SessionResourceUsage?,
     railOpen: Boolean,
     onToggleRail: () -> Unit,
     onEnvironmentRun: () -> Unit,
@@ -481,6 +487,7 @@ private fun TopBar(
             tone = if (session.attached) TmuxStatusTone.ATTACHED else TmuxStatusTone.IDLE,
             dot = session.attached,
         )
+        ResourceUsageBadge(resourceUsage)
         Box(modifier = Modifier.weight(1f))
         TmuxEnvironmentMenu(
             status = environment,
@@ -512,6 +519,39 @@ private fun TopBar(
             variant = if (railOpen) TmuxIconButtonVariant.FILLED else TmuxIconButtonVariant.GHOST,
         )
     }
+}
+
+/**
+ * EMB-214: concise "CPU% · memMB" summary (aggregated across every
+ * container in the session's compose environment), "N/A" for a session
+ * that never opted into one. Renders nothing while the first poll is still
+ * in flight (`usage == null`) rather than flashing a placeholder.
+ */
+@Composable
+private fun ResourceUsageBadge(usage: SessionResourceUsage?) {
+    if (usage == null) return
+    val text = if (!usage.available) {
+        "N/A"
+    } else {
+        val totalCpu = usage.services.sumOf { it.cpuPercent }
+        val totalMemBytes = usage.services.sumOf { it.memUsageBytes }
+        "${formatCpuPercent(totalCpu)} · ${formatMemBytes(totalMemBytes)}"
+    }
+    Text(text, color = TmuxColors.textTertiary, fontFamily = TmuxFonts.mono, fontSize = TmuxTextSize.xs)
+}
+
+private fun formatCpuPercent(percent: Double): String = "${percent.toInt()}%"
+
+private const val BYTES_PER_KIB = 1024.0
+private const val KIB_PER_MIB = 1024.0
+private const val MIB_PER_GIB = 1024.0
+private const val GIB_ROUNDING_FACTOR = 10.0
+
+private fun formatMemBytes(bytes: Double): String {
+    val megabytes = bytes / (BYTES_PER_KIB * KIB_PER_MIB)
+    if (megabytes < MIB_PER_GIB) return "${megabytes.toInt()}MB"
+    val gigabytes = ((megabytes / MIB_PER_GIB) * GIB_ROUNDING_FACTOR).toInt() / GIB_ROUNDING_FACTOR
+    return "${gigabytes}GB"
 }
 
 @Composable

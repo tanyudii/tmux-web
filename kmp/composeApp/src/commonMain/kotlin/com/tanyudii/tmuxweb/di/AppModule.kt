@@ -23,11 +23,13 @@ import com.tanyudii.tmuxweb.domain.repository.KtorEnvironmentRepository
 import com.tanyudii.tmuxweb.domain.repository.KtorProjectsRepository
 import com.tanyudii.tmuxweb.domain.repository.KtorPushNotificationRepository
 import com.tanyudii.tmuxweb.domain.repository.KtorSessionEventsRepository
+import com.tanyudii.tmuxweb.domain.repository.KtorSessionResourceUsageRepository
 import com.tanyudii.tmuxweb.domain.repository.KtorSessionTemplatesRepository
 import com.tanyudii.tmuxweb.domain.repository.KtorSessionsRepository
 import com.tanyudii.tmuxweb.domain.repository.ProjectsRepository
 import com.tanyudii.tmuxweb.domain.repository.PushNotificationRepository
 import com.tanyudii.tmuxweb.domain.repository.SessionEventsRepository
+import com.tanyudii.tmuxweb.domain.repository.SessionResourceUsageRepository
 import com.tanyudii.tmuxweb.domain.repository.SessionTemplatesRepository
 import com.tanyudii.tmuxweb.domain.repository.SessionsRepository
 import io.ktor.client.HttpClient
@@ -61,6 +63,7 @@ val commonModule: Module = module {
     factory<SessionsRepository> { KtorSessionsRepository(get()) }
     factory<SessionTemplatesRepository> { KtorSessionTemplatesRepository(get()) }
     factory<SessionEventsRepository> { KtorSessionEventsRepository(get()) }
+    factory<SessionResourceUsageRepository> { KtorSessionResourceUsageRepository(get()) }
     factory<AccessLogRepository> { KtorAccessLogRepository(get()) }
     factory<ChangesRepository> { KtorChangesRepository(get()) }
     factory<EnvironmentRepository> { KtorEnvironmentRepository(get()) }

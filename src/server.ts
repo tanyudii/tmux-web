@@ -41,6 +41,7 @@ import type { PushSubscriptionRecord } from "./push-notifications.ts";
 import { TemplateValidationError, TemplateNotFoundError, type SessionTemplate } from "./session-templates.ts";
 import { appendAccessLogEntry, type AccessLogEntry } from "./access-log.ts";
 import type { SessionEvent } from "./session-events.ts";
+import type { SessionResourceUsage } from "./session-env.ts";
 
 const DIFF_MODES: readonly DiffMode[] = ["staged", "unstaged", "untracked"];
 
@@ -73,6 +74,8 @@ export interface ServerDeps {
   isProjectSessionBranchMerged: (project: Project, sessionSlug: string) => Promise<boolean>;
   // EMB-213: read-only lifecycle event history for a session.
   getProjectSessionEvents: (project: Project, sessionSlug: string) => Promise<SessionEvent[]>;
+  // EMB-214: per-session CPU/mem (real docker stats output, cached).
+  getProjectSessionResourceUsage: (project: Project, sessionSlug: string) => Promise<SessionResourceUsage>;
 
   // EMB-220 session templates.
   listProjectTemplates: (project: Project) => Promise<SessionTemplate[]>;
@@ -599,6 +602,26 @@ export function createServer(deps: ServerDeps): Server {
         const sessionSlug = decodeURIComponent(sessionEventsMatch[2]);
         const events = await deps.getProjectSessionEvents(project, sessionSlug);
         return sendJson(res, 200, { events });
+      }
+
+      // EMB-214: per-session CPU/mem -- `available: false` (not a 404) for
+      // sessions that never opted into a docker-compose environment, so the
+      // frontend can render "N/A" without treating it as an error.
+      const resourceUsageMatch = path.match(/^\/api\/projects\/([^/]+)\/sessions\/([^/]+)\/resource-usage$/);
+      if (resourceUsageMatch && req.method === "GET") {
+        if (!checkAuthorized(req, res, deps.token, clientIp, authFailureLimiter, deps.accessLogPath)) return;
+
+        const project = await deps.getProject(decodeURIComponent(resourceUsageMatch[1]));
+        if (!project) return sendJson(res, 404, { error: "Project not found" });
+
+        const sessionSlug = decodeURIComponent(resourceUsageMatch[2]);
+        try {
+          const usage = await deps.getProjectSessionResourceUsage(project, sessionSlug);
+          return sendJson(res, 200, usage);
+        } catch (error) {
+          if (sendMappedError(res, error)) return;
+          throw error;
+        }
       }
 
       // EMB-217: tears down the split pane's linked tmux session -- see

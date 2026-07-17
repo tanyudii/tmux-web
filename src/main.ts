@@ -63,7 +63,14 @@ import { appendAccessLogEntry, readAccessLog, type AccessLogOutcome } from "./ac
 import { appendSessionEvent, readSessionEvents, type SessionEventType } from "./session-events.ts";
 import { loadEnvConfig } from "./env-config.ts";
 import { listEnvFiles, readEnvFile, writeEnvFile } from "./env-editor.ts";
-import { composeUp, composeDown, composePs, composePort, checkPortCollisions } from "./docker-compose.ts";
+import {
+  composeUp,
+  composeDown,
+  composePs,
+  composePort,
+  checkPortCollisions,
+  getComposeResourceUsage,
+} from "./docker-compose.ts";
 import { runScript } from "./run-script.ts";
 import {
   getSessionEnvStatus as getSessionEnvStatusImpl,
@@ -73,6 +80,8 @@ import {
   requireEnvContext,
   createSessionEnvStore,
   createSessionEnvControllerStore,
+  createResourceUsageCache,
+  getSessionResourceUsage,
   EnvUnavailableError,
   type SessionEnvDeps,
 } from "./session-env.ts";
@@ -182,11 +191,13 @@ export async function main(): Promise<void> {
     composePs,
     composePort,
     checkPortCollisions,
+    getComposeResourceUsage,
     worktreesRoot,
     recordEvent: recordSessionEvent,
   };
   const sessionEnvStore = createSessionEnvStore();
   const sessionEnvControllers = createSessionEnvControllerStore();
+  const resourceUsageCache = createResourceUsageCache();
   const sessionCreationStore = createSessionCreationStore();
 
   const projectSessionsDeps: ProjectSessionsDeps = {
@@ -272,6 +283,8 @@ export async function main(): Promise<void> {
     isProjectSessionBranchMerged: (project, slug) =>
       isProjectSessionBranchMergedImpl(project, slug, projectSessionsDeps),
     getProjectSessionEvents: (project, slug) => readSessionEvents(sessionEventsFilePath(project.id), slug),
+    getProjectSessionResourceUsage: (project, slug) =>
+      getSessionResourceUsage(project, slug, sessionEnvDeps, resourceUsageCache),
 
     getProjectSessionChanges: (project, slug) =>
       getProjectSessionChangesImpl(project, slug, projectSessionsDeps),

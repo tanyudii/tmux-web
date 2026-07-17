@@ -8,6 +8,8 @@ import {
   cancelSessionEnv,
   createSessionEnvStore,
   createSessionEnvControllerStore,
+  createResourceUsageCache,
+  getSessionResourceUsage,
   EnvUnavailableError,
   EnvAlreadyRunningError,
   EnvNotRunningError,
@@ -16,7 +18,7 @@ import {
 } from "./session-env.ts";
 import type { Project } from "./projects.ts";
 import type { EnvConfig } from "./env-config.ts";
-import type { ComposeContext, ComposeServiceStatus } from "./docker-compose.ts";
+import type { ComposeContext, ComposeServiceStatus, ComposeResourceUsage } from "./docker-compose.ts";
 
 const PROJECT: Project = {
   id: "proj1-ab12cd",
@@ -44,6 +46,7 @@ function makeDeps(overrides: Partial<SessionEnvDeps> = {}): SessionEnvDeps {
     composePs: async () => [],
     composePort: async () => null,
     checkPortCollisions: async () => {},
+    getComposeResourceUsage: async () => [],
     worktreesRoot: "/data/worktrees",
     ...overrides,
   };
@@ -547,6 +550,62 @@ test("requireEnvContext throws EnvUnavailableError when the project hasn't opted
   const deps = makeDeps({ loadEnvConfig: async () => null });
 
   await assert.rejects(() => requireEnvContext(PROJECT, "feature-x", deps), EnvUnavailableError);
+});
+
+// --- getSessionResourceUsage (EMB-214) ---
+
+const SAMPLE_USAGE: ComposeResourceUsage[] = [
+  { service: "web", cpuPercent: 12.3, memUsageBytes: 100 * 1024 ** 2, memLimitBytes: 1024 ** 3 },
+];
+
+test("getSessionResourceUsage reports unavailable (not an error) when the project hasn't opted in", async () => {
+  const deps = makeDeps({ loadEnvConfig: async () => null });
+  const cache = createResourceUsageCache();
+
+  const result = await getSessionResourceUsage(PROJECT, "feature-x", deps, cache);
+
+  assert.deepEqual(result, { available: false, services: [] });
+});
+
+test("getSessionResourceUsage returns real docker stats output when the project has an env config", async () => {
+  const deps = makeDeps({ getComposeResourceUsage: async () => SAMPLE_USAGE });
+  const cache = createResourceUsageCache();
+
+  const result = await getSessionResourceUsage(PROJECT, "feature-x", deps, cache);
+
+  assert.deepEqual(result, { available: true, services: SAMPLE_USAGE });
+});
+
+test("getSessionResourceUsage caches the result -- a second call within the TTL never calls docker again", async () => {
+  let calls = 0;
+  const deps = makeDeps({
+    getComposeResourceUsage: async () => {
+      calls++;
+      return SAMPLE_USAGE;
+    },
+  });
+  const cache = createResourceUsageCache();
+
+  await getSessionResourceUsage(PROJECT, "feature-x", deps, cache);
+  await getSessionResourceUsage(PROJECT, "feature-x", deps, cache);
+
+  assert.equal(calls, 1);
+});
+
+test("getSessionResourceUsage caches per-session -- a different session is never served from another session's cache entry", async () => {
+  const calls: string[] = [];
+  const deps = makeDeps({
+    getComposeResourceUsage: async (ctx) => {
+      calls.push(ctx.projectName);
+      return SAMPLE_USAGE;
+    },
+  });
+  const cache = createResourceUsageCache();
+
+  await getSessionResourceUsage(PROJECT, "feature-x", deps, cache);
+  await getSessionResourceUsage(PROJECT, "feature-y", deps, cache);
+
+  assert.deepEqual(calls, ["proj1-ab12cd__feature-x", "proj1-ab12cd__feature-y"]);
 });
 
 // --- cancelSessionEnv ---

@@ -170,6 +170,37 @@ class KtorRepositoriesTest {
         assertFailsWith<ApiError.Unauthorized> { repo.listEvents("p1", "my-branch") }
     }
 
+    // MARK: Session resource usage (EMB-214)
+
+    @Test
+    fun `getUsage decodes available=false for a session with no env config`() = runTest {
+        val repo = KtorSessionResourceUsageRepository(
+            client(HttpStatusCode.OK, """{"available":false,"services":[]}"""),
+        )
+
+        val usage = repo.getUsage("p1", "my-branch")
+
+        assertEquals(false, usage.available)
+        assertEquals(emptyList(), usage.services)
+    }
+
+    @Suppress("MaxLineLength") // JSON fixture reads better on one line than wrapped
+    @Test
+    fun `getUsage decodes real docker stats output`() = runTest {
+        val repo = KtorSessionResourceUsageRepository(
+            client(
+                HttpStatusCode.OK,
+                """{"available":true,"services":[{"service":"web","cpuPercent":12.3,"memUsageBytes":100.0,"memLimitBytes":1000.0}]}""",
+            ),
+        )
+
+        val usage = repo.getUsage("p1", "my-branch")
+
+        assertEquals(true, usage.available)
+        assertEquals("web", usage.services.single().service)
+        assertTrue(capturedRequest.url.encodedPath.endsWith("/sessions/my-branch/resource-usage"))
+    }
+
     // MARK: Environment (docker-compose)
 
     @Test

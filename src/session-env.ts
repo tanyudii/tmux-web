@@ -2,7 +2,7 @@ import type { Project } from "./projects.ts";
 import { buildSessionName } from "./session-naming.ts";
 import { resolveWorktreePath } from "./worktree.ts";
 import type { EnvConfig } from "./env-config.ts";
-import type { ComposeContext, ComposeServiceStatus } from "./docker-compose.ts";
+import type { ComposeContext, ComposeServiceStatus, ComposeResourceUsage } from "./docker-compose.ts";
 import type { SessionEventType } from "./session-events.ts";
 
 export class EnvUnavailableError extends Error {}
@@ -64,6 +64,8 @@ export interface SessionEnvDeps {
   composePs: (ctx: ComposeContext) => Promise<ComposeServiceStatus[]>;
   composePort: (ctx: ComposeContext, service: string, containerPort: number) => Promise<number | null>;
   checkPortCollisions: (ctx: ComposeContext) => Promise<void>;
+  // EMB-214: real `docker stats`-backed CPU/mem per service.
+  getComposeResourceUsage: (ctx: ComposeContext) => Promise<ComposeResourceUsage[]>;
   worktreesRoot?: string;
   openHost?: string;
   // EMB-213: optional, best-effort lifecycle event recording -- see
@@ -174,6 +176,55 @@ export async function getSessionEnvStatus(
 
   const openLinks = await resolveOpenLinks(deps, ctx, config, requestHost);
   return { phase: "running", openLinks: openLinks.length ? openLinks : undefined, services };
+}
+
+// EMB-214: per-session CPU/mem, real `docker stats` output for sessions
+// with a running compose environment; `available: false` (frontend shows
+// "N/A") for sessions that never opted into one at all -- never an error,
+// matching this ticket's own acceptance criterion.
+export interface SessionResourceUsage {
+  available: boolean;
+  services: ComposeResourceUsage[];
+}
+
+interface ResourceUsageCacheEntry {
+  data: SessionResourceUsage;
+  expiresAt: number;
+}
+
+export type ResourceUsageCache = Map<string, ResourceUsageCacheEntry>;
+
+export function createResourceUsageCache(): ResourceUsageCache {
+  return new Map();
+}
+
+// `docker stats` is expensive enough (spawns a real process, blocks briefly
+// on the docker daemon) that naive per-poll-tick fetching would scale badly
+// once a session list is polling several sessions at once -- this caches
+// the last real result per session for a few seconds so bursts of requests
+// (multiple tabs, a sidebar list polling every session) collapse into one
+// real `docker stats` call.
+const RESOURCE_USAGE_CACHE_TTL_MS = 3_000;
+
+export async function getSessionResourceUsage(
+  project: Project,
+  sessionSlug: string,
+  deps: SessionEnvDeps,
+  cache: ResourceUsageCache,
+): Promise<SessionResourceUsage> {
+  const fullName = buildSessionName(project.id, sessionSlug);
+
+  const cached = cache.get(fullName);
+  if (cached && cached.expiresAt > Date.now()) return cached.data;
+
+  const worktreePath = resolveWorktreePath(project.id, sessionSlug, deps.worktreesRoot);
+  const config = await deps.loadEnvConfig(worktreePath);
+  const data: SessionResourceUsage = config
+    ? { available: true, services: await deps.getComposeResourceUsage(contextFor(fullName, worktreePath, config)) }
+    : { available: false, services: [] };
+
+  cache.set(fullName, { data, expiresAt: Date.now() + RESOURCE_USAGE_CACHE_TTL_MS });
+  return data;
 }
 
 export async function startSessionEnv(

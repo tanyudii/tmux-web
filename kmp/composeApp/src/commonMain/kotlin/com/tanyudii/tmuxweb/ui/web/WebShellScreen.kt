@@ -35,17 +35,20 @@ import com.tanyudii.tmuxweb.domain.model.AccessLogEntry
 import com.tanyudii.tmuxweb.domain.model.DiffMode
 import com.tanyudii.tmuxweb.domain.model.EnvStatus
 import com.tanyudii.tmuxweb.domain.model.GroupedChanges
+import com.tanyudii.tmuxweb.domain.model.SessionResourceUsage
 import com.tanyudii.tmuxweb.domain.model.SessionTemplate
 import com.tanyudii.tmuxweb.domain.repository.AccessLogRepository
 import com.tanyudii.tmuxweb.domain.repository.ChangesRepository
 import com.tanyudii.tmuxweb.domain.repository.EnvironmentRepository
 import com.tanyudii.tmuxweb.domain.repository.ProjectsRepository
+import com.tanyudii.tmuxweb.domain.repository.SessionResourceUsageRepository
 import com.tanyudii.tmuxweb.domain.repository.SessionTemplatesRepository
 import com.tanyudii.tmuxweb.domain.repository.SessionsRepository
 import com.tanyudii.tmuxweb.presentation.AccessLogViewModel
 import com.tanyudii.tmuxweb.presentation.ChangesViewModel
 import com.tanyudii.tmuxweb.presentation.EnvironmentViewModel
 import com.tanyudii.tmuxweb.presentation.PendingDiscard
+import com.tanyudii.tmuxweb.presentation.SessionResourceUsageViewModel
 import com.tanyudii.tmuxweb.presentation.WebShellUiState
 import com.tanyudii.tmuxweb.presentation.WebShellViewModel
 import com.tanyudii.tmuxweb.ui.components.CommandPaletteItem
@@ -93,6 +96,7 @@ fun WebShellScreen(onSwitchServer: () -> Unit) {
     val terminal = selectedSession?.let { rememberTerminalSession(it.fullName) }
     val changesState = selectedProjectAndSession(state)?.let { (pid, name) -> rememberChangesState(pid, name) }
     val environmentState = selectedProjectAndSession(state)?.let { (pid, name) -> rememberEnvironmentState(pid, name) }
+    val resourceUsage = selectedProjectAndSession(state)?.let { (pid, name) -> rememberResourceUsage(pid, name) }
 
     // EMB-218: see Modifier.commandPaletteShortcut's doc comment for why a
     // Compose-level key listener is naturally immune to colliding with
@@ -136,6 +140,7 @@ fun WebShellScreen(onSwitchServer: () -> Unit) {
                 environment = environmentState?.status,
                 environmentBusy = environmentState?.isBusy ?: false,
                 logsService = environmentState?.logsService,
+                resourceUsage = resourceUsage,
                 railOpen = railOpen,
                 activeWindow = activeWindow,
                 onSelectWindow = { activeWindow = it },
@@ -415,6 +420,18 @@ private fun rememberEnvironmentState(projectId: String, sessionName: String): En
     return remember(viewModel, state.status, state.isBusy, state.logsService) {
         EnvironmentState(viewModel, state.status, state.isBusy, state.logsService)
     }
+}
+
+/** EMB-214: polls the selected session's CPU/mem every 5s -- see SessionResourceUsageViewModel. */
+@Composable
+private fun rememberResourceUsage(projectId: String, sessionName: String): SessionResourceUsage? {
+    val repository: SessionResourceUsageRepository = koinInject()
+    val scope = rememberCoroutineScope()
+    val viewModel = remember(projectId, sessionName) {
+        SessionResourceUsageViewModel(projectId, sessionName, repository, scope)
+    }
+    val usage by viewModel.state.collectAsState()
+    return usage
 }
 
 @Composable

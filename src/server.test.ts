@@ -75,6 +75,7 @@ function makeDeps(overrides: Partial<ServerDeps> = {}): ServerDeps {
     killProjectSessionSplit: async () => {},
     isProjectSessionBranchMerged: async () => true,
     getProjectSessionEvents: async () => [],
+    getProjectSessionResourceUsage: async () => ({ available: false, services: [] }),
     getProjectSessionChanges: async () => ({ staged: [], unstaged: [], untracked: [], conflicted: [], repoState: "clean" }),
     getProjectSessionDiff: async () => ({ diff: "", isUntracked: false, isBinary: false }),
     stageProjectSessionFile: async () => {},
@@ -600,6 +601,53 @@ test("GET /api/projects/:id/sessions/:name/events returns the session's event hi
 test("GET /api/projects/:id/sessions/:name/events returns 404 for an unknown project", async () => {
   await withServer(makeDeps(), async (baseUrl) => {
     const res = await fetch(`${baseUrl}/api/projects/unknown-id/sessions/feature-x/events`, {
+      headers: authHeaders(),
+    });
+    assert.equal(res.status, 404);
+  });
+});
+
+test("GET /api/projects/:id/sessions/:name/resource-usage without a token returns 401", async () => {
+  await withServer(makeDeps(), async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/projects/${SAMPLE_PROJECT.id}/sessions/feature-x/resource-usage`);
+    assert.equal(res.status, 401);
+  });
+});
+
+test("GET /api/projects/:id/sessions/:name/resource-usage returns available:false for a session with no env config", async () => {
+  const deps = makeDeps({ getProjectSessionResourceUsage: async () => ({ available: false, services: [] }) });
+  await withServer(deps, async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/projects/${SAMPLE_PROJECT.id}/sessions/feature-x/resource-usage`, {
+      headers: authHeaders(),
+    });
+    assert.equal(res.status, 200);
+    const body = (await res.json()) as { available: boolean; services: unknown[] };
+    assert.equal(body.available, false);
+    assert.deepEqual(body.services, []);
+  });
+});
+
+test("GET /api/projects/:id/sessions/:name/resource-usage returns real docker stats when available", async () => {
+  const deps = makeDeps({
+    getProjectSessionResourceUsage: async () => ({
+      available: true,
+      services: [{ service: "web", cpuPercent: 12.3, memUsageBytes: 100, memLimitBytes: 1000 }],
+    }),
+  });
+  await withServer(deps, async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/projects/${SAMPLE_PROJECT.id}/sessions/feature-x/resource-usage`, {
+      headers: authHeaders(),
+    });
+    assert.equal(res.status, 200);
+    const body = (await res.json()) as { available: boolean; services: unknown[] };
+    assert.equal(body.available, true);
+    assert.equal(body.services.length, 1);
+  });
+});
+
+test("GET /api/projects/:id/sessions/:name/resource-usage returns 404 for an unknown project", async () => {
+  await withServer(makeDeps(), async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/projects/unknown-id/sessions/feature-x/resource-usage`, {
       headers: authHeaders(),
     });
     assert.equal(res.status, 404);

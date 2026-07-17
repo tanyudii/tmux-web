@@ -217,3 +217,103 @@ export async function checkPortCollisions(ctx: ComposeContext, exec: ExecFn = de
     );
   }
 }
+
+// EMB-214: per-service CPU/memory usage for a session's active compose
+// environment, shelled out to real `docker stats` (not estimated) so the
+// numbers match a manual `docker stats` run on the same containers.
+export interface ComposeResourceUsage {
+  service: string;
+  cpuPercent: number;
+  memUsageBytes: number;
+  memLimitBytes: number;
+}
+
+interface ComposePsEntry {
+  ID?: string;
+  Service?: string;
+}
+
+interface DockerStatsEntry {
+  ID?: string;
+  CPUPerc?: string;
+  MemUsage?: string;
+}
+
+function parseCpuPercent(raw: string): number {
+  const match = raw.match(/([\d.]+)\s*%/);
+  return match ? Number.parseFloat(match[1]) : 0;
+}
+
+// Handles both binary units docker stats prints ("123.4MiB") and the
+// decimal ones ("1.2GB") -- docker itself is inconsistent between the two
+// depending on platform/version, so both are parsed rather than assuming one.
+const BYTE_UNIT_MULTIPLIERS: Record<string, number> = {
+  b: 1,
+  kib: 1024,
+  kb: 1000,
+  mib: 1024 ** 2,
+  mb: 1000 ** 2,
+  gib: 1024 ** 3,
+  gb: 1000 ** 3,
+};
+
+function parseByteSize(raw: string): number {
+  const match = raw.trim().match(/^([\d.]+)\s*([A-Za-z]+)$/);
+  if (!match) return 0;
+  const value = Number.parseFloat(match[1]);
+  const multiplier = BYTE_UNIT_MULTIPLIERS[match[2].toLowerCase()];
+  return multiplier === undefined ? 0 : value * multiplier;
+}
+
+// "123.4MiB / 1.952GiB" -> { usageBytes, limitBytes }.
+function parseMemUsage(raw: string): { usageBytes: number; limitBytes: number } {
+  const [usagePart, limitPart] = raw.split("/").map((part) => part.trim());
+  return { usageBytes: parseByteSize(usagePart ?? ""), limitBytes: parseByteSize(limitPart ?? "") };
+}
+
+function parseJsonLines<T>(output: string): T[] {
+  return output
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => JSON.parse(line) as T);
+}
+
+export async function getComposeResourceUsage(
+  ctx: ComposeContext,
+  exec: ExecFn = defaultExec,
+): Promise<ComposeResourceUsage[]> {
+  let psOut: string;
+  try {
+    ({ stdout: psOut } = await exec("docker", [...baseArgs(ctx), "ps", "--format", "json"]));
+  } catch (error) {
+    throw new DockerComposeError(messageOf(error));
+  }
+
+  const entries = parseJsonLines<ComposePsEntry>(psOut);
+  const ids = entries.map((entry) => entry.ID).filter((id): id is string => Boolean(id));
+  if (ids.length === 0) return [];
+
+  const idToService = new Map<string, string>();
+  for (const entry of entries) {
+    if (entry.ID && entry.Service) idToService.set(entry.ID.slice(0, 12), entry.Service);
+  }
+
+  let statsOut: string;
+  try {
+    ({ stdout: statsOut } = await exec("docker", ["stats", "--no-stream", "--format", "json", ...ids]));
+  } catch (error) {
+    throw new DockerComposeError(messageOf(error));
+  }
+
+  return parseJsonLines<DockerStatsEntry>(statsOut).map((entry) => {
+    const shortId = (entry.ID ?? "").slice(0, 12);
+    const { usageBytes, limitBytes } = parseMemUsage(entry.MemUsage ?? "");
+    return {
+      service: idToService.get(shortId) ?? shortId,
+      cpuPercent: parseCpuPercent(entry.CPUPerc ?? ""),
+      memUsageBytes: usageBytes,
+      memLimitBytes: limitBytes,
+    };
+  });
+}

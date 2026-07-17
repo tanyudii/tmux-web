@@ -9,6 +9,7 @@ import {
   resolveConfiguredPorts,
   getHostBoundPorts,
   checkPortCollisions,
+  getComposeResourceUsage,
   DockerComposeError,
   PortCollisionError,
   type ComposeContext,
@@ -97,6 +98,76 @@ test("composePs wraps exec failures in DockerComposeError", async () => {
   };
 
   await assert.rejects(() => composePs(ctx, fakeExec), DockerComposeError);
+});
+
+test("getComposeResourceUsage joins docker compose ps with docker stats by container ID, mapping to service names", async () => {
+  const calls: string[][] = [];
+  const fakeExec = async (_file: string, args: string[]) => {
+    calls.push(args);
+    if (args.includes("ps")) {
+      return {
+        stdout:
+          '{"ID":"abc123def456789","Service":"web"}\n' +
+          '{"ID":"fed654cba987654","Service":"db"}\n',
+        stderr: "",
+      };
+    }
+    if (args[0] === "stats") {
+      return {
+        stdout:
+          '{"ID":"abc123def456","CPUPerc":"12.34%","MemUsage":"100MiB / 1GiB"}\n' +
+          '{"ID":"fed654cba987","CPUPerc":"0.50%","MemUsage":"50MiB / 2GiB"}\n',
+        stderr: "",
+      };
+    }
+    throw new Error(`unexpected exec call: ${args.join(" ")}`);
+  };
+
+  const result = await getComposeResourceUsage(ctx, fakeExec);
+
+  assert.deepEqual(result, [
+    { service: "web", cpuPercent: 12.34, memUsageBytes: 100 * 1024 ** 2, memLimitBytes: 1024 ** 3 },
+    { service: "db", cpuPercent: 0.5, memUsageBytes: 50 * 1024 ** 2, memLimitBytes: 2 * 1024 ** 3 },
+  ]);
+  assert.deepEqual(calls[0], [...baseArgs(), "ps", "--format", "json"]);
+  assert.deepEqual(calls[1], ["stats", "--no-stream", "--format", "json", "abc123def456789", "fed654cba987654"]);
+});
+
+test("getComposeResourceUsage returns an empty array when no containers are running", async () => {
+  const fakeExec = async (_file: string, args: string[]) => {
+    if (args.includes("ps")) return { stdout: "", stderr: "" };
+    throw new Error("docker stats should never be called with no containers");
+  };
+
+  assert.deepEqual(await getComposeResourceUsage(ctx, fakeExec), []);
+});
+
+test("getComposeResourceUsage falls back to the short container ID when no service label matches", async () => {
+  const fakeExec = async (_file: string, args: string[]) => {
+    if (args.includes("ps")) return { stdout: '{"ID":"abc123def456789"}\n', stderr: "" };
+    return { stdout: '{"ID":"abc123def456","CPUPerc":"1%","MemUsage":"1MiB / 1GiB"}\n', stderr: "" };
+  };
+
+  const result = await getComposeResourceUsage(ctx, fakeExec);
+
+  assert.equal(result[0].service, "abc123def456");
+});
+
+test("getComposeResourceUsage wraps a docker stats failure in DockerComposeError", async () => {
+  const fakeExec = async (_file: string, args: string[]) => {
+    if (args.includes("ps")) return { stdout: '{"ID":"abc123def456789","Service":"web"}\n', stderr: "" };
+    throw new Error("no such container");
+  };
+
+  await assert.rejects(() => getComposeResourceUsage(ctx, fakeExec), DockerComposeError);
+});
+
+test("getComposeResourceUsage wraps a docker compose ps failure in DockerComposeError", async () => {
+  const fakeExec = async () => {
+    throw new Error("no such project");
+  };
+
+  await assert.rejects(() => getComposeResourceUsage(ctx, fakeExec), DockerComposeError);
 });
 
 test("composePort resolves the published host port", async () => {
