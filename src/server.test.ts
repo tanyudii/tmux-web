@@ -55,7 +55,7 @@ function makeDeps(overrides: Partial<ServerDeps> = {}): ServerDeps {
     }),
     getProjectSessionCreationStatus: async () => ({ phase: "creating" }),
     killProjectSession: async () => {},
-    getProjectSessionChanges: async () => ({ staged: [], unstaged: [], untracked: [] }),
+    getProjectSessionChanges: async () => ({ staged: [], unstaged: [], untracked: [], conflicted: [], repoState: "clean" }),
     getProjectSessionDiff: async () => ({ diff: "", isUntracked: false, isBinary: false }),
     stageProjectSessionFile: async () => {},
     unstageProjectSessionFile: async () => {},
@@ -572,6 +572,8 @@ test("GET /api/projects/:id/sessions/:name/changes returns the grouped changes",
     staged: [{ path: "a.txt", status: "added", staged: true }],
     unstaged: [],
     untracked: [],
+    conflicted: [],
+    repoState: "clean",
   };
   const deps = makeDeps({ getProjectSessionChanges: async () => grouped });
   await withServer(deps, async (baseUrl) => {

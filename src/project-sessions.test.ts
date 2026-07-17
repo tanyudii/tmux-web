@@ -19,6 +19,7 @@ import {
   type SessionCreationStatus,
 } from "./project-sessions.ts";
 import type { Project } from "./projects.ts";
+import type { GroupedChanges } from "./git-status.ts";
 import { ValidationError } from "./tmux.ts";
 import { WorktreeConflictError } from "./worktree.ts";
 
@@ -37,7 +38,7 @@ function makeDeps(overrides: Partial<ProjectSessionsDeps> = {}): ProjectSessions
     killSession: async () => {},
     addWorktree: async () => {},
     removeWorktree: async () => {},
-    getChangedFiles: async () => ({ staged: [], unstaged: [], untracked: [] }),
+    getChangedFiles: async () => ({ staged: [], unstaged: [], untracked: [], conflicted: [], repoState: "clean" }),
     getFileDiff: async () => ({ diff: "", isUntracked: false, isBinary: false }),
     stageFile: async () => {},
     unstageFile: async () => {},
@@ -269,7 +270,7 @@ test("killProjectSession tolerates stopSessionEnv failing (best-effort teardown)
 
 test("getProjectSessionChanges resolves the worktree path and delegates to getChangedFiles", async () => {
   const calls: string[] = [];
-  const grouped = { staged: [], unstaged: [], untracked: [] };
+  const grouped: GroupedChanges = { staged: [], unstaged: [], untracked: [], conflicted: [], repoState: "clean" };
   const deps = makeDeps({
     getChangedFiles: async (worktreePath: string) => {
       calls.push(worktreePath);

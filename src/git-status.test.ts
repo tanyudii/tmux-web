@@ -13,6 +13,7 @@ import {
   unstageFile,
   discardFile,
   commitStaged,
+  getRepoState,
   WorktreeNotFoundError,
   GitStatusError,
   NothingStagedError,
@@ -71,11 +72,18 @@ test("parseStatusPorcelain stays aligned for entries after a rename", () => {
   ]);
 });
 
-test("parseStatusPorcelain falls back to 'modified' for unmerged/conflict codes", () => {
+test("parseStatusPorcelain marks an unmerged path as a single conflicted entry, not both staged and unstaged", () => {
   assert.deepEqual(parseStatusPorcelain("UU conflict.txt\0"), [
-    { path: "conflict.txt", status: "modified", staged: true, oldPath: undefined },
-    { path: "conflict.txt", status: "modified", staged: false, oldPath: undefined },
+    { path: "conflict.txt", status: "modified", staged: false, oldPath: undefined, conflicted: true },
   ]);
+});
+
+test("parseStatusPorcelain recognizes every unmerged XY combination", () => {
+  for (const xy of ["DD", "AU", "UD", "UA", "DU", "AA", "UU"]) {
+    const result = parseStatusPorcelain(`${xy} x.txt\0`);
+    assert.equal(result.length, 1, `expected exactly one entry for ${xy}`);
+    assert.equal(result[0].conflicted, true, `expected ${xy} to be marked conflicted`);
+  }
 });
 
 test("parseStatusPorcelain handles paths containing spaces (unquoted under -z)", () => {
@@ -88,15 +96,23 @@ test("parseStatusPorcelain handles paths containing spaces (unquoted under -z)",
 
 const fakeDirStat = async () => ({ isDirectory: () => true });
 
-test("getChangedFiles groups parsed entries into staged/unstaged/untracked", async () => {
+// Reports isDirectory():true only for the worktree root itself ("/repo"),
+// so assertWorktreeExists passes, but resolving ".git" (and anything under
+// it) falls through to the real filesystem, which fails harmlessly for a
+// path that doesn't really exist -- getRepoState degrades to "clean".
+const fakeStatWorktreeRootOnly = async (path: string) => ({ isDirectory: () => path === "/repo" });
+
+test("getChangedFiles groups parsed entries into staged/unstaged/untracked/conflicted", async () => {
   const fakeExec = async () => ({
-    stdout: "A  staged.txt\0 M unstaged.txt\0?? untracked.txt\0",
+    stdout: "A  staged.txt\0 M unstaged.txt\0?? untracked.txt\0UU conflict.txt\0",
   });
-  const result = await getChangedFiles("/repo", fakeExec, fakeDirStat);
+  const result = await getChangedFiles("/repo", fakeExec, fakeStatWorktreeRootOnly);
   assert.deepEqual(result, {
     staged: [{ path: "staged.txt", status: "added", staged: true, oldPath: undefined }],
     unstaged: [{ path: "unstaged.txt", status: "modified", staged: false, oldPath: undefined }],
     untracked: [{ path: "untracked.txt", status: "untracked", staged: false, oldPath: undefined }],
+    conflicted: [{ path: "conflict.txt", status: "modified", staged: false, oldPath: undefined, conflicted: true }],
+    repoState: "clean",
   });
 });
 
@@ -420,6 +436,49 @@ test(
       const changes = await getChangedFiles(dir);
       assert.deepEqual(changes.staged, []);
       assert.deepEqual(changes.unstaged, []);
+    });
+  },
+);
+
+test("getRepoState returns 'clean' for a plain directory with no .git", async () => {
+  await withTempDir(async (dir) => {
+    assert.equal(await getRepoState(dir), "clean");
+  });
+});
+
+test(
+  "real git integration: getRepoState and getChangedFiles's conflicted bucket detect a real merge conflict",
+  { skip: !isGitAvailable() },
+  async () => {
+    await withTempDir(async (dir) => {
+      await execFileAsync("git", ["init", "--quiet", "-b", "main", dir]);
+      await execFileAsync("git", ["-C", dir, "config", "user.email", "test@example.com"]);
+      await execFileAsync("git", ["-C", dir, "config", "user.name", "Test"]);
+      await writeFile(join(dir, "shared.txt"), "base\n");
+      await execFileAsync("git", ["-C", dir, "add", "shared.txt"]);
+      await execFileAsync("git", ["-C", dir, "commit", "--quiet", "-m", "base"]);
+
+      await execFileAsync("git", ["-C", dir, "checkout", "--quiet", "-b", "feature"]);
+      await writeFile(join(dir, "shared.txt"), "feature change\n");
+      await execFileAsync("git", ["-C", dir, "commit", "--quiet", "-am", "feature change"]);
+
+      await execFileAsync("git", ["-C", dir, "checkout", "--quiet", "main"]);
+      await writeFile(join(dir, "shared.txt"), "main change\n");
+      await execFileAsync("git", ["-C", dir, "commit", "--quiet", "-am", "main change"]);
+
+      // Merge feature into main -- guaranteed to conflict on shared.txt.
+      await assert.rejects(() => execFileAsync("git", ["-C", dir, "merge", "feature"]));
+
+      assert.equal(await getRepoState(dir), "merging");
+
+      const changes = await getChangedFiles(dir);
+      assert.deepEqual(changes.conflicted.map((f) => f.path), ["shared.txt"]);
+      assert.equal(changes.conflicted[0].conflicted, true);
+      assert.deepEqual(changes.staged, []);
+      assert.deepEqual(changes.unstaged, []);
+
+      await execFileAsync("git", ["-C", dir, "merge", "--abort"]);
+      assert.equal(await getRepoState(dir), "clean");
     });
   },
 );

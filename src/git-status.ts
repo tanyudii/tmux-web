@@ -1,7 +1,7 @@
 import { execFile as execFileCb } from "node:child_process";
 import { promisify } from "node:util";
 import { readFile, rm, stat } from "node:fs/promises";
-import { resolve, sep } from "node:path";
+import { isAbsolute, join, resolve, sep } from "node:path";
 
 const execFileAsync = promisify(execFileCb);
 
@@ -22,12 +22,20 @@ export interface ChangedFile {
   oldPath?: string;
   status: FileStatus;
   staged: boolean;
+  // Only ever present (and true) for an unmerged file mid-conflict -- never
+  // set to false, so existing deepEqual-style assertions on non-conflicted
+  // ChangedFile objects don't need an explicit `conflicted: false`.
+  conflicted?: boolean;
 }
+
+export type RepoState = "clean" | "merging" | "rebasing";
 
 export interface GroupedChanges {
   staged: ChangedFile[];
   unstaged: ChangedFile[];
   untracked: ChangedFile[];
+  conflicted: ChangedFile[];
+  repoState: RepoState;
 }
 
 export type DiffMode = "staged" | "unstaged" | "untracked";
@@ -58,6 +66,10 @@ function mapStatusChar(char: string): FileStatus | null {
   }
 }
 
+// The full set of XY combinations `git status --porcelain` uses to mark an
+// unmerged (conflicted) path -- see git-status(1)'s "Unmerged" table.
+const UNMERGED_CODES = new Set(["DD", "AU", "UD", "UA", "DU", "AA", "UU"]);
+
 // Parses `git status --porcelain=v1 -z` output. Each record is "XY PATH\0",
 // where a rename/copy record is followed by one extra NUL-terminated field
 // (the old path) that MUST be consumed even when unused, or every record
@@ -81,6 +93,17 @@ export function parseStatusPorcelain(output: string): ChangedFile[] {
 
     if (x === "?" && y === "?") {
       result.push({ path, status: "untracked", staged: false, oldPath: undefined });
+      continue;
+    }
+
+    if (UNMERGED_CODES.has(`${x}${y}`)) {
+      // A single entry, not one per staged/unstaged side: an unmerged path
+      // isn't meaningfully "staged" or "unstaged" the way a normal change
+      // is, and the old per-char mapping used to push it into BOTH buckets
+      // (mapStatusChar('U') fell back to "modified" on both sides), showing
+      // the same conflicted file twice. See getChangedFiles's `conflicted`
+      // bucket -- EMB-208.
+      result.push({ path, status: "modified", staged: false, oldPath, conflicted: true });
       continue;
     }
 
@@ -109,20 +132,74 @@ async function assertWorktreeExists(worktreePath: string, statFn: StatFn): Promi
   }
 }
 
+export type ReadFileFn = (path: string) => Promise<string>;
+
+function defaultReadFile(path: string): Promise<string> {
+  return readFile(path, "utf-8");
+}
+
+// Resolves a worktree's real git-dir without shelling out to git. A linked
+// worktree's `.git` is a FILE containing "gitdir: <path>" (possibly
+// relative -- see `git worktree add`'s docs), not a directory, so a plain
+// `<worktreePath>/.git/MERGE_HEAD` check would look in the wrong place.
+// Returns null (never throws) on anything unexpected -- this only feeds a
+// UI hint, not a value anything correctness-critical depends on.
+async function resolveGitDir(worktreePath: string, readFileFn: ReadFileFn, statFn: StatFn): Promise<string | null> {
+  const dotGitPath = join(worktreePath, ".git");
+  try {
+    const stats = await statFn(dotGitPath);
+    if (stats.isDirectory()) return dotGitPath;
+  } catch {
+    return null;
+  }
+  try {
+    const content = await readFileFn(dotGitPath);
+    const match = /^gitdir:\s*(.+)$/m.exec(content);
+    if (!match) return null;
+    const gitDir = match[1].trim();
+    return isAbsolute(gitDir) ? gitDir : resolve(worktreePath, gitDir);
+  } catch {
+    return null;
+  }
+}
+
+/** Detects mid-rebase/mid-merge repo state for the Changes sidebar banner (EMB-208). */
+export async function getRepoState(
+  worktreePath: string,
+  readFileFn: ReadFileFn = defaultReadFile,
+  statFn: StatFn = stat,
+): Promise<RepoState> {
+  const gitDir = await resolveGitDir(worktreePath, readFileFn, statFn);
+  if (!gitDir) return "clean";
+
+  const exists = (name: string) =>
+    statFn(join(gitDir, name))
+      .then(() => true)
+      .catch(() => false);
+
+  if ((await exists("rebase-merge")) || (await exists("rebase-apply"))) return "rebasing";
+  if (await exists("MERGE_HEAD")) return "merging";
+  return "clean";
+}
+
 export async function getChangedFiles(
   worktreePath: string,
   exec: ExecFn = defaultExec,
   statFn: StatFn = stat,
+  readFileFn: ReadFileFn = defaultReadFile,
 ): Promise<GroupedChanges> {
   await assertWorktreeExists(worktreePath, statFn);
 
   const { stdout } = await exec("git", ["-C", worktreePath, "status", "--porcelain=v1", "-z"]);
   const all = parseStatusPorcelain(stdout);
+  const repoState = await getRepoState(worktreePath, readFileFn, statFn);
 
   return {
-    staged: all.filter((file) => file.staged && file.status !== "untracked"),
-    unstaged: all.filter((file) => !file.staged && file.status !== "untracked"),
+    staged: all.filter((file) => file.staged && file.status !== "untracked" && !file.conflicted),
+    unstaged: all.filter((file) => !file.staged && file.status !== "untracked" && !file.conflicted),
     untracked: all.filter((file) => file.status === "untracked"),
+    conflicted: all.filter((file) => file.conflicted === true),
+    repoState,
   };
 }
 
