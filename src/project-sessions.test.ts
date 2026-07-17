@@ -44,6 +44,9 @@ function makeDeps(overrides: Partial<ProjectSessionsDeps> = {}): ProjectSessions
     unstageFile: async () => {},
     discardFile: async () => {},
     commitStaged: async () => {},
+    listEnvFiles: async () => [],
+    readEnvFile: async () => "",
+    writeEnvFile: async () => {},
     worktreesRoot: "/data/worktrees",
     ...overrides,
   };

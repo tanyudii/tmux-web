@@ -34,6 +34,7 @@ import {
   type EnvStatus,
 } from "./session-env.ts";
 import { EnvConfigError } from "./env-config.ts";
+import { EnvEditorError, EnvFileNotFoundError, EnvFileValidationError, type EnvFileEntry } from "./env-editor.ts";
 import { RateLimiter, type RateLimiterOptions } from "./rate-limit.ts";
 
 const DIFF_MODES: readonly DiffMode[] = ["staged", "unstaged", "untracked"];
@@ -73,6 +74,14 @@ export interface ServerDeps {
     mode: DiffMode,
   ) => Promise<void>;
   commitProjectSessionChanges: (project: Project, sessionSlug: string, message: string) => Promise<void>;
+  listProjectSessionEnvFiles: (project: Project, sessionSlug: string) => Promise<EnvFileEntry[]>;
+  readProjectSessionEnvFile: (project: Project, sessionSlug: string, filename: string) => Promise<string>;
+  writeProjectSessionEnvFile: (
+    project: Project,
+    sessionSlug: string,
+    filename: string,
+    content: string,
+  ) => Promise<void>;
 
   getProjectSessionEnvStatus: (project: Project, sessionSlug: string, requestHost?: string) => Promise<EnvStatus>;
   startProjectSessionEnv: (project: Project, sessionSlug: string) => Promise<void>;
@@ -205,6 +214,18 @@ function sendMappedError(res: ServerResponse, error: unknown): boolean {
     return true;
   }
   if (error instanceof EnvConfigError) {
+    sendJson(res, 400, { error: error.message });
+    return true;
+  }
+  if (error instanceof EnvFileNotFoundError) {
+    sendJson(res, 404, { error: error.message });
+    return true;
+  }
+  if (error instanceof EnvFileValidationError) {
+    sendJson(res, 422, { error: error.message });
+    return true;
+  }
+  if (error instanceof EnvEditorError) {
     sendJson(res, 400, { error: error.message });
     return true;
   }
@@ -534,6 +555,61 @@ export function createServer(deps: ServerDeps): Server {
         const sessionSlug = decodeURIComponent(commitMatch[2]);
         try {
           await deps.commitProjectSessionChanges(project, sessionSlug, message);
+        } catch (error) {
+          if (sendMappedError(res, error)) return;
+          throw error;
+        }
+        return sendEmpty(res, 204);
+      }
+
+      const envFilesMatch = path.match(/^\/api\/projects\/([^/]+)\/sessions\/([^/]+)\/env-files$/);
+      if (envFilesMatch && req.method === "GET") {
+        if (!checkAuthorized(req, res, deps.token, clientIp, authFailureLimiter)) return;
+
+        const project = await deps.getProject(decodeURIComponent(envFilesMatch[1]));
+        if (!project) return sendJson(res, 404, { error: "Project not found" });
+
+        const sessionSlug = decodeURIComponent(envFilesMatch[2]);
+        try {
+          const files = await deps.listProjectSessionEnvFiles(project, sessionSlug);
+          return sendJson(res, 200, { files });
+        } catch (error) {
+          if (sendMappedError(res, error)) return;
+          throw error;
+        }
+      }
+
+      const envFileMatch = path.match(/^\/api\/projects\/([^/]+)\/sessions\/([^/]+)\/env-files\/([^/]+)$/);
+      if (envFileMatch && (req.method === "GET" || req.method === "PUT")) {
+        if (!checkAuthorized(req, res, deps.token, clientIp, authFailureLimiter)) return;
+
+        const project = await deps.getProject(decodeURIComponent(envFileMatch[1]));
+        if (!project) return sendJson(res, 404, { error: "Project not found" });
+
+        const sessionSlug = decodeURIComponent(envFileMatch[2]);
+        const filename = decodeURIComponent(envFileMatch[3]);
+
+        if (req.method === "GET") {
+          try {
+            const content = await deps.readProjectSessionEnvFile(project, sessionSlug, filename);
+            return sendJson(res, 200, { filename, content });
+          } catch (error) {
+            if (sendMappedError(res, error)) return;
+            throw error;
+          }
+        }
+
+        let body: unknown;
+        try {
+          body = await readJsonBody(req);
+        } catch {
+          return sendJson(res, 400, { error: "Malformed JSON body" });
+        }
+        const content = (body as { content?: unknown })?.content;
+        if (typeof content !== "string") return sendJson(res, 400, { error: "Missing content" });
+
+        try {
+          await deps.writeProjectSessionEnvFile(project, sessionSlug, filename, content);
         } catch (error) {
           if (sendMappedError(res, error)) return;
           throw error;

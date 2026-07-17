@@ -5,6 +5,7 @@ import { slugifyBranchName } from "./slug.ts";
 import { ValidationError, type TmuxSession, type TmuxWindow, type CreateSessionOptions } from "./tmux.ts";
 import type { RemoveWorktreeOptions } from "./worktree.ts";
 import type { GroupedChanges, FileDiff, DiffMode } from "./git-status.ts";
+import type { EnvFileEntry } from "./env-editor.ts";
 
 export class SessionCreationInProgressError extends Error {}
 export class SessionCreationNotFoundError extends Error {}
@@ -48,6 +49,9 @@ export interface ProjectSessionsDeps {
   unstageFile: (worktreePath: string, filePath: string) => Promise<void>;
   discardFile: (worktreePath: string, filePath: string, mode: DiffMode) => Promise<void>;
   commitStaged: (worktreePath: string, message: string) => Promise<void>;
+  listEnvFiles: (worktreePath: string) => Promise<EnvFileEntry[]>;
+  readEnvFile: (worktreePath: string, filename: string) => Promise<string>;
+  writeEnvFile: (worktreePath: string, filename: string, content: string) => Promise<void>;
   // Optional: tears down the session's docker-compose environment (see
   // session-env.ts). Best-effort -- a session with no environment, or a
   // docker daemon that's gone away, must not block killing the session.
@@ -277,4 +281,34 @@ export async function commitProjectSessionChanges(
 ): Promise<void> {
   const worktreePath = resolveWorktreePath(project.id, sessionSlug, deps.worktreesRoot);
   return deps.commitStaged(worktreePath, message);
+}
+
+export async function listProjectSessionEnvFiles(
+  project: Project,
+  sessionSlug: string,
+  deps: ProjectSessionsDeps,
+): Promise<EnvFileEntry[]> {
+  const worktreePath = resolveWorktreePath(project.id, sessionSlug, deps.worktreesRoot);
+  return deps.listEnvFiles(worktreePath);
+}
+
+export async function readProjectSessionEnvFile(
+  project: Project,
+  sessionSlug: string,
+  filename: string,
+  deps: ProjectSessionsDeps,
+): Promise<string> {
+  const worktreePath = resolveWorktreePath(project.id, sessionSlug, deps.worktreesRoot);
+  return deps.readEnvFile(worktreePath, filename);
+}
+
+export async function writeProjectSessionEnvFile(
+  project: Project,
+  sessionSlug: string,
+  filename: string,
+  content: string,
+  deps: ProjectSessionsDeps,
+): Promise<void> {
+  const worktreePath = resolveWorktreePath(project.id, sessionSlug, deps.worktreesRoot);
+  return deps.writeEnvFile(worktreePath, filename, content);
 }

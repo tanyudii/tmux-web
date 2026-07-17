@@ -71,6 +71,9 @@ function makeDeps(overrides: Partial<ServerDeps> = {}): ServerDeps {
     startProjectSessionEnv: async () => {},
     stopProjectSessionEnv: async () => {},
     cancelProjectSessionEnv: async () => {},
+    listProjectSessionEnvFiles: async () => [],
+    readProjectSessionEnvFile: async () => "",
+    writeProjectSessionEnvFile: async () => {},
     ...overrides,
   };
 }

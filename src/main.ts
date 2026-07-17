@@ -29,9 +29,13 @@ import {
   unstageProjectSessionFile as unstageProjectSessionFileImpl,
   discardProjectSessionFile as discardProjectSessionFileImpl,
   commitProjectSessionChanges as commitProjectSessionChangesImpl,
+  listProjectSessionEnvFiles as listProjectSessionEnvFilesImpl,
+  readProjectSessionEnvFile as readProjectSessionEnvFileImpl,
+  writeProjectSessionEnvFile as writeProjectSessionEnvFileImpl,
   type ProjectSessionsDeps,
 } from "./project-sessions.ts";
 import { loadEnvConfig } from "./env-config.ts";
+import { listEnvFiles, readEnvFile, writeEnvFile } from "./env-editor.ts";
 import { composeUp, composeDown, composePs, composePort } from "./docker-compose.ts";
 import { runScript } from "./run-script.ts";
 import {
@@ -124,6 +128,9 @@ export async function main(): Promise<void> {
     unstageFile,
     discardFile,
     commitStaged,
+    listEnvFiles,
+    readEnvFile,
+    writeEnvFile,
     stopSessionEnv: (project, sessionSlug) =>
       stopSessionEnvImpl(project, sessionSlug, sessionEnvDeps, sessionEnvStore),
     worktreesRoot,
@@ -175,6 +182,12 @@ export async function main(): Promise<void> {
       discardProjectSessionFileImpl(project, slug, filePath, mode, projectSessionsDeps),
     commitProjectSessionChanges: (project, slug, message) =>
       commitProjectSessionChangesImpl(project, slug, message, projectSessionsDeps),
+    listProjectSessionEnvFiles: (project, slug) =>
+      listProjectSessionEnvFilesImpl(project, slug, projectSessionsDeps),
+    readProjectSessionEnvFile: (project, slug, filename) =>
+      readProjectSessionEnvFileImpl(project, slug, filename, projectSessionsDeps),
+    writeProjectSessionEnvFile: (project, slug, filename, content) =>
+      writeProjectSessionEnvFileImpl(project, slug, filename, content, projectSessionsDeps),
 
     getProjectSessionEnvStatus: (project, slug, requestHost) =>
       getSessionEnvStatusImpl(project, slug, sessionEnvDeps, sessionEnvStore, requestHost),
