@@ -141,6 +141,19 @@ class WebShellViewModel(
     }
 
     /**
+     * Eagerly loads sessions for every project not yet expanded -- the
+     * command palette (EMB-218) needs a complete, searchable project+session
+     * list the moment it opens, unlike the sidebar's own lazy
+     * expand-on-click loading (see [toggleProject]). Deliberately does NOT
+     * touch [WebShellUiState.expandedProjectIds], so opening the palette
+     * never visually expands sidebar rows the user hasn't clicked.
+     */
+    fun loadAllSessions() {
+        val loaded = _state.value.sessionsByProjectId.keys
+        _state.value.projects.map { it.id }.filterNot { it in loaded }.forEach(::loadSessions)
+    }
+
+    /**
      * Re-fetches one project's session list -- used after sending a tmux
      * `new-window` keystroke, since `ProjectSession.windows` is a plain
      * snapshot from `GET /api/projects/:id/sessions` (src/tmux.ts's

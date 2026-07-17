@@ -36,12 +36,16 @@ import com.tanyudii.tmuxweb.presentation.EnvironmentViewModel
 import com.tanyudii.tmuxweb.presentation.PendingDiscard
 import com.tanyudii.tmuxweb.presentation.WebShellUiState
 import com.tanyudii.tmuxweb.presentation.WebShellViewModel
+import com.tanyudii.tmuxweb.ui.components.CommandPaletteItem
 import com.tanyudii.tmuxweb.ui.components.TmuxButton
 import com.tanyudii.tmuxweb.ui.components.TmuxButtonVariant
+import com.tanyudii.tmuxweb.ui.components.TmuxCommandPalette
 import com.tanyudii.tmuxweb.ui.components.TmuxConfirmDialog
 import com.tanyudii.tmuxweb.ui.components.TmuxErrorBanner
 import com.tanyudii.tmuxweb.ui.components.TmuxProgressBar
 import com.tanyudii.tmuxweb.ui.components.TmuxTextField
+import com.tanyudii.tmuxweb.ui.components.buildCommandPaletteItems
+import com.tanyudii.tmuxweb.ui.components.commandPaletteShortcut
 import com.tanyudii.tmuxweb.ui.terminal.rememberTerminalSession
 import com.tanyudii.tmuxweb.ui.theme.TmuxColors
 import com.tanyudii.tmuxweb.ui.theme.TmuxFonts
@@ -75,7 +79,20 @@ fun WebShellScreen(onSwitchServer: () -> Unit) {
     val changesState = selectedProjectAndSession(state)?.let { (pid, name) -> rememberChangesState(pid, name) }
     val environmentState = selectedProjectAndSession(state)?.let { (pid, name) -> rememberEnvironmentState(pid, name) }
 
-    Column(modifier = Modifier.fillMaxSize().background(TmuxColors.bgApp)) {
+    // EMB-218: see Modifier.commandPaletteShortcut's doc comment for why a
+    // Compose-level key listener is naturally immune to colliding with
+    // terminal shortcuts, with no activeElement check needed.
+    var paletteOpen by remember { mutableStateOf(false) }
+
+    Column(
+        modifier = Modifier.fillMaxSize().background(TmuxColors.bgApp)
+            .commandPaletteShortcut(
+                onOpen = {
+                    paletteOpen = true
+                    viewModel.loadAllSessions()
+                },
+            ),
+    ) {
         state.errorMessage?.let { message ->
             TmuxErrorBanner(message = message, onDismiss = viewModel::dismissError)
         }
@@ -137,6 +154,20 @@ fun WebShellScreen(onSwitchServer: () -> Unit) {
             confirmLabel = "Discard",
             onConfirm = { changesState.viewModel.confirmDiscard() },
             onCancel = { changesState.viewModel.cancelDiscard() },
+        )
+    }
+
+    if (paletteOpen) {
+        TmuxCommandPalette(
+            items = buildCommandPaletteItems(state.projects, state.sessionsByProjectId),
+            onSelect = { item ->
+                when (item) {
+                    is CommandPaletteItem.ProjectEntry -> viewModel.selectProject(item.projectId)
+                    is CommandPaletteItem.SessionEntry -> viewModel.selectSession(item.projectId, item.sessionName)
+                }
+                paletteOpen = false
+            },
+            onDismiss = { paletteOpen = false },
         )
     }
 }
