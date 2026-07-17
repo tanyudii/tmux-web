@@ -6,6 +6,7 @@ import { readConfig, ConfigError, defaultConfigDir } from "./config.ts";
 import { resolveWebBuildDir } from "./web-build.ts";
 import { listSessions, listWindows, createSession, killSession, isValidSessionName } from "./tmux.ts";
 import { extractQueryToken, verifyToken } from "./auth.ts";
+import { RateLimiter } from "./rate-limit.ts";
 import { attachPtyToSocket, type SocketLike } from "./pty-bridge.ts";
 import {
   loadProjects,
@@ -61,9 +62,22 @@ interface DestroyableSocket {
   destroy(): void;
 }
 
-function rejectUpgrade(socket: DestroyableSocket, status: number, reason: string): void {
-  socket.write(`HTTP/1.1 ${status} ${reason}\r\n\r\n`);
+function rejectUpgrade(socket: DestroyableSocket, status: number, reason: string, retryAfterSeconds?: number): void {
+  const retryHeader = retryAfterSeconds !== undefined ? `Retry-After: ${retryAfterSeconds}\r\n` : "";
+  socket.write(`HTTP/1.1 ${status} ${reason}\r\n${retryHeader}\r\n`);
   socket.destroy();
+}
+
+// Mirrors server.ts's AUTH_FAILURE_LIMIT -- WS upgrades bypass createServer()
+// entirely (handled directly on the raw `upgrade` event below), so they'd
+// otherwise have no brute-force protection of their own.
+function rejectUnauthorizedUpgrade(socket: DestroyableSocket, clientIp: string, limiter: RateLimiter): void {
+  const result = limiter.check(clientIp);
+  if (result.limited) {
+    rejectUpgrade(socket, 429, "Too Many Requests", Math.ceil(result.retryAfterMs / 1000));
+  } else {
+    rejectUpgrade(socket, 401, "Unauthorized");
+  }
 }
 
 export async function main(): Promise<void> {
@@ -168,16 +182,18 @@ export async function main(): Promise<void> {
   });
 
   const wss = new WebSocketServer({ noServer: true });
+  const wsAuthFailureLimiter = new RateLimiter({ windowMs: 60_000, max: 10 });
 
   httpServer.on("upgrade", async (req, socket, head) => {
     const url = new URL(req.url ?? "", "http://localhost");
     const token = extractQueryToken(req.url ?? "");
+    const clientIp = req.socket.remoteAddress ?? "unknown";
 
     if (url.pathname === "/ws") {
       const sessionName = url.searchParams.get("session") ?? "";
 
       if (!isValidSessionName(sessionName) || !verifyToken(token, config.token)) {
-        rejectUpgrade(socket, 401, "Unauthorized");
+        rejectUnauthorizedUpgrade(socket, clientIp, wsAuthFailureLimiter);
         return;
       }
 
@@ -194,7 +210,7 @@ export async function main(): Promise<void> {
 
     if (url.pathname === "/ws/logs") {
       if (!verifyToken(token, config.token)) {
-        rejectUpgrade(socket, 401, "Unauthorized");
+        rejectUnauthorizedUpgrade(socket, clientIp, wsAuthFailureLimiter);
         return;
       }
 

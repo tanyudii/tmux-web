@@ -1152,3 +1152,57 @@ test("unknown routes return 404", async () => {
     assert.equal(res.status, 404);
   });
 });
+
+// --- Rate limiting ---
+
+test("returns 429 with Retry-After once repeated bad-token requests exceed the auth-failure limit", async () => {
+  await withServer(makeDeps(), async (baseUrl) => {
+    let lastRes: Response | undefined;
+    for (let i = 0; i < 11; i++) {
+      lastRes = await fetch(`${baseUrl}/api/projects`, { headers: { Authorization: "Bearer wrong-token" } });
+      if (i < 10) assert.equal(lastRes.status, 401);
+    }
+    assert.equal(lastRes?.status, 429);
+    assert.ok(lastRes?.headers.get("retry-after"));
+  });
+});
+
+test("a successful request is never counted against the auth-failure limit", async () => {
+  await withServer(makeDeps(), async (baseUrl) => {
+    for (let i = 0; i < 20; i++) {
+      const res = await fetch(`${baseUrl}/api/projects`, { headers: authHeaders() });
+      assert.equal(res.status, 200);
+    }
+  });
+});
+
+test("returns 429 with Retry-After once session creation exceeds the expensive-action limit", async () => {
+  const deps = makeDeps({
+    startProjectSessionCreation: async (_project: Project, name: string) => ({
+      name,
+      fullName: `${SAMPLE_PROJECT.id}__${name}`,
+    }),
+  });
+  await withServer(deps, async (baseUrl) => {
+    let lastRes: Response | undefined;
+    for (let i = 0; i < 31; i++) {
+      lastRes = await fetch(`${baseUrl}/api/projects/${SAMPLE_PROJECT.id}/sessions`, {
+        method: "POST",
+        headers: { ...authHeaders(), "Content-Type": "application/json" },
+        body: JSON.stringify({ name: `session-${i}` }),
+      });
+      if (i < 30) assert.equal(lastRes.status, 202);
+    }
+    assert.equal(lastRes?.status, 429);
+    assert.ok(lastRes?.headers.get("retry-after"));
+  });
+});
+
+test("GET requests are never counted against the expensive-action limit (multi-tab polling stays unaffected)", async () => {
+  await withServer(makeDeps(), async (baseUrl) => {
+    for (let i = 0; i < 40; i++) {
+      const res = await fetch(`${baseUrl}/api/projects/${SAMPLE_PROJECT.id}/sessions`, { headers: authHeaders() });
+      assert.equal(res.status, 200);
+    }
+  });
+});

@@ -33,6 +33,7 @@ import {
   type EnvStatus,
 } from "./session-env.ts";
 import { EnvConfigError } from "./env-config.ts";
+import { RateLimiter, type RateLimiterOptions } from "./rate-limit.ts";
 
 const DIFF_MODES: readonly DiffMode[] = ["staged", "unstaged", "untracked"];
 
@@ -108,6 +109,52 @@ async function readJsonBody(req: IncomingMessage): Promise<unknown> {
 
 function isAuthorized(req: IncomingMessage, token: string): boolean {
   return verifyToken(extractBearerToken(req.headers.authorization), token);
+}
+
+// 10 failed auth attempts per minute per IP -- generous for a mistyped
+// token retried a few times, tight enough to make brute-forcing the
+// 32-byte hex token (see config.ts's generateToken()) computationally
+// pointless even before considering the keyspace itself.
+const AUTH_FAILURE_LIMIT: RateLimiterOptions = { windowMs: 60_000, max: 10 };
+
+// 30 create-session / env-setup requests per minute per IP. Both spin up
+// real resources (git worktree + tmux session, or a docker-compose stack)
+// -- generous enough that legitimate multi-tab usage never trips it, tight
+// enough to stop a client from hammering the server into resource
+// exhaustion.
+const EXPENSIVE_ACTION_LIMIT: RateLimiterOptions = { windowMs: 60_000, max: 30 };
+
+function sendTooManyRequests(res: ServerResponse, retryAfterMs: number): void {
+  const retryAfterSeconds = Math.max(1, Math.ceil(retryAfterMs / 1000));
+  res.writeHead(429, {
+    "Content-Type": "application/json; charset=utf-8",
+    "Retry-After": String(retryAfterSeconds),
+  });
+  res.end(JSON.stringify({ error: "Too many requests" }));
+}
+
+// Replaces the old bare `isAuthorized` check at every route: still returns
+// false (and has already written the response) on a bad/missing token, but
+// once a client racks up AUTH_FAILURE_LIMIT failures within the window, the
+// (still-failing) attempt gets 429 instead of 401 -- same "not authorized"
+// outcome, but with Retry-After so a legitimate client sees it's being
+// throttled rather than silently rejected forever. Successful requests are
+// never counted, so normal usage never approaches the limit.
+function checkAuthorized(
+  req: IncomingMessage,
+  res: ServerResponse,
+  token: string,
+  clientIp: string,
+  limiter: RateLimiter,
+): boolean {
+  if (isAuthorized(req, token)) return true;
+  const result = limiter.check(clientIp);
+  if (result.limited) {
+    sendTooManyRequests(res, result.retryAfterMs);
+  } else {
+    sendEmpty(res, 401);
+  }
+  return false;
 }
 
 // Derives the "Open" URL's host from whatever address the browser is
@@ -201,19 +248,23 @@ async function serveStatic(publicDir: string, urlPath: string, res: ServerRespon
 }
 
 export function createServer(deps: ServerDeps): Server {
+  const authFailureLimiter = new RateLimiter(AUTH_FAILURE_LIMIT);
+  const expensiveActionLimiter = new RateLimiter(EXPENSIVE_ACTION_LIMIT);
+
   return createHttpServer(async (req, res) => {
+    const clientIp = req.socket.remoteAddress ?? "unknown";
     try {
       const url = new URL(req.url ?? "/", "http://localhost");
       const path = url.pathname;
       const isTruthy = (value: string | null) => value === "true" || value === "1";
 
       if (path === "/api/projects" && req.method === "GET") {
-        if (!isAuthorized(req, deps.token)) return sendEmpty(res, 401);
+        if (!checkAuthorized(req, res, deps.token, clientIp, authFailureLimiter)) return;
         return sendJson(res, 200, { projects: await deps.listProjects() });
       }
 
       if (path === "/api/browse" && req.method === "GET") {
-        if (!isAuthorized(req, deps.token)) return sendEmpty(res, 401);
+        if (!checkAuthorized(req, res, deps.token, clientIp, authFailureLimiter)) return;
 
         try {
           const listing = await deps.browseDirectory(url.searchParams.get("path") ?? undefined);
@@ -225,7 +276,7 @@ export function createServer(deps: ServerDeps): Server {
       }
 
       if (path === "/api/projects" && req.method === "POST") {
-        if (!isAuthorized(req, deps.token)) return sendEmpty(res, 401);
+        if (!checkAuthorized(req, res, deps.token, clientIp, authFailureLimiter)) return;
 
         let body: unknown;
         try {
@@ -249,7 +300,7 @@ export function createServer(deps: ServerDeps): Server {
 
       const projectIdMatch = path.match(/^\/api\/projects\/([^/]+)$/);
       if (projectIdMatch && req.method === "DELETE") {
-        if (!isAuthorized(req, deps.token)) return sendEmpty(res, 401);
+        if (!checkAuthorized(req, res, deps.token, clientIp, authFailureLimiter)) return;
 
         const project = await deps.getProject(decodeURIComponent(projectIdMatch[1]));
         if (!project) return sendJson(res, 404, { error: "Project not found" });
@@ -268,7 +319,7 @@ export function createServer(deps: ServerDeps): Server {
 
       const sessionsMatch = path.match(/^\/api\/projects\/([^/]+)\/sessions$/);
       if (sessionsMatch && (req.method === "GET" || req.method === "POST")) {
-        if (!isAuthorized(req, deps.token)) return sendEmpty(res, 401);
+        if (!checkAuthorized(req, res, deps.token, clientIp, authFailureLimiter)) return;
 
         const project = await deps.getProject(decodeURIComponent(sessionsMatch[1]));
         if (!project) return sendJson(res, 404, { error: "Project not found" });
@@ -288,6 +339,9 @@ export function createServer(deps: ServerDeps): Server {
           return sendJson(res, 400, { error: "Missing session name" });
         }
 
+        const sessionCreateLimit = expensiveActionLimiter.check(clientIp);
+        if (sessionCreateLimit.limited) return sendTooManyRequests(res, sessionCreateLimit.retryAfterMs);
+
         try {
           const pending = await deps.startProjectSessionCreation(project, name);
           return sendJson(res, 202, { ...pending, phase: "creating" });
@@ -299,7 +353,7 @@ export function createServer(deps: ServerDeps): Server {
 
       const sessionDeleteMatch = path.match(/^\/api\/projects\/([^/]+)\/sessions\/([^/]+)$/);
       if (sessionDeleteMatch && req.method === "DELETE") {
-        if (!isAuthorized(req, deps.token)) return sendEmpty(res, 401);
+        if (!checkAuthorized(req, res, deps.token, clientIp, authFailureLimiter)) return;
 
         const project = await deps.getProject(decodeURIComponent(sessionDeleteMatch[1]));
         if (!project) return sendJson(res, 404, { error: "Project not found" });
@@ -318,7 +372,7 @@ export function createServer(deps: ServerDeps): Server {
 
       const creationMatch = path.match(/^\/api\/projects\/([^/]+)\/sessions\/([^/]+)\/creation$/);
       if (creationMatch && req.method === "GET") {
-        if (!isAuthorized(req, deps.token)) return sendEmpty(res, 401);
+        if (!checkAuthorized(req, res, deps.token, clientIp, authFailureLimiter)) return;
 
         const project = await deps.getProject(decodeURIComponent(creationMatch[1]));
         if (!project) return sendJson(res, 404, { error: "Project not found" });
@@ -336,7 +390,7 @@ export function createServer(deps: ServerDeps): Server {
 
       const changesMatch = path.match(/^\/api\/projects\/([^/]+)\/sessions\/([^/]+)\/changes$/);
       if (changesMatch && req.method === "GET") {
-        if (!isAuthorized(req, deps.token)) return sendEmpty(res, 401);
+        if (!checkAuthorized(req, res, deps.token, clientIp, authFailureLimiter)) return;
 
         const project = await deps.getProject(decodeURIComponent(changesMatch[1]));
         if (!project) return sendJson(res, 404, { error: "Project not found" });
@@ -353,7 +407,7 @@ export function createServer(deps: ServerDeps): Server {
 
       const diffMatch = path.match(/^\/api\/projects\/([^/]+)\/sessions\/([^/]+)\/diff$/);
       if (diffMatch && req.method === "GET") {
-        if (!isAuthorized(req, deps.token)) return sendEmpty(res, 401);
+        if (!checkAuthorized(req, res, deps.token, clientIp, authFailureLimiter)) return;
 
         const project = await deps.getProject(decodeURIComponent(diffMatch[1]));
         if (!project) return sendJson(res, 404, { error: "Project not found" });
@@ -378,7 +432,7 @@ export function createServer(deps: ServerDeps): Server {
 
       const stageMatch = path.match(/^\/api\/projects\/([^/]+)\/sessions\/([^/]+)\/stage$/);
       if (stageMatch && req.method === "POST") {
-        if (!isAuthorized(req, deps.token)) return sendEmpty(res, 401);
+        if (!checkAuthorized(req, res, deps.token, clientIp, authFailureLimiter)) return;
 
         const project = await deps.getProject(decodeURIComponent(stageMatch[1]));
         if (!project) return sendJson(res, 404, { error: "Project not found" });
@@ -404,7 +458,7 @@ export function createServer(deps: ServerDeps): Server {
 
       const unstageMatch = path.match(/^\/api\/projects\/([^/]+)\/sessions\/([^/]+)\/unstage$/);
       if (unstageMatch && req.method === "POST") {
-        if (!isAuthorized(req, deps.token)) return sendEmpty(res, 401);
+        if (!checkAuthorized(req, res, deps.token, clientIp, authFailureLimiter)) return;
 
         const project = await deps.getProject(decodeURIComponent(unstageMatch[1]));
         if (!project) return sendJson(res, 404, { error: "Project not found" });
@@ -430,7 +484,7 @@ export function createServer(deps: ServerDeps): Server {
 
       const discardMatch = path.match(/^\/api\/projects\/([^/]+)\/sessions\/([^/]+)\/discard$/);
       if (discardMatch && req.method === "POST") {
-        if (!isAuthorized(req, deps.token)) return sendEmpty(res, 401);
+        if (!checkAuthorized(req, res, deps.token, clientIp, authFailureLimiter)) return;
 
         const project = await deps.getProject(decodeURIComponent(discardMatch[1]));
         if (!project) return sendJson(res, 404, { error: "Project not found" });
@@ -459,7 +513,7 @@ export function createServer(deps: ServerDeps): Server {
 
       const commitMatch = path.match(/^\/api\/projects\/([^/]+)\/sessions\/([^/]+)\/commit$/);
       if (commitMatch && req.method === "POST") {
-        if (!isAuthorized(req, deps.token)) return sendEmpty(res, 401);
+        if (!checkAuthorized(req, res, deps.token, clientIp, authFailureLimiter)) return;
 
         const project = await deps.getProject(decodeURIComponent(commitMatch[1]));
         if (!project) return sendJson(res, 404, { error: "Project not found" });
@@ -487,7 +541,7 @@ export function createServer(deps: ServerDeps): Server {
 
       const envMatch = path.match(/^\/api\/projects\/([^/]+)\/sessions\/([^/]+)\/env$/);
       if (envMatch && (req.method === "GET" || req.method === "POST" || req.method === "DELETE")) {
-        if (!isAuthorized(req, deps.token)) return sendEmpty(res, 401);
+        if (!checkAuthorized(req, res, deps.token, clientIp, authFailureLimiter)) return;
 
         const project = await deps.getProject(decodeURIComponent(envMatch[1]));
         if (!project) return sendJson(res, 404, { error: "Project not found" });
@@ -505,6 +559,9 @@ export function createServer(deps: ServerDeps): Server {
         }
 
         if (req.method === "POST") {
+          const envSetupLimit = expensiveActionLimiter.check(clientIp);
+          if (envSetupLimit.limited) return sendTooManyRequests(res, envSetupLimit.retryAfterMs);
+
           try {
             // startProjectSessionEnv only awaits the fast eligibility
             // checks -- the actual docker-compose setup keeps running in
