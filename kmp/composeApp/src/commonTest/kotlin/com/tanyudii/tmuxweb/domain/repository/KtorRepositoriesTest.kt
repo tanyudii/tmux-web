@@ -144,6 +144,32 @@ class KtorRepositoriesTest {
         assertTrue(capturedRequest.url.encodedPath.endsWith("/sessions/my-branch/branch-merged"))
     }
 
+    // MARK: Session events (EMB-213)
+
+    @Suppress("MaxLineLength") // JSON fixture reads better on one line than wrapped
+    @Test
+    fun `listEvents decodes the events envelope`() = runTest {
+        val repo = KtorSessionEventsRepository(
+            client(
+                HttpStatusCode.OK,
+                """{"events":[{"timestamp":"2026-01-01T00:00:00.000Z","projectId":"p1","sessionSlug":"my-branch","type":"created"}]}""",
+            ),
+        )
+
+        val events = repo.listEvents("p1", "my-branch")
+
+        assertEquals(1, events.size)
+        assertEquals("created", events.single().type)
+        assertTrue(capturedRequest.url.encodedPath.endsWith("/sessions/my-branch/events"))
+    }
+
+    @Test
+    fun `listEvents unauthorized throws Unauthorized`() = runTest {
+        val repo = KtorSessionEventsRepository(client(HttpStatusCode.Unauthorized, ""))
+
+        assertFailsWith<ApiError.Unauthorized> { repo.listEvents("p1", "my-branch") }
+    }
+
     // MARK: Environment (docker-compose)
 
     @Test

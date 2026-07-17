@@ -60,6 +60,7 @@ import {
   deleteTemplate as deleteTemplateImpl,
 } from "./session-templates.ts";
 import { appendAccessLogEntry, readAccessLog, type AccessLogOutcome } from "./access-log.ts";
+import { appendSessionEvent, readSessionEvents, type SessionEventType } from "./session-events.ts";
 import { loadEnvConfig } from "./env-config.ts";
 import { listEnvFiles, readEnvFile, writeEnvFile } from "./env-editor.ts";
 import { composeUp, composeDown, composePs, composePort, checkPortCollisions } from "./docker-compose.ts";
@@ -155,6 +156,24 @@ export async function main(): Promise<void> {
   const accessLogPath = join(configDir, "access.log");
   const worktreesRoot = join(configDir, "worktrees");
 
+  // EMB-213: one events file per project (not per session, not global) --
+  // see session-events.ts's doc comment.
+  const sessionEventsDir = join(configDir, "session-events");
+  const sessionEventsFilePath = (projectId: string) => join(sessionEventsDir, `${projectId}.jsonl`);
+  const recordSessionEvent = (
+    projectId: string,
+    sessionSlug: string,
+    type: SessionEventType,
+    message?: string,
+  ): Promise<void> =>
+    appendSessionEvent(sessionEventsFilePath(projectId), {
+      timestamp: new Date().toISOString(),
+      projectId,
+      sessionSlug,
+      type,
+      message,
+    });
+
   const sessionEnvDeps: SessionEnvDeps = {
     loadEnvConfig,
     runScript,
@@ -164,6 +183,7 @@ export async function main(): Promise<void> {
     composePort,
     checkPortCollisions,
     worktreesRoot,
+    recordEvent: recordSessionEvent,
   };
   const sessionEnvStore = createSessionEnvStore();
   const sessionEnvControllers = createSessionEnvControllerStore();
@@ -190,6 +210,7 @@ export async function main(): Promise<void> {
     writeEnvFile,
     stopSessionEnv: (project, sessionSlug) =>
       stopSessionEnvImpl(project, sessionSlug, sessionEnvDeps, sessionEnvStore),
+    recordEvent: recordSessionEvent,
     worktreesRoot,
   };
 
@@ -250,6 +271,7 @@ export async function main(): Promise<void> {
       killProjectSessionSplitImpl(project, slug, projectSessionsDeps),
     isProjectSessionBranchMerged: (project, slug) =>
       isProjectSessionBranchMergedImpl(project, slug, projectSessionsDeps),
+    getProjectSessionEvents: (project, slug) => readSessionEvents(sessionEventsFilePath(project.id), slug),
 
     getProjectSessionChanges: (project, slug) =>
       getProjectSessionChangesImpl(project, slug, projectSessionsDeps),

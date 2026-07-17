@@ -6,6 +6,7 @@ import { ValidationError, type TmuxSession, type TmuxWindow, type CreateSessionO
 import type { RemoveWorktreeOptions } from "./worktree.ts";
 import type { GroupedChanges, FileDiff, DiffMode } from "./git-status.ts";
 import type { EnvFileEntry } from "./env-editor.ts";
+import type { SessionEventType } from "./session-events.ts";
 
 export class SessionCreationInProgressError extends Error {}
 export class SessionCreationNotFoundError extends Error {}
@@ -62,6 +63,11 @@ export interface ProjectSessionsDeps {
   // session-env.ts). Best-effort -- a session with no environment, or a
   // docker daemon that's gone away, must not block killing the session.
   stopSessionEnv?: (project: Project, sessionSlug: string) => Promise<void>;
+  // EMB-213: appends a lifecycle event ("created"/"deleted" from here --
+  // env-related types come from session-env.ts's own deps). Optional and
+  // best-effort, same reasoning as stopSessionEnv above: a logging failure
+  // must never block the actual session operation.
+  recordEvent?: (projectId: string, sessionSlug: string, type: SessionEventType, message?: string) => Promise<void>;
   worktreesRoot?: string;
 }
 
@@ -149,6 +155,8 @@ export async function createProjectSession(
     onProgress?.("Running startup command…");
     await deps.sendKeys(fullName, startupCommand).catch(() => {});
   }
+
+  await deps.recordEvent?.(project.id, sessionSlug, "created").catch(() => {});
 
   return { name: sessionSlug, fullName, windows: 1, attached: false };
 }
@@ -266,6 +274,8 @@ export async function killProjectSession(
   if (options.deleteBranch) {
     await deps.deleteBranch(project.repoPath, sessionSlug);
   }
+
+  await deps.recordEvent?.(project.id, sessionSlug, "deleted").catch(() => {});
 }
 
 // EMB-207: backs the "Delete branch too" checkbox's warning UI -- called

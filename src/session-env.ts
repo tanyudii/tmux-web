@@ -3,6 +3,7 @@ import { buildSessionName } from "./session-naming.ts";
 import { resolveWorktreePath } from "./worktree.ts";
 import type { EnvConfig } from "./env-config.ts";
 import type { ComposeContext, ComposeServiceStatus } from "./docker-compose.ts";
+import type { SessionEventType } from "./session-events.ts";
 
 export class EnvUnavailableError extends Error {}
 export class EnvAlreadyRunningError extends Error {}
@@ -65,6 +66,10 @@ export interface SessionEnvDeps {
   checkPortCollisions: (ctx: ComposeContext) => Promise<void>;
   worktreesRoot?: string;
   openHost?: string;
+  // EMB-213: optional, best-effort lifecycle event recording -- see
+  // project-sessions.ts's ProjectSessionsDeps.recordEvent for the same
+  // reasoning (a logging failure must never affect the env operation itself).
+  recordEvent?: (projectId: string, sessionSlug: string, type: SessionEventType, message?: string) => Promise<void>;
 }
 
 function contextFor(fullName: string, worktreePath: string, config: EnvConfig): ComposeContext {
@@ -206,11 +211,24 @@ export async function startSessionEnv(
   const controller = new AbortController();
   controllers.set(fullName, controller);
 
+  await deps.recordEvent?.(project.id, sessionSlug, "env_setup_started").catch(() => {});
+
   // Deliberately not awaited: pre-run/compose up/post-run can take minutes
   // (image pulls, builds, migrations). The HTTP layer returns as soon as
   // this function resolves; progress from here on is observed by polling
   // getSessionEnvStatus, which reads the store entry set below.
-  void runLifecycle(fullName, worktreePath, config, ctx, deps, store, controllers, controller.signal);
+  void runLifecycle(
+    project.id,
+    sessionSlug,
+    fullName,
+    worktreePath,
+    config,
+    ctx,
+    deps,
+    store,
+    controllers,
+    controller.signal,
+  );
 }
 
 /**
@@ -238,6 +256,8 @@ export function cancelSessionEnv(
 }
 
 async function runLifecycle(
+  projectId: string,
+  sessionSlug: string,
   fullName: string,
   worktreePath: string,
   config: EnvConfig,
@@ -259,11 +279,11 @@ async function runLifecycle(
       await deps.runScript(config.postRunScript, worktreePath, undefined, signal);
     }
     store.delete(fullName);
+    await deps.recordEvent?.(projectId, sessionSlug, "env_setup_finished").catch(() => {});
   } catch (error) {
-    store.set(fullName, {
-      phase: "error",
-      message: signal.aborted ? "Cancelled" : error instanceof Error ? error.message : String(error),
-    });
+    const message = signal.aborted ? "Cancelled" : error instanceof Error ? error.message : String(error);
+    store.set(fullName, { phase: "error", message });
+    await deps.recordEvent?.(projectId, sessionSlug, "env_setup_failed", message).catch(() => {});
   } finally {
     controllers.delete(fullName);
   }
@@ -291,4 +311,5 @@ export async function stopSessionEnv(
   } finally {
     store.delete(fullName);
   }
+  await deps.recordEvent?.(project.id, sessionSlug, "env_stopped").catch(() => {});
 }

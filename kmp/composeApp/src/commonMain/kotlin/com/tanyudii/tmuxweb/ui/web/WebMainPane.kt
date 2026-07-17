@@ -37,9 +37,11 @@ import com.tanyudii.tmuxweb.domain.model.Project
 import com.tanyudii.tmuxweb.domain.model.ProjectSession
 import com.tanyudii.tmuxweb.domain.repository.ChangesRepository
 import com.tanyudii.tmuxweb.domain.repository.EnvironmentRepository
+import com.tanyudii.tmuxweb.domain.repository.SessionEventsRepository
 import com.tanyudii.tmuxweb.presentation.DiffViewModel
 import com.tanyudii.tmuxweb.presentation.EnvFileEditorViewModel
 import com.tanyudii.tmuxweb.presentation.LogsViewModel
+import com.tanyudii.tmuxweb.presentation.SessionEventsViewModel
 import com.tanyudii.tmuxweb.terminal.observeAppForeground
 import com.tanyudii.tmuxweb.ui.components.PushNotificationToggle
 import com.tanyudii.tmuxweb.ui.components.TmuxButton
@@ -52,6 +54,7 @@ import com.tanyudii.tmuxweb.ui.components.TmuxEnvironmentMenu
 import com.tanyudii.tmuxweb.ui.components.TmuxIconButton
 import com.tanyudii.tmuxweb.ui.components.TmuxIconButtonVariant
 import com.tanyudii.tmuxweb.ui.components.TmuxLogsDialog
+import com.tanyudii.tmuxweb.ui.components.TmuxSessionEventsDialog
 import com.tanyudii.tmuxweb.ui.components.TmuxStatusBadge
 import com.tanyudii.tmuxweb.ui.components.TmuxStatusTone
 import com.tanyudii.tmuxweb.ui.terminal.TerminalSession
@@ -113,6 +116,7 @@ fun WebMainPane(
     var windowDialogOpen by remember { mutableStateOf(false) }
     var diffTarget by remember(session?.name) { mutableStateOf<DiffTarget?>(null) }
     var envEditorOpen by remember(session?.name) { mutableStateOf(false) }
+    var eventsOpen by remember(session?.name) { mutableStateOf(false) } // EMB-213, reset per session
     var splitOpen by remember(session?.name) { mutableStateOf(false) } // EMB-217, reset per session
 
     Column(modifier = modifier.fillMaxSize().background(TmuxColors.bgApp)) {
@@ -141,9 +145,11 @@ fun WebMainPane(
                 onEnvironmentStop = onEnvironmentStop,
                 onEnvironmentCancel = onEnvironmentCancel,
                 onEnvironmentEditConfig = { envEditorOpen = true },
+                onOpenEvents = { eventsOpen = true },
                 onViewLogs = onViewLogs,
                 terminalVisible = isTerminalVisible && !environmentMenuOpen && !windowDialogOpen &&
-                    diffTarget == null && logsService == null && !hasPendingDiscard && !envEditorOpen,
+                    diffTarget == null && logsService == null && !hasPendingDiscard && !envEditorOpen &&
+                    !eventsOpen,
                 onEnvironmentMenuOpenChanged = { environmentMenuOpen = it },
                 onDialogOpenChanged = { windowDialogOpen = it },
                 splitOpen = splitOpen,
@@ -187,6 +193,13 @@ fun WebMainPane(
             open = envEditorOpen,
             onDismiss = { envEditorOpen = false },
         )
+
+        MainPaneSessionEventsDialog(
+            projectId = project?.id,
+            sessionName = session.name,
+            open = eventsOpen,
+            onDismiss = { eventsOpen = false },
+        )
     }
 }
 
@@ -212,6 +225,25 @@ private fun MainPaneEnvFileEditorDialog(projectId: String?, sessionName: String,
     )
 }
 
+/** Hosts the session lifecycle event timeline once opened -- EMB-213. Split out purely to keep [WebMainPane] short. */
+@Composable
+private fun MainPaneSessionEventsDialog(projectId: String?, sessionName: String, open: Boolean, onDismiss: () -> Unit) {
+    if (projectId == null || !open) return
+    val repository: SessionEventsRepository = koinInject()
+    val scope = rememberCoroutineScope()
+    val viewModel = remember(projectId, sessionName) {
+        SessionEventsViewModel(projectId, sessionName, repository, scope)
+    }
+    val state by viewModel.state.collectAsState()
+
+    TmuxSessionEventsDialog(
+        sessionName = sessionName,
+        state = state,
+        onRefresh = viewModel::refresh,
+        onDismiss = onDismiss,
+    )
+}
+
 /**
  * Top bar, tmux window tabs, terminal viewport, and status footer -- the
  * left side of [WebMainPane]'s main Row, sized independently of
@@ -234,6 +266,7 @@ private fun MainContent(
     onEnvironmentStop: () -> Unit,
     onEnvironmentCancel: () -> Unit,
     onEnvironmentEditConfig: () -> Unit,
+    onOpenEvents: () -> Unit,
     onViewLogs: (String) -> Unit,
     terminalVisible: Boolean,
     onEnvironmentMenuOpenChanged: (Boolean) -> Unit,
@@ -254,6 +287,7 @@ private fun MainContent(
             onEnvironmentStop = onEnvironmentStop,
                 onEnvironmentCancel = onEnvironmentCancel,
                 onEnvironmentEditConfig = onEnvironmentEditConfig,
+            onOpenEvents = onOpenEvents,
             onViewLogs = onViewLogs,
             onEnvironmentMenuOpenChanged = onEnvironmentMenuOpenChanged,
             splitOpen = splitOpen,
@@ -419,6 +453,7 @@ private fun TopBar(
     onEnvironmentStop: () -> Unit,
     onEnvironmentCancel: () -> Unit,
     onEnvironmentEditConfig: () -> Unit,
+    onOpenEvents: () -> Unit,
     onViewLogs: (String) -> Unit,
     onEnvironmentMenuOpenChanged: (Boolean) -> Unit,
     splitOpen: Boolean,
@@ -458,6 +493,12 @@ private fun TopBar(
             onOpenChanged = onEnvironmentMenuOpenChanged,
         )
         PushNotificationToggle()
+        TmuxIconButton(
+            icon = TmuxIcons.History,
+            contentDescription = "Event history",
+            onClick = onOpenEvents,
+            variant = TmuxIconButtonVariant.GHOST,
+        )
         TmuxIconButton(
             icon = TmuxIcons.SplitView,
             contentDescription = if (splitOpen) "Close split" else "Split terminal",

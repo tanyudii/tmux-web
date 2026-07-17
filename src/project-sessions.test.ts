@@ -137,6 +137,31 @@ test("createProjectSession slugifies the name, creates the worktree, then the tm
   ]);
 });
 
+test("createProjectSession records a 'created' event after the session is created", async () => {
+  const calls: Array<[string, string, string]> = [];
+  const deps = makeDeps({
+    recordEvent: async (projectId, sessionSlug, type) => {
+      calls.push([projectId, sessionSlug, type]);
+    },
+  });
+
+  await createProjectSession(PROJECT, "feature-x", deps);
+
+  assert.deepEqual(calls, [["proj1-ab12cd", "feature-x", "created"]]);
+});
+
+test("createProjectSession swallows a recordEvent failure -- session creation still succeeds", async () => {
+  const deps = makeDeps({
+    recordEvent: async () => {
+      throw new Error("disk full");
+    },
+  });
+
+  const result = await createProjectSession(PROJECT, "feature-x", deps);
+
+  assert.equal(result.fullName, "proj1-ab12cd__feature-x");
+});
+
 test("createProjectSession throws ValidationError when the name has nothing sluggable", async () => {
   await assert.rejects(() => createProjectSession(PROJECT, "!!!", makeDeps()), ValidationError);
 });
@@ -240,6 +265,22 @@ test("killProjectSession passes the force option through to removeWorktree", asy
   await killProjectSession(PROJECT, "feature-x", deps, { force: true });
 
   assert.deepEqual(calls, [true]);
+});
+
+test("killProjectSession records a 'deleted' event after the worktree is removed", async () => {
+  const calls: string[] = [];
+  const deps = makeDeps({
+    removeWorktree: async () => {
+      calls.push("removeWorktree");
+    },
+    recordEvent: async (_projectId, _sessionSlug, type) => {
+      calls.push(`recordEvent:${type}`);
+    },
+  });
+
+  await killProjectSession(PROJECT, "feature-x", deps);
+
+  assert.deepEqual(calls, ["removeWorktree", "recordEvent:deleted"]);
 });
 
 test("killProjectSession does not delete the branch by default", async () => {

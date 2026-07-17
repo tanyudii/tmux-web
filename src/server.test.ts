@@ -74,6 +74,7 @@ function makeDeps(overrides: Partial<ServerDeps> = {}): ServerDeps {
     killProjectSession: async () => {},
     killProjectSessionSplit: async () => {},
     isProjectSessionBranchMerged: async () => true,
+    getProjectSessionEvents: async () => [],
     getProjectSessionChanges: async () => ({ staged: [], unstaged: [], untracked: [], conflicted: [], repoState: "clean" }),
     getProjectSessionDiff: async () => ({ diff: "", isUntracked: false, isBinary: false }),
     stageProjectSessionFile: async () => {},
@@ -562,6 +563,43 @@ test("GET /api/projects/:id/sessions/:name/branch-merged returns the merge statu
 test("GET /api/projects/:id/sessions/:name/branch-merged returns 404 for an unknown project", async () => {
   await withServer(makeDeps(), async (baseUrl) => {
     const res = await fetch(`${baseUrl}/api/projects/unknown-id/sessions/feature-x/branch-merged`, {
+      headers: authHeaders(),
+    });
+    assert.equal(res.status, 404);
+  });
+});
+
+test("GET /api/projects/:id/sessions/:name/events without a token returns 401", async () => {
+  await withServer(makeDeps(), async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/projects/${SAMPLE_PROJECT.id}/sessions/feature-x/events`);
+    assert.equal(res.status, 401);
+  });
+});
+
+test("GET /api/projects/:id/sessions/:name/events returns the session's event history", async () => {
+  const deps = makeDeps({
+    getProjectSessionEvents: async () => [
+      {
+        timestamp: "2026-01-01T00:00:00.000Z",
+        projectId: SAMPLE_PROJECT.id,
+        sessionSlug: "feature-x",
+        type: "created",
+      },
+    ],
+  });
+  await withServer(deps, async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/projects/${SAMPLE_PROJECT.id}/sessions/feature-x/events`, {
+      headers: authHeaders(),
+    });
+    assert.equal(res.status, 200);
+    const body = (await res.json()) as { events: unknown[] };
+    assert.equal(body.events.length, 1);
+  });
+});
+
+test("GET /api/projects/:id/sessions/:name/events returns 404 for an unknown project", async () => {
+  await withServer(makeDeps(), async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/projects/unknown-id/sessions/feature-x/events`, {
       headers: authHeaders(),
     });
     assert.equal(res.status, 404);

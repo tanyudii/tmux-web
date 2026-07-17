@@ -373,6 +373,47 @@ test("startSessionEnv runs pre-run -> compose up -> post-run, then status report
   assert.deepEqual(status.openLinks, [{ label: "Open", url: "http://localhost:54321", service: "web" }]);
 });
 
+test("startSessionEnv records 'env_setup_started' then 'env_setup_finished' on success (EMB-213)", async () => {
+  const events: Array<[string, string]> = [];
+  const deps = makeDeps({
+    recordEvent: async (_projectId, _sessionSlug, type) => {
+      events.push(["proj1-ab12cd/feature-x", type]);
+    },
+  });
+  const store = createSessionEnvStore();
+  const controllers = createSessionEnvControllerStore();
+
+  await startSessionEnv(PROJECT, "feature-x", deps, store, controllers);
+  await flush();
+
+  assert.deepEqual(events, [
+    ["proj1-ab12cd/feature-x", "env_setup_started"],
+    ["proj1-ab12cd/feature-x", "env_setup_finished"],
+  ]);
+});
+
+test("startSessionEnv records 'env_setup_failed' with the error message when compose up fails (EMB-213)", async () => {
+  const events: Array<{ type: string; message?: string }> = [];
+  const deps = makeDeps({
+    composeUp: async () => {
+      throw new Error("no such image");
+    },
+    recordEvent: async (_projectId, _sessionSlug, type, message) => {
+      events.push({ type, message });
+    },
+  });
+  const store = createSessionEnvStore();
+  const controllers = createSessionEnvControllerStore();
+
+  await startSessionEnv(PROJECT, "feature-x", deps, store, controllers);
+  await flush();
+
+  assert.deepEqual(events, [
+    { type: "env_setup_started", message: undefined },
+    { type: "env_setup_failed", message: "no such image" },
+  ]);
+});
+
 test("startSessionEnv aborts before compose up when pre-run fails", async () => {
   let composeUpCalled = false;
   const config: EnvConfig = { ...AVAILABLE_CONFIG, preRunScript: `${WORKTREE_PATH}/.tmux-web-env/pre-run.sh` };
@@ -473,6 +514,21 @@ test("stopSessionEnv tears down running containers and clears store state", asyn
   assert.equal(calls.length, 1);
   assert.equal(calls[0].projectName, FULL_NAME);
   assert.equal(store.get(FULL_NAME), undefined);
+});
+
+test("stopSessionEnv records an 'env_stopped' event after containers are torn down (EMB-213)", async () => {
+  const events: string[] = [];
+  const deps = makeDeps({
+    composePs: async () => [{ service: "web", state: "running" }],
+    recordEvent: async (_projectId, _sessionSlug, type) => {
+      events.push(type);
+    },
+  });
+  const store = createSessionEnvStore();
+
+  await stopSessionEnv(PROJECT, "feature-x", deps, store);
+
+  assert.deepEqual(events, ["env_stopped"]);
 });
 
 test("requireEnvContext resolves a ComposeContext scoped to the session", async () => {

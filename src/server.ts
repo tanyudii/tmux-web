@@ -40,6 +40,7 @@ import { RateLimiter, type RateLimiterOptions } from "./rate-limit.ts";
 import type { PushSubscriptionRecord } from "./push-notifications.ts";
 import { TemplateValidationError, TemplateNotFoundError, type SessionTemplate } from "./session-templates.ts";
 import { appendAccessLogEntry, type AccessLogEntry } from "./access-log.ts";
+import type { SessionEvent } from "./session-events.ts";
 
 const DIFF_MODES: readonly DiffMode[] = ["staged", "unstaged", "untracked"];
 
@@ -70,6 +71,8 @@ export interface ServerDeps {
   // unmerged-branch warning -- see project-sessions.ts's
   // isProjectSessionBranchMerged.
   isProjectSessionBranchMerged: (project: Project, sessionSlug: string) => Promise<boolean>;
+  // EMB-213: read-only lifecycle event history for a session.
+  getProjectSessionEvents: (project: Project, sessionSlug: string) => Promise<SessionEvent[]>;
 
   // EMB-220 session templates.
   listProjectTemplates: (project: Project) => Promise<SessionTemplate[]>;
@@ -582,6 +585,20 @@ export function createServer(deps: ServerDeps): Server {
           if (sendMappedError(res, error)) return;
           throw error;
         }
+      }
+
+      // EMB-213: read-only lifecycle history (created/env setup/env stop/
+      // deleted) for a single session.
+      const sessionEventsMatch = path.match(/^\/api\/projects\/([^/]+)\/sessions\/([^/]+)\/events$/);
+      if (sessionEventsMatch && req.method === "GET") {
+        if (!checkAuthorized(req, res, deps.token, clientIp, authFailureLimiter, deps.accessLogPath)) return;
+
+        const project = await deps.getProject(decodeURIComponent(sessionEventsMatch[1]));
+        if (!project) return sendJson(res, 404, { error: "Project not found" });
+
+        const sessionSlug = decodeURIComponent(sessionEventsMatch[2]);
+        const events = await deps.getProjectSessionEvents(project, sessionSlug);
+        return sendJson(res, 200, { events });
       }
 
       // EMB-217: tears down the split pane's linked tmux session -- see
