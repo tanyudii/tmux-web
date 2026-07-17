@@ -224,7 +224,11 @@ test("killProjectSession rethrows unexpected killSession errors", async () => {
   await assert.rejects(() => killProjectSession(PROJECT, "feature-x", deps), /permission denied/);
 });
 
-test("killProjectSession tears down the session's docker-compose environment before removing the worktree", async () => {
+test("killProjectSession tears down the session's docker-compose environment before killing tmux and removing the worktree", async () => {
+  // stopSessionEnv runs first (not killSession) so a slow `docker compose
+  // down -v` doesn't leave the client's attached /ws closed -- and looking
+  // like an unexpected drop -- for the whole rest of this request. See the
+  // comment in killProjectSession for the full rationale.
   const calls: string[] = [];
   const deps = makeDeps({
     killSession: async () => {
@@ -240,7 +244,7 @@ test("killProjectSession tears down the session's docker-compose environment bef
 
   await killProjectSession(PROJECT, "feature-x", deps);
 
-  assert.deepEqual(calls, ["kill", "stopEnv:proj1-ab12cd:feature-x", "remove"]);
+  assert.deepEqual(calls, ["stopEnv:proj1-ab12cd:feature-x", "kill", "remove"]);
 });
 
 test("killProjectSession tolerates stopSessionEnv failing (best-effort teardown)", async () => {
