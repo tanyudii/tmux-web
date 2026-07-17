@@ -129,6 +129,10 @@
          globalThis with no npm/webpack module wiring. See Spike B (docs/adr/0002-*). -->
     <script src="vendor/xterm.js"></script>
     <script src="vendor/addon-fit.js"></script>
+    <!-- EMB-219: @xterm/addon-search@0.16.0, vendored the same way as
+         addon-fit.js above (see that file's comment) -- no npm/webpack
+         wiring, just a UMD global loaded as a plain script. -->
+    <script src="vendor/addon-search.js"></script>
     <script>
       // Kotlin/Wasm's JS interop generates a runtime `instanceof <ExternalClassName>`
       // / `() => <ExternalClassName>` check for every `external class` (used for
@@ -142,6 +146,7 @@
       // rendered xterm rows).
       window.XtermTerminal = Terminal;
       window.XtermFitAddon = FitAddon.FitAddon;
+      window.XtermSearchAddon = SearchAddon.SearchAddon;
     </script>
     <script src="composeApp.js"></script>
     <script>

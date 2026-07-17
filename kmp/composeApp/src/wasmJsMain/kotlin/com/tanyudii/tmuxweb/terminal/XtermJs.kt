@@ -19,6 +19,7 @@ external class XtermTerminal : JsAny {
     fun onBell(callback: () -> Unit)
     fun resize(cols: Int, rows: Int)
     fun loadAddon(addon: XtermFitAddon)
+    fun loadAddon(addon: XtermSearchAddon)
     fun dispose()
     fun focus()
 
@@ -35,6 +36,22 @@ external class XtermTerminal : JsAny {
 external class XtermFitAddon : JsAny {
     fun fit()
 }
+
+// EMB-219: bindings for @xterm/addon-search@0.16.0 (vendor/addon-search.js),
+// vendored the same way as addon-fit.js -- see index.html's script tags.
+// findNext/findPrevious always select+scroll the match themselves (xterm's
+// own SearchAddon source, confirmed reading its `_selectResult` -- it calls
+// `_terminal.select(...)` unconditionally, not just when `decorations` is
+// passed), so a found match is already visibly highlighted via xterm's
+// normal selection styling with no extra decoration options needed here.
+external class XtermSearchAddon : JsAny {
+    fun findNext(term: String): Boolean
+    fun findPrevious(term: String): Boolean
+    fun clearActiveDecoration()
+}
+
+fun newSearchAddon(): XtermSearchAddon =
+    js("new SearchAddon.SearchAddon()")
 
 // Native browser API, not xterm-specific -- named to match the real global
 // `ResizeObserver` exactly (unlike XtermTerminal/XtermFitAddon above, which
@@ -161,6 +178,141 @@ fun hideCopyToast(container: HTMLElement): Unit = js(
         if (!toast) return;
         if (toast._tmuxHideTimer) clearTimeout(toast._tmuxHideTimer);
         toast.style.display = 'none';
+    }""",
+)
+
+// EMB-219: search bar overlay, built the exact same way as
+// showCopyToast/hideCopyToast above -- a real DOM element appended to
+// `container`, NOT a Compose composable. Same CMP-8521 reasoning as the
+// copy toast: Compose Multiplatform Web's canvas can never paint over this
+// HtmlElementView's native DOM, so a Compose overlay would render invisibly
+// underneath xterm's real DOM node.
+//
+// Reopening while already open (container.querySelector finds an existing
+// bar) just re-shows and refocuses/reselects it rather than rebuilding --
+// so pressing Ctrl+F again with the bar already open is a no-op that jumps
+// focus back to the search field instead of stacking a second bar.
+//
+// onSearchInput/onFindNext/onFindPrevious each read `input.value` directly
+// in their own JS event-handler closure rather than Kotlin tracking "the
+// current search term" separately -- one source of truth, no risk of it
+// drifting out of sync with what's actually typed. Each returns whether a
+// match was found so the input's border can give immediate not-found
+// feedback, same spirit as a browser's native find bar.
+//
+// Search only ever covers xterm's own JS-side buffer, which -- confirmed
+// live via Playwright for EMB-219 -- only ever holds the currently-rendered
+// screen for this app: tmux repaints panes via ANSI cursor positioning
+// rather than emitting real newlines (see tmux.ts's `scrollPane` doc
+// comment), so xterm never accumulates genuine scrollback rows to search
+// beyond what's on screen right now, regardless of its configured
+// scrollback capacity. The input's placeholder/title says so rather than
+// silently implying full-history search.
+//
+// LongMethod suppressed: this is a raw JS DOM-construction string, not
+// Kotlin control flow -- splitting it across multiple js() calls would
+// fragment one cohesive DOM-building/event-wiring block for no readability
+// gain (same reasoning as the other js()-bodied functions in this file).
+@Suppress("UnusedParameter", "LongMethod")
+fun showSearchBar(
+    container: HTMLElement,
+    onSearchInput: (String) -> Boolean,
+    onFindNext: (String) -> Boolean,
+    onFindPrevious: (String) -> Boolean,
+    onClose: () -> Unit,
+): Unit = js(
+    """{
+        var bar = container.querySelector('.tmux-search-bar');
+        if (bar) {
+            bar.style.display = 'flex';
+            var existingInput = bar.querySelector('input');
+            existingInput.focus();
+            existingInput.select();
+            return;
+        }
+        bar = document.createElement('div');
+        bar.className = 'tmux-search-bar';
+        bar.style.position = 'absolute';
+        bar.style.top = '8px';
+        bar.style.right = '16px';
+        bar.style.display = 'flex';
+        bar.style.alignItems = 'center';
+        bar.style.gap = '4px';
+        bar.style.padding = '4px 6px';
+        bar.style.borderRadius = '8px';
+        bar.style.background = '#1B212C';
+        bar.style.border = '1px solid #2A3140';
+        bar.style.zIndex = '20';
+        bar.style.fontFamily = 'sans-serif';
+
+        var input = document.createElement('input');
+        input.type = 'text';
+        input.placeholder = 'Find on screen';
+        input.title = 'Searches only the currently visible screen, not scrollback history';
+        input.style.background = 'transparent';
+        input.style.border = '1px solid transparent';
+        input.style.borderRadius = '4px';
+        input.style.outline = 'none';
+        input.style.color = '#E6E9EF';
+        input.style.fontSize = '13px';
+        input.style.fontFamily = 'inherit';
+        input.style.width = '160px';
+        input.style.padding = '2px 4px';
+
+        function markFound(found) {
+            input.style.borderColor = (input.value && !found) ? '#F4685F' : 'transparent';
+        }
+
+        function makeButton(label, title) {
+            var button = document.createElement('button');
+            button.type = 'button';
+            button.textContent = label;
+            button.title = title;
+            button.style.background = 'transparent';
+            button.style.border = 'none';
+            button.style.color = '#9AA4B2';
+            button.style.cursor = 'pointer';
+            button.style.fontSize = '13px';
+            button.style.padding = '2px 4px';
+            return button;
+        }
+
+        var prevButton = makeButton('↑', 'Previous match (Shift+Enter)');
+        var nextButton = makeButton('↓', 'Next match (Enter)');
+        var closeButton = makeButton('✕', 'Close (Esc)');
+
+        input.addEventListener('input', function () {
+            markFound(onSearchInput(input.value));
+        });
+        input.addEventListener('keydown', function (keyEvent) {
+            if (keyEvent.key === 'Enter') {
+                keyEvent.preventDefault();
+                markFound(keyEvent.shiftKey ? onFindPrevious(input.value) : onFindNext(input.value));
+            } else if (keyEvent.key === 'Escape') {
+                keyEvent.preventDefault();
+                keyEvent.stopPropagation();
+                onClose();
+            }
+        });
+        prevButton.addEventListener('click', function () { markFound(onFindPrevious(input.value)); });
+        nextButton.addEventListener('click', function () { markFound(onFindNext(input.value)); });
+        closeButton.addEventListener('click', function () { onClose(); });
+
+        bar.appendChild(input);
+        bar.appendChild(prevButton);
+        bar.appendChild(nextButton);
+        bar.appendChild(closeButton);
+        container.appendChild(bar);
+        input.focus();
+    }""",
+)
+
+/** Hides the search bar (see [showSearchBar]) without destroying it, so reopening restores its last search term. */
+@Suppress("UnusedParameter")
+fun hideSearchBar(container: HTMLElement): Unit = js(
+    """{
+        var bar = container.querySelector('.tmux-search-bar');
+        if (bar) bar.style.display = 'none';
     }""",
 )
 
