@@ -106,19 +106,35 @@
         var appEl = document.getElementById("composeApp");
         function applyVisualViewportSize() {
           var vv = window.visualViewport;
-          if (vv) {
-            appEl.style.height = vv.height + "px";
-            appEl.style.transform = vv.offsetTop ? "translateY(" + vv.offsetTop + "px)" : "";
-          } else {
-            appEl.style.height = window.innerHeight + "px";
-            appEl.style.transform = "";
-          }
+          var h = (vv ? vv.height : window.innerHeight) + "px";
+          var tf = vv && vv.offsetTop ? "translateY(" + vv.offsetTop + "px)" : "";
+          // Write only on a real change. This runs on a poll (see below), and
+          // re-assigning identical values every tick would thrash layout --
+          // and, through PlatformTerminalView.wasmJs.kt's ResizeObserver, kick
+          // off a needless fit()/PTY-resize round trip several times a second.
+          if (appEl.style.height !== h) appEl.style.height = h;
+          if (appEl.style.transform !== tf) appEl.style.transform = tf;
         }
         if (window.visualViewport) {
           window.visualViewport.addEventListener("resize", applyVisualViewportSize);
           window.visualViewport.addEventListener("scroll", applyVisualViewportSize);
         }
         window.addEventListener("resize", applyVisualViewportSize);
+        // The listeners above cannot be trusted to fire at all. Measured live on
+        // a real iPad (Chrome/CriOS 150, iPadOS 26) by having the page report its
+        // own metrics home: visualViewport.height swung between 634 and 948 while
+        // NONE of the events above ever fired, so this element stayed frozen at
+        // its load-time height (678px) for the entire session -- leaving ~270px of
+        // dead space below the canvas at the taller size and clipping ~44px off
+        // the bottom at the shorter one. That dead strip is what a user reports as
+        // "there's padding at the bottom".
+        //
+        // Polling is the only thing that actually observes the change here; the
+        // listeners stay because they make the common (working) case react without
+        // waiting for the next tick. 250ms is below the threshold where the jump
+        // reads as a lag rather than a glitch, and the change-guard above keeps an
+        // idle poll free of layout work.
+        setInterval(applyVisualViewportSize, 250);
         applyVisualViewportSize();
       })();
     </script>
