@@ -52,10 +52,10 @@ import org.koin.compose.koinInject
 
 /**
  * Root of the Web-first, wide-viewport experience — sidebar project/session
- * tree, master-detail terminal, git-changes rail. Mounted from `App()` when
- * the available width crosses the desktop breakpoint (see
- * `AdaptiveRoot.kt`); ports `ui_kits/web/app.jsx` from the design-system
- * handoff.
+ * tree, master-detail terminal, git-changes rail. Mounted from `App.kt`'s
+ * private `AdaptiveRoot` composable when the available width crosses the
+ * desktop breakpoint (900.dp, see `App.kt`); ports `ui_kits/web/app.jsx`
+ * from the design-system handoff.
  */
 @Composable
 fun WebShellScreen(onSwitchServer: () -> Unit) {
