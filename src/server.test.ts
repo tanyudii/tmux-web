@@ -1221,6 +1221,36 @@ test("serves .wasm static files with the application/wasm content type", async (
   }
 });
 
+// EMB-215: manifest.json needs a manifest-appropriate content type for
+// browsers to accept the `<link rel="manifest">` it's served from.
+test("serves .json static files (manifest.json) with the application/manifest+json content type", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tmux-web-public-"));
+  await writeFile(join(dir, "manifest.json"), JSON.stringify({ name: "tmux-web" }));
+  try {
+    await withServer(makeDeps({ publicDir: dir }), async (baseUrl) => {
+      const res = await fetch(`${baseUrl}/manifest.json`);
+      assert.equal(res.status, 200);
+      assert.equal(res.headers.get("content-type"), "application/manifest+json");
+    });
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("serves .png static files with the image/png content type", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tmux-web-public-"));
+  await writeFile(join(dir, "icon-192.png"), Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+  try {
+    await withServer(makeDeps({ publicDir: dir }), async (baseUrl) => {
+      const res = await fetch(`${baseUrl}/icon-192.png`);
+      assert.equal(res.status, 200);
+      assert.equal(res.headers.get("content-type"), "image/png");
+    });
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test("unknown routes return 404", async () => {
   await withServer(makeDeps(), async (baseUrl) => {
     const res = await fetch(`${baseUrl}/does-not-exist`, { headers: authHeaders() });

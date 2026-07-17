@@ -109,6 +109,11 @@ const MIME_TYPES: Record<string, string> = {
   // build's entry point fetches its .wasm binaries directly and needs this
   // exact content type, not the application/octet-stream default.
   ".wasm": "application/wasm",
+  // manifest.json (EMB-215) -- served with its registered MIME type rather
+  // than falling through to application/octet-stream, which some browsers
+  // refuse to accept for the Web App Manifest link.
+  ".json": "application/manifest+json",
+  ".png": "image/png",
 };
 
 function sendJson(res: ServerResponse, status: number, body: unknown): void {

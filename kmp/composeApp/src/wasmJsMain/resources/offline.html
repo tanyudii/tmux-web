@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>tmux-web -- offline</title>
+  <style>
+    html, body {
+      margin: 0;
+      height: 100%;
+      background: #10141c;
+      color: #e6e9ef;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .card {
+      text-align: center;
+      max-width: 320px;
+      padding: 24px;
+    }
+    .glyph {
+      font-size: 40px;
+      margin-bottom: 12px;
+    }
+    h1 {
+      font-size: 18px;
+      margin: 0 0 8px;
+    }
+    p {
+      color: #9aa4b2;
+      font-size: 14px;
+      line-height: 1.5;
+      margin: 0 0 20px;
+    }
+    button {
+      background: #3ecf8e;
+      color: #10141c;
+      border: none;
+      border-radius: 8px;
+      padding: 10px 20px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="glyph">&#128268;</div>
+    <h1>You're offline</h1>
+    <p>tmux-web can't reach its server right now. Check your connection and try again.</p>
+    <button onclick="location.reload()">Retry</button>
+  </div>
+</body>
+</html>
