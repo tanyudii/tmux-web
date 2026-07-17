@@ -116,6 +116,34 @@ class KtorRepositoriesTest {
         assertTrue(capturedRequest.url.encodedPath.endsWith("/sessions/my-branch/split"))
     }
 
+    @Test
+    fun `deleteSession omits the deleteBranch query param by default`() = runTest {
+        val repo = KtorSessionsRepository(client(HttpStatusCode.NoContent, ""))
+
+        repo.deleteSession("p1", "my-branch")
+
+        assertEquals(null, capturedRequest.url.parameters["deleteBranch"])
+    }
+
+    @Test
+    fun `deleteSession sends deleteBranch=true when requested`() = runTest {
+        val repo = KtorSessionsRepository(client(HttpStatusCode.NoContent, ""))
+
+        repo.deleteSession("p1", "my-branch", deleteBranch = true)
+
+        assertEquals("true", capturedRequest.url.parameters["deleteBranch"])
+    }
+
+    @Test
+    fun `isBranchMerged decodes the merged flag`() = runTest {
+        val repo = KtorSessionsRepository(client(HttpStatusCode.OK, """{"merged":false}"""))
+
+        val merged = repo.isBranchMerged("p1", "my-branch")
+
+        assertEquals(false, merged)
+        assertTrue(capturedRequest.url.encodedPath.endsWith("/sessions/my-branch/branch-merged"))
+    }
+
     // MARK: Environment (docker-compose)
 
     @Test

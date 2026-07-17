@@ -246,6 +246,68 @@ class WebShellViewModelTest {
     }
 
     @Test
+    fun `deleteSession does not request branch deletion by default`() {
+        val sessions = FakeSessionsRepository(listOf(session("build")))
+        val viewModel = immediateViewModel(sessions = sessions)
+
+        viewModel.requestDeleteSession("p1", session("build"))
+        viewModel.confirmPendingDelete()
+
+        assertEquals(listOf(Triple("build", false, false)), sessions.deleteSessionCalls)
+    }
+
+    @Test
+    fun `checking Delete branch too on a merged branch deletes immediately on next confirm`() {
+        val sessions = FakeSessionsRepository(listOf(session("build"))).apply { branchMerged = true }
+        val viewModel = immediateViewModel(sessions = sessions)
+
+        viewModel.requestDeleteSession("p1", session("build"))
+        viewModel.setDeleteBranchOnSessionDelete(true)
+        val afterCheck = viewModel.state.value.pendingDelete as WebShellUiState.PendingDelete.OfSession
+        assertTrue(afterCheck.branchMergeChecked)
+        assertEquals(true, afterCheck.branchMerged)
+
+        viewModel.confirmPendingDelete()
+
+        assertEquals(listOf(Triple("build", false, true)), sessions.deleteSessionCalls)
+        assertNull(viewModel.state.value.pendingDelete)
+    }
+
+    @Test
+    fun `checking Delete branch too on an unmerged branch requires a second confirm before deleting`() {
+        val sessions = FakeSessionsRepository(listOf(session("build"))).apply { branchMerged = false }
+        val viewModel = immediateViewModel(sessions = sessions)
+
+        viewModel.requestDeleteSession("p1", session("build"))
+        viewModel.setDeleteBranchOnSessionDelete(true)
+
+        // First confirm click only escalates the dialog -- nothing deleted yet.
+        viewModel.confirmPendingDelete()
+        assertEquals(emptyList(), sessions.deleteSessionCalls)
+        val escalated = viewModel.state.value.pendingDelete as WebShellUiState.PendingDelete.OfSession
+        assertTrue(escalated.unmergedConfirmed)
+
+        // Second confirm click actually deletes, with deleteBranch=true.
+        viewModel.confirmPendingDelete()
+        assertEquals(listOf(Triple("build", false, true)), sessions.deleteSessionCalls)
+    }
+
+    @Test
+    fun `unchecking Delete branch too resets the merge-check state`() {
+        val sessions = FakeSessionsRepository(listOf(session("build"))).apply { branchMerged = false }
+        val viewModel = immediateViewModel(sessions = sessions)
+
+        viewModel.requestDeleteSession("p1", session("build"))
+        viewModel.setDeleteBranchOnSessionDelete(true)
+        viewModel.setDeleteBranchOnSessionDelete(false)
+
+        val pending = viewModel.state.value.pendingDelete as WebShellUiState.PendingDelete.OfSession
+        assertFalse(pending.deleteBranch)
+        assertFalse(pending.branchMergeChecked)
+        assertNull(pending.branchMerged)
+    }
+
+    @Test
     fun `cancelPendingDelete clears without deleting`() {
         val projects = FakeProjectsRepository(listOf(project()))
         val viewModel = immediateViewModel(projects = projects)

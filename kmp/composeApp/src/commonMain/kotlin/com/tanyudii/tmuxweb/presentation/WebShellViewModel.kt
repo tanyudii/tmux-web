@@ -68,6 +68,19 @@ data class WebShellUiState(
             val session: ProjectSession,
             override val forced: Boolean,
             val message: String? = null,
+            // EMB-207: "Delete branch too" checkbox state. deleteBranch is
+            // the checkbox's own checked state; branchMergeChecked/
+            // branchMerged track the async merge-status lookup triggered by
+            // checking it (see setDeleteBranchOnSessionDelete);
+            // unmergedConfirmed is the *second* confirmation tier -- the
+            // first Confirm click while the branch is known-unmerged just
+            // sets this instead of actually deleting, escalating the
+            // dialog's own warning, mirroring how `forced` already escalates
+            // for a worktree/session conflict.
+            val deleteBranch: Boolean = false,
+            val branchMergeChecked: Boolean = false,
+            val branchMerged: Boolean? = null,
+            val unmergedConfirmed: Boolean = false,
         ) : PendingDelete
     }
 
@@ -295,7 +308,44 @@ class WebShellViewModel(
     fun confirmPendingDelete() {
         when (val pending = _state.value.pendingDelete ?: return) {
             is WebShellUiState.PendingDelete.OfProject -> deleteProject(pending)
-            is WebShellUiState.PendingDelete.OfSession -> deleteSession(pending)
+            is WebShellUiState.PendingDelete.OfSession -> {
+                val needsUnmergedConfirm = pending.deleteBranch &&
+                    pending.branchMergeChecked &&
+                    pending.branchMerged == false &&
+                    !pending.unmergedConfirmed
+                if (needsUnmergedConfirm) {
+                    _state.update { it.copy(pendingDelete = pending.copy(unmergedConfirmed = true)) }
+                } else {
+                    deleteSession(pending)
+                }
+            }
+        }
+    }
+
+    /** EMB-207: toggles the session-delete dialog's "Delete branch too" checkbox. */
+    fun setDeleteBranchOnSessionDelete(deleteBranch: Boolean) {
+        val pending = _state.value.pendingDelete as? WebShellUiState.PendingDelete.OfSession ?: return
+        _state.update {
+            it.copy(
+                pendingDelete = pending.copy(
+                    deleteBranch = deleteBranch,
+                    branchMergeChecked = false,
+                    branchMerged = null,
+                    unmergedConfirmed = false,
+                ),
+            )
+        }
+        if (!deleteBranch) return
+        scope.launch {
+            runSuspendCatching { sessionsRepository.isBranchMerged(pending.projectId, pending.session.name) }
+                .onSuccess { merged ->
+                    _state.update { state ->
+                        val current = state.pendingDelete as? WebShellUiState.PendingDelete.OfSession
+                            ?: return@update state
+                        state.copy(pendingDelete = current.copy(branchMergeChecked = true, branchMerged = merged))
+                    }
+                }
+                .onFailure { error -> _state.update { it.copy(errorMessage = error.toUiMessage()) } }
         }
     }
 
@@ -405,7 +455,12 @@ class WebShellViewModel(
         _state.update { it.copy(pendingDelete = null) }
         scope.launch {
             runSuspendCatching {
-                sessionsRepository.deleteSession(pending.projectId, pending.session.name, force = pending.forced)
+                sessionsRepository.deleteSession(
+                    pending.projectId,
+                    pending.session.name,
+                    force = pending.forced,
+                    deleteBranch = pending.deleteBranch,
+                )
             }
                 .onSuccess {
                     _state.update { state ->
@@ -419,12 +474,7 @@ class WebShellViewModel(
                 }
                 .onFailure { error ->
                     handleDeleteConflict(error) { message ->
-                        WebShellUiState.PendingDelete.OfSession(
-                            pending.projectId,
-                            pending.session,
-                            forced = true,
-                            message = message,
-                        )
+                        pending.copy(forced = true, message = message)
                     }
                 }
         }

@@ -8,6 +8,7 @@ import {
   createSessionCreationStore,
   killProjectSession,
   killProjectSessionSplit,
+  isProjectSessionBranchMerged,
   getProjectSessionChanges,
   getProjectSessionDiff,
   stageProjectSessionFile,
@@ -41,6 +42,8 @@ function makeDeps(overrides: Partial<ProjectSessionsDeps> = {}): ProjectSessions
     sendKeys: async () => {},
     addWorktree: async () => {},
     removeWorktree: async () => {},
+    isBranchMerged: async () => true,
+    deleteBranch: async () => {},
     getChangedFiles: async () => ({ staged: [], unstaged: [], untracked: [], conflicted: [], repoState: "clean" }),
     getFileDiff: async () => ({ diff: "", isUntracked: false, isBinary: false }),
     stageFile: async () => {},
@@ -239,6 +242,35 @@ test("killProjectSession passes the force option through to removeWorktree", asy
   assert.deepEqual(calls, [true]);
 });
 
+test("killProjectSession does not delete the branch by default", async () => {
+  let called = false;
+  const deps = makeDeps({
+    deleteBranch: async () => {
+      called = true;
+    },
+  });
+
+  await killProjectSession(PROJECT, "feature-x", deps);
+
+  assert.equal(called, false);
+});
+
+test("killProjectSession force-deletes the branch when deleteBranch is true, after the worktree is removed", async () => {
+  const calls: string[] = [];
+  const deps = makeDeps({
+    removeWorktree: async () => {
+      calls.push("removeWorktree");
+    },
+    deleteBranch: async (repoPath, branchName) => {
+      calls.push(`deleteBranch:${repoPath}:${branchName}`);
+    },
+  });
+
+  await killProjectSession(PROJECT, "feature-x", deps, { deleteBranch: true });
+
+  assert.deepEqual(calls, ["removeWorktree", "deleteBranch:/repo:feature-x"]);
+});
+
 test("killProjectSession tolerates the tmux session already being gone", async () => {
   const removeCalls: string[] = [];
   const deps = makeDeps({
@@ -319,6 +351,21 @@ test("killProjectSession tolerates stopSessionEnv failing (best-effort teardown)
   await killProjectSession(PROJECT, "feature-x", deps);
 
   assert.deepEqual(removeCalls, ["/data/worktrees/proj1-ab12cd/feature-x"]);
+});
+
+test("isProjectSessionBranchMerged delegates to deps.isBranchMerged with repoPath and the session slug as branch name", async () => {
+  const calls: Array<[string, string]> = [];
+  const deps = makeDeps({
+    isBranchMerged: async (repoPath, branchName) => {
+      calls.push([repoPath, branchName]);
+      return false;
+    },
+  });
+
+  const merged = await isProjectSessionBranchMerged(PROJECT, "feature-x", deps);
+
+  assert.equal(merged, false);
+  assert.deepEqual(calls, [["/repo", "feature-x"]]);
 });
 
 test("killProjectSessionSplit kills only the split pane's linked session", async () => {

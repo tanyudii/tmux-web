@@ -46,6 +46,9 @@ export interface ProjectSessionsDeps {
   sendKeys: (name: string, text: string) => Promise<void>;
   addWorktree: (repoPath: string, worktreePath: string, branchName: string, onProgress?: (message: string) => void) => Promise<void>;
   removeWorktree: (repoPath: string, worktreePath: string, options?: RemoveWorktreeOptions) => Promise<void>;
+  // EMB-207 auto-delete branch on session delete.
+  isBranchMerged: (repoPath: string, branchName: string) => Promise<boolean>;
+  deleteBranch: (repoPath: string, branchName: string) => Promise<void>;
   getChangedFiles: (worktreePath: string) => Promise<GroupedChanges>;
   getFileDiff: (worktreePath: string, filePath: string, mode: DiffMode) => Promise<FileDiff>;
   stageFile: (worktreePath: string, filePath: string) => Promise<void>;
@@ -217,11 +220,22 @@ export async function getSessionCreationStatus(
   return status;
 }
 
+export interface KillProjectSessionOptions extends RemoveWorktreeOptions {
+  // EMB-207: after the worktree is removed, also force-delete the branch
+  // (git branch -D) that was created for this session. The frontend is
+  // responsible for the two-tier confirmation this implies (default OFF,
+  // plus a distinct warning for an unmerged branch via
+  // isProjectSessionBranchMerged below) *before* setting this -- by the
+  // time this flag is true, the caller has already gotten whatever
+  // confirmation it needed, so this always force-deletes unconditionally.
+  deleteBranch?: boolean;
+}
+
 export async function killProjectSession(
   project: Project,
   sessionSlug: string,
   deps: ProjectSessionsDeps,
-  options: RemoveWorktreeOptions = {},
+  options: KillProjectSessionOptions = {},
 ): Promise<void> {
   const fullName = buildFullNameOrThrowValidation(project, sessionSlug);
 
@@ -248,6 +262,22 @@ export async function killProjectSession(
 
   const worktreePath = resolveWorktreePath(project.id, sessionSlug, deps.worktreesRoot);
   await deps.removeWorktree(project.repoPath, worktreePath, options);
+
+  if (options.deleteBranch) {
+    await deps.deleteBranch(project.repoPath, sessionSlug);
+  }
+}
+
+// EMB-207: backs the "Delete branch too" checkbox's warning UI -- called
+// (read-only, no deletion) before the user commits to deleting a session's
+// branch, so an unmerged branch can be flagged with an extra confirmation
+// step *before* anything destructive happens, not discovered after.
+export async function isProjectSessionBranchMerged(
+  project: Project,
+  sessionSlug: string,
+  deps: ProjectSessionsDeps,
+): Promise<boolean> {
+  return deps.isBranchMerged(project.repoPath, sessionSlug);
 }
 
 // Closing a split pane in the UI (as opposed to a network blip / tab close,

@@ -12,6 +12,8 @@ class FakeSessionsRepository(initialSessions: List<ProjectSession> = emptyList()
     var startCreationError: Throwable? = null
     var closeSplitPaneError: Throwable? = null
     val closeSplitPaneCalls = mutableListOf<Pair<String, String>>()
+    var branchMerged = true
+    val deleteSessionCalls = mutableListOf<Triple<String, Boolean, Boolean>>()
 
     /** Queue of statuses `sessionCreationStatus` returns in order, one per poll tick. */
     val creationStatusQueue = ArrayDeque<Result<SessionCreationStatus>>()
@@ -38,7 +40,8 @@ class FakeSessionsRepository(initialSessions: List<ProjectSession> = emptyList()
         return next.getOrThrow()
     }
 
-    override suspend fun deleteSession(projectId: String, sessionName: String, force: Boolean) {
+    override suspend fun deleteSession(projectId: String, sessionName: String, force: Boolean, deleteBranch: Boolean) {
+        deleteSessionCalls.add(Triple(sessionName, force, deleteBranch))
         deleteError?.let { throw it }
         sessions.removeAll { it.name == sessionName }
     }
@@ -47,4 +50,6 @@ class FakeSessionsRepository(initialSessions: List<ProjectSession> = emptyList()
         closeSplitPaneError?.let { throw it }
         closeSplitPaneCalls.add(projectId to sessionName)
     }
+
+    override suspend fun isBranchMerged(projectId: String, sessionName: String): Boolean = branchMerged
 }

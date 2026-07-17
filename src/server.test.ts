@@ -73,6 +73,7 @@ function makeDeps(overrides: Partial<ServerDeps> = {}): ServerDeps {
     getProjectSessionCreationStatus: async () => ({ phase: "creating" }),
     killProjectSession: async () => {},
     killProjectSessionSplit: async () => {},
+    isProjectSessionBranchMerged: async () => true,
     getProjectSessionChanges: async () => ({ staged: [], unstaged: [], untracked: [], conflicted: [], repoState: "clean" }),
     getProjectSessionDiff: async () => ({ diff: "", isUntracked: false, isBinary: false }),
     stageProjectSessionFile: async () => {},
@@ -502,6 +503,68 @@ test("DELETE /api/projects/:id/sessions/:name?force=true passes force through", 
     });
     assert.equal(res.status, 204);
     assert.deepEqual(calls, [true]);
+  });
+});
+
+test("DELETE /api/projects/:id/sessions/:name defaults deleteBranch to false", async () => {
+  const calls: boolean[] = [];
+  const deps = makeDeps({
+    killProjectSession: async (_project: Project, _slug: string, options: { deleteBranch?: boolean }) => {
+      calls.push(Boolean(options.deleteBranch));
+    },
+  });
+  await withServer(deps, async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/projects/${SAMPLE_PROJECT.id}/sessions/feature-x`, {
+      method: "DELETE",
+      headers: authHeaders(),
+    });
+    assert.equal(res.status, 204);
+    assert.deepEqual(calls, [false]);
+  });
+});
+
+test("DELETE /api/projects/:id/sessions/:name?deleteBranch=true passes deleteBranch through", async () => {
+  const calls: boolean[] = [];
+  const deps = makeDeps({
+    killProjectSession: async (_project: Project, _slug: string, options: { deleteBranch?: boolean }) => {
+      calls.push(Boolean(options.deleteBranch));
+    },
+  });
+  await withServer(deps, async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/projects/${SAMPLE_PROJECT.id}/sessions/feature-x?deleteBranch=true`, {
+      method: "DELETE",
+      headers: authHeaders(),
+    });
+    assert.equal(res.status, 204);
+    assert.deepEqual(calls, [true]);
+  });
+});
+
+test("GET /api/projects/:id/sessions/:name/branch-merged without a token returns 401", async () => {
+  await withServer(makeDeps(), async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/projects/${SAMPLE_PROJECT.id}/sessions/feature-x/branch-merged`);
+    assert.equal(res.status, 401);
+  });
+});
+
+test("GET /api/projects/:id/sessions/:name/branch-merged returns the merge status", async () => {
+  const deps = makeDeps({ isProjectSessionBranchMerged: async () => false });
+  await withServer(deps, async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/projects/${SAMPLE_PROJECT.id}/sessions/feature-x/branch-merged`, {
+      headers: authHeaders(),
+    });
+    assert.equal(res.status, 200);
+    const body = (await res.json()) as { merged: boolean };
+    assert.equal(body.merged, false);
+  });
+});
+
+test("GET /api/projects/:id/sessions/:name/branch-merged returns 404 for an unknown project", async () => {
+  await withServer(makeDeps(), async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/projects/unknown-id/sessions/feature-x/branch-merged`, {
+      headers: authHeaders(),
+    });
+    assert.equal(res.status, 404);
   });
 });
 

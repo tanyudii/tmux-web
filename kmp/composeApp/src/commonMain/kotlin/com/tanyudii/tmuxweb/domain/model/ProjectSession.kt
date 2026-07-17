@@ -21,3 +21,7 @@ data class SessionListResponse(val sessions: List<ProjectSession>)
 
 @Serializable
 data class NewSessionRequest(val name: String, val startupCommand: String? = null)
+
+/** Mirrors the `{merged}` body of `GET .../branch-merged` (src/server.ts, EMB-207). */
+@Serializable
+data class BranchMergedResponse(val merged: Boolean)

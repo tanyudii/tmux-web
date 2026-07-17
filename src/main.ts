@@ -31,7 +31,7 @@ import {
   removeProject as removeProjectImpl,
   getProject as getProjectImpl,
 } from "./projects.ts";
-import { isGitRepo, addWorktree, removeWorktree } from "./worktree.ts";
+import { isGitRepo, addWorktree, removeWorktree, isBranchMerged, deleteBranch } from "./worktree.ts";
 import { listDirectory as listDirectoryImpl } from "./directory-browser.ts";
 import { getChangedFiles, getFileDiff, stageFile, unstageFile, discardFile, commitStaged } from "./git-status.ts";
 import {
@@ -41,6 +41,7 @@ import {
   createSessionCreationStore,
   killProjectSession as killProjectSessionImpl,
   killProjectSessionSplit as killProjectSessionSplitImpl,
+  isProjectSessionBranchMerged as isProjectSessionBranchMergedImpl,
   getProjectSessionChanges as getProjectSessionChangesImpl,
   getProjectSessionDiff as getProjectSessionDiffImpl,
   stageProjectSessionFile as stageProjectSessionFileImpl,
@@ -176,6 +177,8 @@ export async function main(): Promise<void> {
     sendKeys: sendKeysToSession,
     addWorktree,
     removeWorktree,
+    isBranchMerged,
+    deleteBranch,
     getChangedFiles,
     getFileDiff,
     stageFile,
@@ -245,6 +248,8 @@ export async function main(): Promise<void> {
       killProjectSessionImpl(project, slug, projectSessionsDeps, options),
     killProjectSessionSplit: (project, slug) =>
       killProjectSessionSplitImpl(project, slug, projectSessionsDeps),
+    isProjectSessionBranchMerged: (project, slug) =>
+      isProjectSessionBranchMergedImpl(project, slug, projectSessionsDeps),
 
     getProjectSessionChanges: (project, slug) =>
       getProjectSessionChangesImpl(project, slug, projectSessionsDeps),

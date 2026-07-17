@@ -1,6 +1,7 @@
 package com.tanyudii.tmuxweb.domain.repository
 
 import com.tanyudii.tmuxweb.data.remote.TmuxWebHttpClient
+import com.tanyudii.tmuxweb.domain.model.BranchMergedResponse
 import com.tanyudii.tmuxweb.domain.model.NewSessionRequest
 import com.tanyudii.tmuxweb.domain.model.PendingSessionCreation
 import com.tanyudii.tmuxweb.domain.model.ProjectSession
@@ -16,10 +17,18 @@ interface SessionsRepository {
         startupCommand: String? = null,
     ): PendingSessionCreation
     suspend fun sessionCreationStatus(projectId: String, sessionName: String): SessionCreationStatus
-    suspend fun deleteSession(projectId: String, sessionName: String, force: Boolean = false)
+    suspend fun deleteSession(
+        projectId: String,
+        sessionName: String,
+        force: Boolean = false,
+        deleteBranch: Boolean = false,
+    )
 
     /** Tears down the EMB-217 split viewport's linked tmux session -- see killProjectSessionSplit (src/server.ts). */
     suspend fun closeSplitPane(projectId: String, sessionName: String)
+
+    /** EMB-207: read-only pre-check backing the "Delete branch too" checkbox's unmerged-branch warning. */
+    suspend fun isBranchMerged(projectId: String, sessionName: String): Boolean
 }
 
 class KtorSessionsRepository(private val client: TmuxWebHttpClient) : SessionsRepository {
@@ -36,14 +45,18 @@ class KtorSessionsRepository(private val client: TmuxWebHttpClient) : SessionsRe
     override suspend fun sessionCreationStatus(projectId: String, sessionName: String): SessionCreationStatus =
         client.getJson("/api/projects/$projectId/sessions/$sessionName/creation")
 
-    override suspend fun deleteSession(projectId: String, sessionName: String, force: Boolean) {
-        client.delete(
-            "/api/projects/$projectId/sessions/$sessionName",
-            if (force) mapOf("force" to "true") else emptyMap(),
-        )
+    override suspend fun deleteSession(projectId: String, sessionName: String, force: Boolean, deleteBranch: Boolean) {
+        val params = buildMap {
+            if (force) put("force", "true")
+            if (deleteBranch) put("deleteBranch", "true")
+        }
+        client.delete("/api/projects/$projectId/sessions/$sessionName", params)
     }
 
     override suspend fun closeSplitPane(projectId: String, sessionName: String) {
         client.delete("/api/projects/$projectId/sessions/$sessionName/split")
     }
+
+    override suspend fun isBranchMerged(projectId: String, sessionName: String): Boolean =
+        client.getJson<BranchMergedResponse>("/api/projects/$projectId/sessions/$sessionName/branch-merged").merged
 }

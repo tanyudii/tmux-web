@@ -11,10 +11,12 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -304,13 +306,64 @@ private fun WebShellDialogs(state: WebShellUiState, viewModel: WebShellViewModel
     }
     state.pendingDelete?.let { pending ->
         val (title, message) = pendingDeleteCopy(pending)
+        val isUnmergedSessionDelete = pending is WebShellUiState.PendingDelete.OfSession &&
+            pending.deleteBranch && pending.branchMergeChecked && pending.branchMerged == false
         TmuxConfirmDialog(
             title = title,
             message = message,
             force = pending.forced,
+            confirmLabel = if (isUnmergedSessionDelete) "Delete anyway" else "Delete",
             onConfirm = viewModel::confirmPendingDelete,
             onCancel = viewModel::cancelPendingDelete,
+            content = (pending as? WebShellUiState.PendingDelete.OfSession)?.let { session ->
+                { DeleteBranchOption(session, onToggle = viewModel::setDeleteBranchOnSessionDelete) }
+            },
         )
+    }
+}
+
+/**
+ * EMB-207: "Delete branch too" checkbox + inline unmerged-branch warning,
+ * shown inside [TmuxConfirmDialog]'s content slot.
+ */
+@Composable
+private fun ColumnScope.DeleteBranchOption(
+    pending: WebShellUiState.PendingDelete.OfSession,
+    onToggle: (Boolean) -> Unit,
+) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier.fillMaxWidth().padding(top = 12.dp).clickable { onToggle(!pending.deleteBranch) },
+    ) {
+        Checkbox(checked = pending.deleteBranch, onCheckedChange = onToggle)
+        Text(
+            "Delete branch too",
+            color = TmuxColors.textSecondary,
+            fontFamily = TmuxFonts.sans,
+            fontSize = TmuxTextSize.sm,
+        )
+    }
+    if (pending.deleteBranch && pending.branchMergeChecked && pending.branchMerged == false) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.fillMaxWidth().padding(top = 8.dp)
+                .background(TmuxColors.amberGlow, RoundedCornerShape(TmuxRadius.sm))
+                .padding(horizontal = 10.dp, vertical = 8.dp),
+        ) {
+            Icon(
+                TmuxIcons.Alert,
+                contentDescription = null,
+                tint = TmuxColors.amber500,
+                modifier = Modifier.size(14.dp),
+            )
+            Text(
+                "This branch isn't merged -- deleting it discards its commits permanently.",
+                color = TmuxColors.amber500,
+                fontFamily = TmuxFonts.mono,
+                fontSize = TmuxTextSize.xs,
+                modifier = Modifier.padding(start = 8.dp),
+            )
+        }
     }
 }
 

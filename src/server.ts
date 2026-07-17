@@ -63,9 +63,13 @@ export interface ServerDeps {
   killProjectSession: (
     project: Project,
     sessionSlug: string,
-    options: { force?: boolean },
+    options: { force?: boolean; deleteBranch?: boolean },
   ) => Promise<void>;
   killProjectSessionSplit: (project: Project, sessionSlug: string) => Promise<void>;
+  // EMB-207: read-only pre-check backing the "Delete branch too" checkbox's
+  // unmerged-branch warning -- see project-sessions.ts's
+  // isProjectSessionBranchMerged.
+  isProjectSessionBranchMerged: (project: Project, sessionSlug: string) => Promise<boolean>;
 
   // EMB-220 session templates.
   listProjectTemplates: (project: Project) => Promise<SessionTemplate[]>;
@@ -548,14 +552,36 @@ export function createServer(deps: ServerDeps): Server {
 
         const sessionSlug = decodeURIComponent(sessionDeleteMatch[2]);
         const force = isTruthy(url.searchParams.get("force"));
+        const deleteBranch = isTruthy(url.searchParams.get("deleteBranch"));
 
         try {
-          await deps.killProjectSession(project, sessionSlug, { force });
+          await deps.killProjectSession(project, sessionSlug, { force, deleteBranch });
         } catch (error) {
           if (sendMappedError(res, error)) return;
           throw error;
         }
         return sendEmpty(res, 204);
+      }
+
+      // EMB-207: read-only merge check the frontend calls when the user
+      // checks "Delete branch too", so an unmerged branch can be flagged
+      // with a distinct warning before the (already force-deleting) DELETE
+      // request above is ever sent.
+      const branchMergedMatch = path.match(/^\/api\/projects\/([^/]+)\/sessions\/([^/]+)\/branch-merged$/);
+      if (branchMergedMatch && req.method === "GET") {
+        if (!checkAuthorized(req, res, deps.token, clientIp, authFailureLimiter, deps.accessLogPath)) return;
+
+        const project = await deps.getProject(decodeURIComponent(branchMergedMatch[1]));
+        if (!project) return sendJson(res, 404, { error: "Project not found" });
+
+        const sessionSlug = decodeURIComponent(branchMergedMatch[2]);
+        try {
+          const merged = await deps.isProjectSessionBranchMerged(project, sessionSlug);
+          return sendJson(res, 200, { merged });
+        } catch (error) {
+          if (sendMappedError(res, error)) return;
+          throw error;
+        }
       }
 
       // EMB-217: tears down the split pane's linked tmux session -- see
