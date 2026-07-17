@@ -227,6 +227,7 @@ private fun MainContent(
                     onResize = terminal::onResize,
                     handleReady = terminal.onHandleReady,
                     isVisible = terminalVisible,
+                    onScroll = terminal::onScroll,
                 )
             }
         }
