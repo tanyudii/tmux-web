@@ -36,7 +36,7 @@ import {
 } from "./project-sessions.ts";
 import { loadEnvConfig } from "./env-config.ts";
 import { listEnvFiles, readEnvFile, writeEnvFile } from "./env-editor.ts";
-import { composeUp, composeDown, composePs, composePort } from "./docker-compose.ts";
+import { composeUp, composeDown, composePs, composePort, checkPortCollisions } from "./docker-compose.ts";
 import { runScript } from "./run-script.ts";
 import {
   getSessionEnvStatus as getSessionEnvStatusImpl,
@@ -109,6 +109,7 @@ export async function main(): Promise<void> {
     composeDown,
     composePs,
     composePort,
+    checkPortCollisions,
     worktreesRoot,
   };
   const sessionEnvStore = createSessionEnvStore();

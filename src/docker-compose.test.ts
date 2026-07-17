@@ -6,7 +6,11 @@ import {
   composePs,
   composePort,
   composeLogsArgs,
+  resolveConfiguredPorts,
+  getHostBoundPorts,
+  checkPortCollisions,
   DockerComposeError,
+  PortCollisionError,
   type ComposeContext,
 } from "./docker-compose.ts";
 
@@ -132,4 +136,98 @@ test("composeLogsArgs builds a follow+tail command scoped to the session, withou
 
 test("composeLogsArgs appends the service name when filtering to a single service", () => {
   assert.deepEqual(composeLogsArgs(ctx, "web"), [...baseArgs(), "logs", "--follow", "--tail=200", "web"]);
+});
+
+test("resolveConfiguredPorts extracts published host ports from `docker compose config --format json`, string or number", async () => {
+  const calls: string[][] = [];
+  const fakeExec = async (_file: string, args: string[]) => {
+    calls.push(args);
+    return {
+      stdout: JSON.stringify({
+        services: {
+          web: { ports: [{ published: "3000", target: 3000 }] },
+          db: { ports: [{ published: 5432, target: 5432 }] },
+          worker: { ports: [{ target: 9000 }] },
+        },
+      }),
+      stderr: "",
+    };
+  };
+
+  const ports = await resolveConfiguredPorts(ctx, fakeExec);
+
+  assert.deepEqual(ports.sort(), [3000, 5432]);
+  assert.deepEqual(calls[0], [...baseArgs(), "config", "--format", "json"]);
+});
+
+test("resolveConfiguredPorts returns an empty array when no service publishes a fixed port", async () => {
+  const fakeExec = async () => ({ stdout: JSON.stringify({ services: {} }), stderr: "" });
+
+  const ports = await resolveConfiguredPorts(ctx, fakeExec);
+
+  assert.deepEqual(ports, []);
+});
+
+test("resolveConfiguredPorts wraps exec failures in DockerComposeError", async () => {
+  const fakeExec = async () => {
+    throw new Error("daemon not running");
+  };
+
+  await assert.rejects(() => resolveConfiguredPorts(ctx, fakeExec), DockerComposeError);
+});
+
+test("getHostBoundPorts parses host ports from `docker ps --format {{.Ports}}`", async () => {
+  const calls: string[][] = [];
+  const fakeExec = async (_file: string, args: string[]) => {
+    calls.push(args);
+    return { stdout: "0.0.0.0:3000->3000/tcp, :::3000->3000/tcp\n0.0.0.0:5432->5432/tcp\n", stderr: "" };
+  };
+
+  const ports = await getHostBoundPorts(fakeExec);
+
+  assert.deepEqual([...ports].sort(), [3000, 5432]);
+  assert.deepEqual(calls[0], ["ps", "--format", "{{.Ports}}"]);
+});
+
+test("getHostBoundPorts wraps exec failures in DockerComposeError", async () => {
+  const fakeExec = async () => {
+    throw new Error("daemon not running");
+  };
+
+  await assert.rejects(() => getHostBoundPorts(fakeExec), DockerComposeError);
+});
+
+test("checkPortCollisions throws PortCollisionError when a configured port is already bound", async () => {
+  const fakeExec = async (_file: string, args: string[]) => {
+    if (args.includes("config")) {
+      return { stdout: JSON.stringify({ services: { web: { ports: [{ published: "3000" }] } } }), stderr: "" };
+    }
+    return { stdout: "0.0.0.0:3000->3000/tcp\n", stderr: "" };
+  };
+
+  await assert.rejects(() => checkPortCollisions(ctx, fakeExec), PortCollisionError);
+});
+
+test("checkPortCollisions resolves without error when no configured port is already bound", async () => {
+  const fakeExec = async (_file: string, args: string[]) => {
+    if (args.includes("config")) {
+      return { stdout: JSON.stringify({ services: { web: { ports: [{ published: "3000" }] } } }), stderr: "" };
+    }
+    return { stdout: "0.0.0.0:4000->4000/tcp\n", stderr: "" };
+  };
+
+  await checkPortCollisions(ctx, fakeExec);
+});
+
+test("checkPortCollisions never calls `docker ps` when the compose file pins no host ports", async () => {
+  let psCalled = false;
+  const fakeExec = async (_file: string, args: string[]) => {
+    if (args.includes("config")) return { stdout: JSON.stringify({ services: {} }), stderr: "" };
+    psCalled = true;
+    return { stdout: "", stderr: "" };
+  };
+
+  await checkPortCollisions(ctx, fakeExec);
+
+  assert.equal(psCalled, false);
 });

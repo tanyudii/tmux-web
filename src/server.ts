@@ -35,6 +35,7 @@ import {
 } from "./session-env.ts";
 import { EnvConfigError } from "./env-config.ts";
 import { EnvEditorError, EnvFileNotFoundError, EnvFileValidationError, type EnvFileEntry } from "./env-editor.ts";
+import { PortCollisionError } from "./docker-compose.ts";
 import { RateLimiter, type RateLimiterOptions } from "./rate-limit.ts";
 
 const DIFF_MODES: readonly DiffMode[] = ["staged", "unstaged", "untracked"];
@@ -209,7 +210,12 @@ function sendMappedError(res: ServerResponse, error: unknown): boolean {
     sendJson(res, 404, { error: error.message });
     return true;
   }
-  if (error instanceof EnvAlreadyRunningError || error instanceof EnvNotRunningError || error instanceof EnvNotStartingError) {
+  if (
+    error instanceof EnvAlreadyRunningError ||
+    error instanceof EnvNotRunningError ||
+    error instanceof EnvNotStartingError ||
+    error instanceof PortCollisionError
+  ) {
     sendJson(res, 409, { error: error.message });
     return true;
   }

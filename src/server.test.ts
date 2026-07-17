@@ -18,6 +18,7 @@ import {
   type EnvStatus,
 } from "./session-env.ts";
 import { EnvConfigError } from "./env-config.ts";
+import { PortCollisionError } from "./docker-compose.ts";
 import { SessionCreationNotFoundError, type SessionCreationStatus } from "./project-sessions.ts";
 import {
   InvalidDirectoryPathError,
@@ -1061,6 +1062,23 @@ test("POST /api/projects/:id/sessions/:name/env returns 409 when already running
       headers: authHeaders(),
     });
     assert.equal(res.status, 409);
+  });
+});
+
+test("POST /api/projects/:id/sessions/:name/env returns 409 for a port collision (PortCollisionError)", async () => {
+  const deps = makeDeps({
+    startProjectSessionEnv: async () => {
+      throw new PortCollisionError("Port 3000 is already in use by another running container");
+    },
+  });
+  await withServer(deps, async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/projects/${SAMPLE_PROJECT.id}/sessions/feature-x/env`, {
+      method: "POST",
+      headers: authHeaders(),
+    });
+    assert.equal(res.status, 409);
+    const body = await res.json();
+    assert.match(body.error, /already in use/);
   });
 });
 

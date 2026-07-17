@@ -62,6 +62,7 @@ export interface SessionEnvDeps {
   composeDown: (ctx: ComposeContext) => Promise<void>;
   composePs: (ctx: ComposeContext) => Promise<ComposeServiceStatus[]>;
   composePort: (ctx: ComposeContext, service: string, containerPort: number) => Promise<number | null>;
+  checkPortCollisions: (ctx: ComposeContext) => Promise<void>;
   worktreesRoot?: string;
   openHost?: string;
 }
@@ -193,6 +194,13 @@ export async function startSessionEnv(
   if ((await safeComposePs(deps, ctx)).length > 0) {
     store.delete(fullName);
     throw new EnvAlreadyRunningError(`Environment for "${sessionSlug}" is already running`);
+  }
+
+  try {
+    await deps.checkPortCollisions(ctx);
+  } catch (error) {
+    store.delete(fullName);
+    throw error;
   }
 
   const controller = new AbortController();

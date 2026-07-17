@@ -43,6 +43,7 @@ function makeDeps(overrides: Partial<SessionEnvDeps> = {}): SessionEnvDeps {
     composeDown: async () => {},
     composePs: async () => [],
     composePort: async () => null,
+    checkPortCollisions: async () => {},
     worktreesRoot: "/data/worktrees",
     ...overrides,
   };
@@ -240,6 +241,26 @@ test("startSessionEnv throws EnvAlreadyRunningError when containers are already 
   const controllers = createSessionEnvControllerStore();
 
   await assert.rejects(() => startSessionEnv(PROJECT, "feature-x", deps, store, controllers), EnvAlreadyRunningError);
+});
+
+test("startSessionEnv propagates PortCollisionError from checkPortCollisions and never runs compose up", async () => {
+  class PortCollisionError extends Error {}
+  let composeUpCalled = false;
+  const deps = makeDeps({
+    composeUp: async () => {
+      composeUpCalled = true;
+    },
+    checkPortCollisions: async () => {
+      throw new PortCollisionError("Port 3000 is already in use by another running container");
+    },
+  });
+  const store = createSessionEnvStore();
+  const controllers = createSessionEnvControllerStore();
+
+  await assert.rejects(() => startSessionEnv(PROJECT, "feature-x", deps, store, controllers), PortCollisionError);
+
+  assert.equal(composeUpCalled, false);
+  assert.equal(store.has(FULL_NAME), false);
 });
 
 test("startSessionEnv throws EnvAlreadyRunningError when already starting", async () => {

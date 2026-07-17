@@ -137,3 +137,83 @@ export async function composePort(
   const match = stdout.trim().match(/:(\d+)\s*$/m);
   return match ? Number.parseInt(match[1], 10) : null;
 }
+
+export class PortCollisionError extends DockerComposeError {}
+
+interface ComposeConfigPort {
+  published?: string | number;
+}
+
+interface ComposeConfigService {
+  ports?: ComposeConfigPort[];
+}
+
+interface ComposeConfigJson {
+  services?: Record<string, ComposeConfigService>;
+}
+
+// Resolves the FIXED host ports this compose file declares (`ports:
+// ["3000:3000"]` etc, after full interpolation/merge) -- via the real
+// `docker compose config --format json`, not a hand-rolled YAML parser
+// (same "shell out to the real tool" pattern as validateComposeFile in
+// env-editor.ts). Ephemeral/auto-assigned ports (no host port specified)
+// never appear here, so they're correctly excluded from collision checks --
+// only a session that pins a specific host port can collide with another.
+export async function resolveConfiguredPorts(ctx: ComposeContext, exec: ExecFn = defaultExec): Promise<number[]> {
+  let stdout: string;
+  try {
+    ({ stdout } = await exec("docker", [...baseArgs(ctx), "config", "--format", "json"]));
+  } catch (error) {
+    throw new DockerComposeError(messageOf(error));
+  }
+
+  const parsed = JSON.parse(stdout) as ComposeConfigJson;
+  const ports: number[] = [];
+  for (const service of Object.values(parsed.services ?? {})) {
+    for (const portDef of service.ports ?? []) {
+      if (portDef.published === undefined || portDef.published === "") continue;
+      const port = typeof portDef.published === "string" ? Number.parseInt(portDef.published, 10) : portDef.published;
+      if (Number.isInteger(port)) ports.push(port);
+    }
+  }
+  return ports;
+}
+
+// Every host port any OTHER running container currently has bound --
+// scoped to the whole docker daemon (not just tmux-web-managed sessions),
+// since that's what `docker compose up` will actually collide with,
+// regardless of what started the other container.
+export async function getHostBoundPorts(exec: ExecFn = defaultExec): Promise<Set<number>> {
+  let stdout: string;
+  try {
+    ({ stdout } = await exec("docker", ["ps", "--format", "{{.Ports}}"]));
+  } catch (error) {
+    throw new DockerComposeError(messageOf(error));
+  }
+
+  const ports = new Set<number>();
+  for (const match of stdout.matchAll(/:(\d+)->/g)) {
+    ports.add(Number.parseInt(match[1], 10));
+  }
+  return ports;
+}
+
+/**
+ * Throws [PortCollisionError] if any host port this compose file pins is
+ * already bound by another running container -- called before `composeUp`
+ * so the failure is immediate and clearly attributed, instead of surfacing
+ * as docker's own opaque "port is already allocated" error after the
+ * containers have partially started. EMB-211.
+ */
+export async function checkPortCollisions(ctx: ComposeContext, exec: ExecFn = defaultExec): Promise<void> {
+  const configuredPorts = await resolveConfiguredPorts(ctx, exec);
+  if (configuredPorts.length === 0) return;
+
+  const usedPorts = await getHostBoundPorts(exec);
+  const collision = configuredPorts.find((port) => usedPorts.has(port));
+  if (collision !== undefined) {
+    throw new PortCollisionError(
+      `Port ${collision} is already in use by another running container -- stop it or change the port in this session's docker-compose.yml`,
+    );
+  }
+}
