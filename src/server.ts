@@ -162,6 +162,21 @@ function sendMappedError(res: ServerResponse, error: unknown): boolean {
   return false;
 }
 
+// The wasmJs build's webpack output fingerprints its two big .wasm bundles
+// with a content hash as the entire filename (e.g.
+// "6e23e5428398b92da386.wasm") -- a new deploy always ships a new filename
+// for those, so they're safe to cache forever. Nothing else in the build
+// is fingerprinted the same way (composeApp.js, index.html, and vendor/*
+// keep fixed names across deploys), so caching those long-term would leave
+// a browser serving a stale index.html/JS pair indefinitely after a
+// deploy, with no way for it to know a new version exists.
+const CONTENT_HASHED_FILENAME = /^[0-9a-f]{16,}\.[^.]+$/i;
+
+function cacheControlFor(filePath: string): string {
+  const basename = filePath.slice(filePath.lastIndexOf("/") + 1);
+  return CONTENT_HASHED_FILENAME.test(basename) ? "public, max-age=31536000, immutable" : "no-cache";
+}
+
 async function serveStatic(publicDir: string, urlPath: string, res: ServerResponse): Promise<boolean> {
   const relativePath = urlPath === "/" ? "/index.html" : urlPath;
   // Strip any leading ../ segments so a crafted path can't escape publicDir.
@@ -172,7 +187,10 @@ async function serveStatic(publicDir: string, urlPath: string, res: ServerRespon
   try {
     const data = await readFile(filePath);
     const ext = filePath.slice(filePath.lastIndexOf("."));
-    res.writeHead(200, { "Content-Type": MIME_TYPES[ext] ?? "application/octet-stream" });
+    res.writeHead(200, {
+      "Content-Type": MIME_TYPES[ext] ?? "application/octet-stream",
+      "Cache-Control": cacheControlFor(filePath),
+    });
     res.end(data);
     return true;
   } catch {
