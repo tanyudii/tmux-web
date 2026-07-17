@@ -20,6 +20,8 @@ import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.KeyboardArrowDown
 import androidx.compose.material.icons.outlined.Link
 import androidx.compose.material.icons.outlined.MoreVert
+import androidx.compose.material.icons.outlined.Notifications
+import androidx.compose.material.icons.outlined.NotificationsOff
 import androidx.compose.material.icons.outlined.PlayArrow
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Remove
@@ -73,4 +75,6 @@ object TmuxIcons {
     val ExternalLink: ImageVector = Icons.AutoMirrored.Outlined.OpenInNew
     val Edit: ImageVector = Icons.Outlined.Edit
     val Logs: ImageVector = Icons.AutoMirrored.Outlined.Article
+    val Bell: ImageVector = Icons.Outlined.Notifications
+    val BellOff: ImageVector = Icons.Outlined.NotificationsOff
 }

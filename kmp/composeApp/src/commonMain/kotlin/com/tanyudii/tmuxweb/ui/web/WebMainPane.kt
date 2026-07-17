@@ -43,6 +43,7 @@ import com.tanyudii.tmuxweb.presentation.EnvFileEditorViewModel
 import com.tanyudii.tmuxweb.presentation.LogsViewModel
 import com.tanyudii.tmuxweb.terminal.PlatformTerminalView
 import com.tanyudii.tmuxweb.terminal.observeAppForeground
+import com.tanyudii.tmuxweb.ui.components.PushNotificationToggle
 import com.tanyudii.tmuxweb.ui.components.TmuxButton
 import com.tanyudii.tmuxweb.ui.components.TmuxButtonVariant
 import com.tanyudii.tmuxweb.ui.components.TmuxConnectionBanner
@@ -453,6 +454,7 @@ private fun TopBar(
             onViewLogs = onViewLogs,
             onOpenChanged = onEnvironmentMenuOpenChanged,
         )
+        PushNotificationToggle()
         TmuxIconButton(
             TmuxIcons.GitBranch,
             "Changes",

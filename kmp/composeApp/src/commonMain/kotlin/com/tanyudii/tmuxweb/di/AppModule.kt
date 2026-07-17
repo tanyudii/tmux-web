@@ -19,8 +19,10 @@ import com.tanyudii.tmuxweb.domain.repository.KtorBrowseRepository
 import com.tanyudii.tmuxweb.domain.repository.KtorChangesRepository
 import com.tanyudii.tmuxweb.domain.repository.KtorEnvironmentRepository
 import com.tanyudii.tmuxweb.domain.repository.KtorProjectsRepository
+import com.tanyudii.tmuxweb.domain.repository.KtorPushNotificationRepository
 import com.tanyudii.tmuxweb.domain.repository.KtorSessionsRepository
 import com.tanyudii.tmuxweb.domain.repository.ProjectsRepository
+import com.tanyudii.tmuxweb.domain.repository.PushNotificationRepository
 import com.tanyudii.tmuxweb.domain.repository.SessionsRepository
 import io.ktor.client.HttpClient
 import org.koin.core.context.startKoin
@@ -54,6 +56,7 @@ val commonModule: Module = module {
     factory<ChangesRepository> { KtorChangesRepository(get()) }
     factory<EnvironmentRepository> { KtorEnvironmentRepository(get()) }
     factory<BrowseRepository> { KtorBrowseRepository(get()) }
+    factory<PushNotificationRepository> { KtorPushNotificationRepository(get()) }
 
     factory<TerminalSocket> {
         val settings = get<TmuxWebSessionHolder>().require()
