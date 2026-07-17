@@ -29,21 +29,6 @@
             overflow: hidden;
             background: #0d1117;
         }
-        body {
-            /* border-box so the safe-area padding below is carved out of
-               the 100dvh height already set above instead of adding to
-               it -- with the default content-box, that padding would
-               push body's total box taller than 100dvh and `overflow:
-               hidden` would then clip that same amount off the bottom
-               of #composeApp instead of fixing anything. */
-            box-sizing: border-box;
-            /* Fills the home-indicator safe area on notched/home-indicator
-               iPhones and iPads instead of leaving it as a visible gap
-               below the app's own background -- see viewport-fit=cover
-               above, required for env() to resolve to anything nonzero.
-               0 on devices without a safe area. */
-            padding-bottom: env(safe-area-inset-bottom);
-        }
         /* Compose mounts into this dedicated element (see main.kt), not
            into <body> directly -- without this anchor, the canvas's own
            measured size and body's size feed back into each other (body
@@ -58,6 +43,25 @@
            rounding gap. */
         #composeApp {
             height: 100%;
+            /* The safe-area compensation used to live on `body` as a
+               border-box + padding-bottom pair. That doesn't compose with
+               how this element is actually sized: applyVisualViewportSize()
+               below sets #composeApp's height directly from
+               `visualViewport.height` via inline style, which ignores
+               body's (shrunk-by-padding) content-box entirely. The result
+               was body reserving safe-area space that #composeApp's
+               inline height didn't know about -- #composeApp either
+               overflowed body's content box by exactly the safe-area
+               amount (silently clipped by body's `overflow: hidden`) or,
+               depending on layout timing, left that same strip looking
+               like unfilled padding at the bottom. Carving the safe area
+               out of #composeApp's OWN box instead (border-box, so this
+               padding-bottom is subtracted from the already-correct
+               `visualViewport.height`, not added on top of it) makes this
+               the single place that both sets and compensates the height,
+               so there's nothing left for a parent box to double-count. */
+            box-sizing: border-box;
+            padding-bottom: env(safe-area-inset-bottom);
         }
         /* xterm's own .xterm-viewport (vendor/xterm.css) keeps
            `overflow-y: scroll` always-on for its local scrollback buffer.
