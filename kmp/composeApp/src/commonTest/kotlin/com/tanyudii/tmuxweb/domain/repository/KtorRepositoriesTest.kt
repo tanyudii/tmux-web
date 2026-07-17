@@ -213,6 +213,7 @@ class KtorRepositoriesTest {
         assertEquals("npm run dev", templates.single().startupCommand)
     }
 
+    @Suppress("MaxLineLength") // JSON fixture reads better on one line than wrapped
     @Test
     fun `createTemplate sends POST with name and startupCommand and decodes the created template`() = runTest {
         val repo = KtorSessionTemplatesRepository(
@@ -239,6 +240,7 @@ class KtorRepositoriesTest {
         assertEquals("Template name must not be empty", error.serverMessage)
     }
 
+    @Suppress("MaxLineLength") // JSON fixture reads better on one line than wrapped
     @Test
     fun `updateTemplate sends PUT and decodes the returned body via decodeBody`() = runTest {
         val repo = KtorSessionTemplatesRepository(
@@ -270,5 +272,32 @@ class KtorRepositoriesTest {
 
         assertEquals("DELETE", capturedRequest.method.value)
         assertTrue(capturedRequest.url.encodedPath.endsWith("/templates/t1"))
+    }
+
+    // MARK: Access log (EMB-223)
+
+    @Suppress("MaxLineLength") // JSON fixture reads better on one line than wrapped
+    @Test
+    fun `listEntries decodes the entries envelope`() = runTest {
+        val repo = KtorAccessLogRepository(
+            client(
+                HttpStatusCode.OK,
+                """{"entries":[{"timestamp":"2026-01-01T00:00:00.000Z","ip":"203.0.113.5","method":"GET","path":"/api/projects","outcome":"authorized"}]}""",
+            ),
+        )
+
+        val entries = repo.listEntries()
+
+        assertEquals(1, entries.size)
+        assertEquals("authorized", entries.single().outcome)
+        assertEquals("/api/projects", entries.single().path)
+        assertEquals("Bearer test-token-0123456789", capturedRequest.headers[HttpHeaders.Authorization])
+    }
+
+    @Test
+    fun `listEntries unauthorized throws Unauthorized`() = runTest {
+        val repo = KtorAccessLogRepository(client(HttpStatusCode.Unauthorized, ""))
+
+        assertFailsWith<ApiError.Unauthorized> { repo.listEntries() }
     }
 }

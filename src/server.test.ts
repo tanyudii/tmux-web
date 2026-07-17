@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import type { Server } from "node:http";
 import { request as httpRequest } from "node:http";
 import { mkdtemp, writeFile, rm } from "node:fs/promises";
+import { readAccessLog } from "./access-log.ts";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createServer, type ServerDeps } from "./server.ts";
@@ -103,6 +104,7 @@ function makeDeps(overrides: Partial<ServerDeps> = {}): ServerDeps {
       startupCommand,
     }),
     deleteProjectTemplate: async () => {},
+    getAccessLog: async () => [],
     ...overrides,
   };
 }
@@ -1476,6 +1478,88 @@ test("POST /internal/bell without a session query param returns 400", async () =
   await withServer(makeDeps(), async (baseUrl) => {
     const res = await fetch(`${baseUrl}/internal/bell`, { method: "POST" });
     assert.equal(res.status, 400);
+  });
+});
+
+// --- Access audit log (EMB-223) ---
+
+async function withTempAccessLog(fn: (filePath: string) => Promise<void>): Promise<void> {
+  const dir = await mkdtemp(join(tmpdir(), "tmux-web-server-access-log-"));
+  try {
+    await fn(join(dir, "access.log"));
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}
+
+// checkAuthorized's log write is fire-and-forget (never awaited, so a slow
+// disk write can't add latency to the response) -- tests poll briefly
+// rather than assuming it's flushed the instant the HTTP response returns.
+async function waitForAccessLogEntries(filePath: string, count: number) {
+  for (let i = 0; i < 20; i++) {
+    const entries = await readAccessLog(filePath);
+    if (entries.length >= count) return entries;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error(`Timed out waiting for ${count} access log entries at ${filePath}`);
+}
+
+test("a successfully authorized request appends an 'authorized' entry to the access log", async () => {
+  await withTempAccessLog(async (filePath) => {
+    await withServer(makeDeps({ accessLogPath: filePath }), async (baseUrl) => {
+      const res = await fetch(`${baseUrl}/api/projects`, { headers: authHeaders() });
+      assert.equal(res.status, 200);
+
+      const entries = await waitForAccessLogEntries(filePath, 1);
+      assert.equal(entries[0].outcome, "authorized");
+      assert.equal(entries[0].path, "/api/projects");
+      assert.equal(entries[0].method, "GET");
+    });
+  });
+});
+
+test("a request with a bad token appends a 'denied' entry to the access log", async () => {
+  await withTempAccessLog(async (filePath) => {
+    await withServer(makeDeps({ accessLogPath: filePath }), async (baseUrl) => {
+      const res = await fetch(`${baseUrl}/api/projects`, { headers: authHeaders({ Authorization: "Bearer wrong" }) });
+      assert.equal(res.status, 401);
+
+      const entries = await waitForAccessLogEntries(filePath, 1);
+      assert.equal(entries[0].outcome, "denied");
+    });
+  });
+});
+
+test("no access log entry is written when accessLogPath is not configured", async () => {
+  await withTempAccessLog(async (filePath) => {
+    await withServer(makeDeps(), async (baseUrl) => {
+      const res = await fetch(`${baseUrl}/api/projects`, { headers: authHeaders() });
+      assert.equal(res.status, 200);
+      // Give the (nonexistent) fire-and-forget write a moment to have not happened.
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      assert.deepEqual(await readAccessLog(filePath), []);
+    });
+  });
+});
+
+test("GET /api/access-log without a token returns 401", async () => {
+  await withServer(makeDeps(), async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/access-log`);
+    assert.equal(res.status, 401);
+  });
+});
+
+test("GET /api/access-log returns entries from deps.getAccessLog", async () => {
+  const deps = makeDeps({
+    getAccessLog: async () => [
+      { timestamp: "2026-01-01T00:00:00.000Z", ip: "203.0.113.5", method: "GET", path: "/api/projects", outcome: "authorized" },
+    ],
+  });
+  await withServer(deps, async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/access-log`, { headers: authHeaders() });
+    assert.equal(res.status, 200);
+    const body = (await res.json()) as { entries: unknown[] };
+    assert.equal(body.entries.length, 1);
   });
 });
 

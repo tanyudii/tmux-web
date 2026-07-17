@@ -10,11 +10,13 @@ import com.tanyudii.tmuxweb.data.remote.logs.KtorLogsSocket
 import com.tanyudii.tmuxweb.data.remote.logs.LogsSocket
 import com.tanyudii.tmuxweb.data.remote.terminal.KtorTerminalSocket
 import com.tanyudii.tmuxweb.data.remote.terminal.TerminalSocket
+import com.tanyudii.tmuxweb.domain.repository.AccessLogRepository
 import com.tanyudii.tmuxweb.domain.repository.BrowseRepository
 import com.tanyudii.tmuxweb.domain.repository.ChangesRepository
 import com.tanyudii.tmuxweb.domain.repository.ConnectionSettingsStore
 import com.tanyudii.tmuxweb.domain.repository.DefaultConnectionSettingsStore
 import com.tanyudii.tmuxweb.domain.repository.EnvironmentRepository
+import com.tanyudii.tmuxweb.domain.repository.KtorAccessLogRepository
 import com.tanyudii.tmuxweb.domain.repository.KtorBrowseRepository
 import com.tanyudii.tmuxweb.domain.repository.KtorChangesRepository
 import com.tanyudii.tmuxweb.domain.repository.KtorEnvironmentRepository
@@ -56,6 +58,7 @@ val commonModule: Module = module {
     factory<ProjectsRepository> { KtorProjectsRepository(get()) }
     factory<SessionsRepository> { KtorSessionsRepository(get()) }
     factory<SessionTemplatesRepository> { KtorSessionTemplatesRepository(get()) }
+    factory<AccessLogRepository> { KtorAccessLogRepository(get()) }
     factory<ChangesRepository> { KtorChangesRepository(get()) }
     factory<EnvironmentRepository> { KtorEnvironmentRepository(get()) }
     factory<BrowseRepository> { KtorBrowseRepository(get()) }

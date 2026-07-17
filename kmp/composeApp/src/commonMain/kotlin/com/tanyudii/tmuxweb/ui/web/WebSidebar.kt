@@ -75,6 +75,7 @@ fun WebSidebar(
     onDeleteProject: (Project) -> Unit,
     onDeleteSession: (String, ProjectSession) -> Unit,
     onOpenSettings: () -> Unit,
+    onOpenAccessLog: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val width = if (state.sidebarCollapsed) TmuxSpacing.webSidebarCollapsedWidth else TmuxSpacing.webSidebarWidth
@@ -134,6 +135,7 @@ fun WebSidebar(
             serverHost = serverHost,
             onToggleCollapsed = onToggleCollapsed,
             onOpenSettings = onOpenSettings,
+            onOpenAccessLog = onOpenAccessLog,
         )
     }
 }
@@ -336,6 +338,7 @@ private fun SidebarFooter(
     serverHost: String,
     onToggleCollapsed: () -> Unit,
     onOpenSettings: () -> Unit,
+    onOpenAccessLog: () -> Unit,
 ) {
     Column(modifier = Modifier.fillMaxWidth().padding(TmuxSpacing.space3)) {
         if (!collapsed) {
@@ -345,6 +348,14 @@ private fun SidebarFooter(
                 subtitle = serverHost,
                 active = false,
                 onClick = onOpenSettings,
+                onDelete = {},
+            )
+            SidebarRow(
+                icon = TmuxIcons.History,
+                label = "Access log",
+                subtitle = "Who accessed this server, and when",
+                active = false,
+                onClick = onOpenAccessLog,
                 onDelete = {},
             )
         }

@@ -39,6 +39,7 @@ import { PortCollisionError } from "./docker-compose.ts";
 import { RateLimiter, type RateLimiterOptions } from "./rate-limit.ts";
 import type { PushSubscriptionRecord } from "./push-notifications.ts";
 import { TemplateValidationError, TemplateNotFoundError, type SessionTemplate } from "./session-templates.ts";
+import { appendAccessLogEntry, type AccessLogEntry } from "./access-log.ts";
 
 const DIFF_MODES: readonly DiffMode[] = ["staged", "unstaged", "untracked"];
 
@@ -116,6 +117,13 @@ export interface ServerDeps {
   // `alert-bell` hook set in setBellHook (tmux.ts) -- NOT part of the public
   // authenticated API surface, see the loopback-only check at its call site.
   notifyBell: (sessionFullName: string) => Promise<void>;
+
+  // EMB-223 access audit log. accessLogPath is optional so tests (and any
+  // deployment that doesn't want the file) can omit it -- checkAuthorized
+  // simply skips logging when it's undefined. getAccessLog backs the
+  // read-only GET /api/access-log route below.
+  accessLogPath?: string;
+  getAccessLog: () => Promise<AccessLogEntry[]>;
 }
 
 const MIME_TYPES: Record<string, string> = {
@@ -185,14 +193,32 @@ function sendTooManyRequests(res: ServerResponse, retryAfterMs: number): void {
 // outcome, but with Retry-After so a legitimate client sees it's being
 // throttled rather than silently rejected forever. Successful requests are
 // never counted, so normal usage never approaches the limit.
+//
+// EMB-223: also the single choke point every bearer-token-gated request
+// passes through, so it's where the access audit log is written --
+// fire-and-forget (never awaited, failures swallowed) so a slow/failing
+// disk write can never add latency to or block the actual response.
+// `accessLogPath` is optional: undefined skips logging entirely, so tests
+// that don't care about the audit log don't need to provide one.
 function checkAuthorized(
   req: IncomingMessage,
   res: ServerResponse,
   token: string,
   clientIp: string,
   limiter: RateLimiter,
+  accessLogPath: string | undefined,
 ): boolean {
-  if (isAuthorized(req, token)) return true;
+  const authorized = isAuthorized(req, token);
+  if (accessLogPath) {
+    void appendAccessLogEntry(accessLogPath, {
+      timestamp: new Date().toISOString(),
+      ip: clientIp,
+      method: req.method ?? "UNKNOWN",
+      path: req.url ?? "",
+      outcome: authorized ? "authorized" : "denied",
+    }).catch(() => {});
+  }
+  if (authorized) return true;
   const result = limiter.check(clientIp);
   if (result.limited) {
     sendTooManyRequests(res, result.retryAfterMs);
@@ -341,12 +367,12 @@ export function createServer(deps: ServerDeps): Server {
       const isTruthy = (value: string | null) => value === "true" || value === "1";
 
       if (path === "/api/projects" && req.method === "GET") {
-        if (!checkAuthorized(req, res, deps.token, clientIp, authFailureLimiter)) return;
+        if (!checkAuthorized(req, res, deps.token, clientIp, authFailureLimiter, deps.accessLogPath)) return;
         return sendJson(res, 200, { projects: await deps.listProjects() });
       }
 
       if (path === "/api/browse" && req.method === "GET") {
-        if (!checkAuthorized(req, res, deps.token, clientIp, authFailureLimiter)) return;
+        if (!checkAuthorized(req, res, deps.token, clientIp, authFailureLimiter, deps.accessLogPath)) return;
 
         try {
           const listing = await deps.browseDirectory(url.searchParams.get("path") ?? undefined);
@@ -358,7 +384,7 @@ export function createServer(deps: ServerDeps): Server {
       }
 
       if (path === "/api/projects" && req.method === "POST") {
-        if (!checkAuthorized(req, res, deps.token, clientIp, authFailureLimiter)) return;
+        if (!checkAuthorized(req, res, deps.token, clientIp, authFailureLimiter, deps.accessLogPath)) return;
 
         let body: unknown;
         try {
@@ -382,7 +408,7 @@ export function createServer(deps: ServerDeps): Server {
 
       const projectIdMatch = path.match(/^\/api\/projects\/([^/]+)$/);
       if (projectIdMatch && req.method === "DELETE") {
-        if (!checkAuthorized(req, res, deps.token, clientIp, authFailureLimiter)) return;
+        if (!checkAuthorized(req, res, deps.token, clientIp, authFailureLimiter, deps.accessLogPath)) return;
 
         const project = await deps.getProject(decodeURIComponent(projectIdMatch[1]));
         if (!project) return sendJson(res, 404, { error: "Project not found" });
@@ -401,7 +427,7 @@ export function createServer(deps: ServerDeps): Server {
 
       const sessionsMatch = path.match(/^\/api\/projects\/([^/]+)\/sessions$/);
       if (sessionsMatch && (req.method === "GET" || req.method === "POST")) {
-        if (!checkAuthorized(req, res, deps.token, clientIp, authFailureLimiter)) return;
+        if (!checkAuthorized(req, res, deps.token, clientIp, authFailureLimiter, deps.accessLogPath)) return;
 
         const project = await deps.getProject(decodeURIComponent(sessionsMatch[1]));
         if (!project) return sendJson(res, 404, { error: "Project not found" });
@@ -439,7 +465,7 @@ export function createServer(deps: ServerDeps): Server {
       // EMB-220 session templates.
       const templatesMatch = path.match(/^\/api\/projects\/([^/]+)\/templates$/);
       if (templatesMatch && (req.method === "GET" || req.method === "POST")) {
-        if (!checkAuthorized(req, res, deps.token, clientIp, authFailureLimiter)) return;
+        if (!checkAuthorized(req, res, deps.token, clientIp, authFailureLimiter, deps.accessLogPath)) return;
 
         const project = await deps.getProject(decodeURIComponent(templatesMatch[1]));
         if (!project) return sendJson(res, 404, { error: "Project not found" });
@@ -476,7 +502,7 @@ export function createServer(deps: ServerDeps): Server {
 
       const templateMatch = path.match(/^\/api\/projects\/([^/]+)\/templates\/([^/]+)$/);
       if (templateMatch && (req.method === "PUT" || req.method === "DELETE")) {
-        if (!checkAuthorized(req, res, deps.token, clientIp, authFailureLimiter)) return;
+        if (!checkAuthorized(req, res, deps.token, clientIp, authFailureLimiter, deps.accessLogPath)) return;
 
         const project = await deps.getProject(decodeURIComponent(templateMatch[1]));
         if (!project) return sendJson(res, 404, { error: "Project not found" });
@@ -515,7 +541,7 @@ export function createServer(deps: ServerDeps): Server {
 
       const sessionDeleteMatch = path.match(/^\/api\/projects\/([^/]+)\/sessions\/([^/]+)$/);
       if (sessionDeleteMatch && req.method === "DELETE") {
-        if (!checkAuthorized(req, res, deps.token, clientIp, authFailureLimiter)) return;
+        if (!checkAuthorized(req, res, deps.token, clientIp, authFailureLimiter, deps.accessLogPath)) return;
 
         const project = await deps.getProject(decodeURIComponent(sessionDeleteMatch[1]));
         if (!project) return sendJson(res, 404, { error: "Project not found" });
@@ -537,7 +563,7 @@ export function createServer(deps: ServerDeps): Server {
       // the split was never opened (nothing to tear down).
       const sessionSplitMatch = path.match(/^\/api\/projects\/([^/]+)\/sessions\/([^/]+)\/split$/);
       if (sessionSplitMatch && req.method === "DELETE") {
-        if (!checkAuthorized(req, res, deps.token, clientIp, authFailureLimiter)) return;
+        if (!checkAuthorized(req, res, deps.token, clientIp, authFailureLimiter, deps.accessLogPath)) return;
 
         const project = await deps.getProject(decodeURIComponent(sessionSplitMatch[1]));
         if (!project) return sendJson(res, 404, { error: "Project not found" });
@@ -549,7 +575,7 @@ export function createServer(deps: ServerDeps): Server {
 
       const creationMatch = path.match(/^\/api\/projects\/([^/]+)\/sessions\/([^/]+)\/creation$/);
       if (creationMatch && req.method === "GET") {
-        if (!checkAuthorized(req, res, deps.token, clientIp, authFailureLimiter)) return;
+        if (!checkAuthorized(req, res, deps.token, clientIp, authFailureLimiter, deps.accessLogPath)) return;
 
         const project = await deps.getProject(decodeURIComponent(creationMatch[1]));
         if (!project) return sendJson(res, 404, { error: "Project not found" });
@@ -567,7 +593,7 @@ export function createServer(deps: ServerDeps): Server {
 
       const changesMatch = path.match(/^\/api\/projects\/([^/]+)\/sessions\/([^/]+)\/changes$/);
       if (changesMatch && req.method === "GET") {
-        if (!checkAuthorized(req, res, deps.token, clientIp, authFailureLimiter)) return;
+        if (!checkAuthorized(req, res, deps.token, clientIp, authFailureLimiter, deps.accessLogPath)) return;
 
         const project = await deps.getProject(decodeURIComponent(changesMatch[1]));
         if (!project) return sendJson(res, 404, { error: "Project not found" });
@@ -584,7 +610,7 @@ export function createServer(deps: ServerDeps): Server {
 
       const diffMatch = path.match(/^\/api\/projects\/([^/]+)\/sessions\/([^/]+)\/diff$/);
       if (diffMatch && req.method === "GET") {
-        if (!checkAuthorized(req, res, deps.token, clientIp, authFailureLimiter)) return;
+        if (!checkAuthorized(req, res, deps.token, clientIp, authFailureLimiter, deps.accessLogPath)) return;
 
         const project = await deps.getProject(decodeURIComponent(diffMatch[1]));
         if (!project) return sendJson(res, 404, { error: "Project not found" });
@@ -609,7 +635,7 @@ export function createServer(deps: ServerDeps): Server {
 
       const stageMatch = path.match(/^\/api\/projects\/([^/]+)\/sessions\/([^/]+)\/stage$/);
       if (stageMatch && req.method === "POST") {
-        if (!checkAuthorized(req, res, deps.token, clientIp, authFailureLimiter)) return;
+        if (!checkAuthorized(req, res, deps.token, clientIp, authFailureLimiter, deps.accessLogPath)) return;
 
         const project = await deps.getProject(decodeURIComponent(stageMatch[1]));
         if (!project) return sendJson(res, 404, { error: "Project not found" });
@@ -635,7 +661,7 @@ export function createServer(deps: ServerDeps): Server {
 
       const unstageMatch = path.match(/^\/api\/projects\/([^/]+)\/sessions\/([^/]+)\/unstage$/);
       if (unstageMatch && req.method === "POST") {
-        if (!checkAuthorized(req, res, deps.token, clientIp, authFailureLimiter)) return;
+        if (!checkAuthorized(req, res, deps.token, clientIp, authFailureLimiter, deps.accessLogPath)) return;
 
         const project = await deps.getProject(decodeURIComponent(unstageMatch[1]));
         if (!project) return sendJson(res, 404, { error: "Project not found" });
@@ -661,7 +687,7 @@ export function createServer(deps: ServerDeps): Server {
 
       const discardMatch = path.match(/^\/api\/projects\/([^/]+)\/sessions\/([^/]+)\/discard$/);
       if (discardMatch && req.method === "POST") {
-        if (!checkAuthorized(req, res, deps.token, clientIp, authFailureLimiter)) return;
+        if (!checkAuthorized(req, res, deps.token, clientIp, authFailureLimiter, deps.accessLogPath)) return;
 
         const project = await deps.getProject(decodeURIComponent(discardMatch[1]));
         if (!project) return sendJson(res, 404, { error: "Project not found" });
@@ -690,7 +716,7 @@ export function createServer(deps: ServerDeps): Server {
 
       const commitMatch = path.match(/^\/api\/projects\/([^/]+)\/sessions\/([^/]+)\/commit$/);
       if (commitMatch && req.method === "POST") {
-        if (!checkAuthorized(req, res, deps.token, clientIp, authFailureLimiter)) return;
+        if (!checkAuthorized(req, res, deps.token, clientIp, authFailureLimiter, deps.accessLogPath)) return;
 
         const project = await deps.getProject(decodeURIComponent(commitMatch[1]));
         if (!project) return sendJson(res, 404, { error: "Project not found" });
@@ -718,7 +744,7 @@ export function createServer(deps: ServerDeps): Server {
 
       const envFilesMatch = path.match(/^\/api\/projects\/([^/]+)\/sessions\/([^/]+)\/env-files$/);
       if (envFilesMatch && req.method === "GET") {
-        if (!checkAuthorized(req, res, deps.token, clientIp, authFailureLimiter)) return;
+        if (!checkAuthorized(req, res, deps.token, clientIp, authFailureLimiter, deps.accessLogPath)) return;
 
         const project = await deps.getProject(decodeURIComponent(envFilesMatch[1]));
         if (!project) return sendJson(res, 404, { error: "Project not found" });
@@ -735,7 +761,7 @@ export function createServer(deps: ServerDeps): Server {
 
       const envFileMatch = path.match(/^\/api\/projects\/([^/]+)\/sessions\/([^/]+)\/env-files\/([^/]+)$/);
       if (envFileMatch && (req.method === "GET" || req.method === "PUT")) {
-        if (!checkAuthorized(req, res, deps.token, clientIp, authFailureLimiter)) return;
+        if (!checkAuthorized(req, res, deps.token, clientIp, authFailureLimiter, deps.accessLogPath)) return;
 
         const project = await deps.getProject(decodeURIComponent(envFileMatch[1]));
         if (!project) return sendJson(res, 404, { error: "Project not found" });
@@ -773,7 +799,7 @@ export function createServer(deps: ServerDeps): Server {
 
       const envCancelMatch = path.match(/^\/api\/projects\/([^/]+)\/sessions\/([^/]+)\/env\/cancel$/);
       if (envCancelMatch && req.method === "POST") {
-        if (!checkAuthorized(req, res, deps.token, clientIp, authFailureLimiter)) return;
+        if (!checkAuthorized(req, res, deps.token, clientIp, authFailureLimiter, deps.accessLogPath)) return;
 
         const project = await deps.getProject(decodeURIComponent(envCancelMatch[1]));
         if (!project) return sendJson(res, 404, { error: "Project not found" });
@@ -790,7 +816,7 @@ export function createServer(deps: ServerDeps): Server {
 
       const envMatch = path.match(/^\/api\/projects\/([^/]+)\/sessions\/([^/]+)\/env$/);
       if (envMatch && (req.method === "GET" || req.method === "POST" || req.method === "DELETE")) {
-        if (!checkAuthorized(req, res, deps.token, clientIp, authFailureLimiter)) return;
+        if (!checkAuthorized(req, res, deps.token, clientIp, authFailureLimiter, deps.accessLogPath)) return;
 
         const project = await deps.getProject(decodeURIComponent(envMatch[1]));
         if (!project) return sendJson(res, 404, { error: "Project not found" });
@@ -833,12 +859,12 @@ export function createServer(deps: ServerDeps): Server {
       }
 
       if (path === "/api/push/public-key" && req.method === "GET") {
-        if (!checkAuthorized(req, res, deps.token, clientIp, authFailureLimiter)) return;
+        if (!checkAuthorized(req, res, deps.token, clientIp, authFailureLimiter, deps.accessLogPath)) return;
         return sendJson(res, 200, { publicKey: deps.getPushPublicKey() });
       }
 
       if (path === "/api/push/subscribe" && req.method === "POST") {
-        if (!checkAuthorized(req, res, deps.token, clientIp, authFailureLimiter)) return;
+        if (!checkAuthorized(req, res, deps.token, clientIp, authFailureLimiter, deps.accessLogPath)) return;
 
         let body: unknown;
         try {
@@ -860,7 +886,7 @@ export function createServer(deps: ServerDeps): Server {
       }
 
       if (path === "/api/push/unsubscribe" && req.method === "POST") {
-        if (!checkAuthorized(req, res, deps.token, clientIp, authFailureLimiter)) return;
+        if (!checkAuthorized(req, res, deps.token, clientIp, authFailureLimiter, deps.accessLogPath)) return;
 
         let body: unknown;
         try {
@@ -874,6 +900,14 @@ export function createServer(deps: ServerDeps): Server {
         }
         await deps.unsubscribePush(endpoint);
         return sendEmpty(res, 204);
+      }
+
+      // EMB-223: read-only audit trail of who/what accessed this server and
+      // when. Bearer-token gated like every other route -- so viewing the
+      // log is itself an audited access, same as everything else here.
+      if (path === "/api/access-log" && req.method === "GET") {
+        if (!checkAuthorized(req, res, deps.token, clientIp, authFailureLimiter, deps.accessLogPath)) return;
+        return sendJson(res, 200, { entries: await deps.getAccessLog() });
       }
 
       // No bearer-token auth by design -- see isLoopbackAddress's comment.

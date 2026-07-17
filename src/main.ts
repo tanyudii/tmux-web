@@ -58,6 +58,7 @@ import {
   updateTemplate as updateTemplateImpl,
   deleteTemplate as deleteTemplateImpl,
 } from "./session-templates.ts";
+import { appendAccessLogEntry, readAccessLog, type AccessLogOutcome } from "./access-log.ts";
 import { loadEnvConfig } from "./env-config.ts";
 import { listEnvFiles, readEnvFile, writeEnvFile } from "./env-editor.ts";
 import { composeUp, composeDown, composePs, composePort, checkPortCollisions } from "./docker-compose.ts";
@@ -109,6 +110,20 @@ function rejectUpgrade(socket: DestroyableSocket, status: number, reason: string
   socket.destroy();
 }
 
+// EMB-223: WS upgrades bypass createServer() (and so checkAuthorized's own
+// audit logging) entirely -- this is the WS-side equivalent, called at both
+// of the /ws and /ws/logs auth checks below so the audit log covers every
+// bearer-token-gated entry point, not just the plain HTTP API.
+function logWsAccess(accessLogPath: string, clientIp: string, path: string, outcome: AccessLogOutcome): void {
+  void appendAccessLogEntry(accessLogPath, {
+    timestamp: new Date().toISOString(),
+    ip: clientIp,
+    method: "WS",
+    path,
+    outcome,
+  }).catch(() => {});
+}
+
 // Mirrors server.ts's AUTH_FAILURE_LIMIT -- WS upgrades bypass createServer()
 // entirely (handled directly on the raw `upgrade` event below), so they'd
 // otherwise have no brute-force protection of their own.
@@ -136,6 +151,7 @@ export async function main(): Promise<void> {
 
   const projectsFile = join(configDir, "projects.json");
   const templatesFile = join(configDir, "session-templates.json");
+  const accessLogPath = join(configDir, "access.log");
   const worktreesRoot = join(configDir, "worktrees");
 
   const sessionEnvDeps: SessionEnvDeps = {
@@ -205,6 +221,8 @@ export async function main(): Promise<void> {
   const httpServer = createServer({
     token: config.token,
     publicDir: webBuildDir,
+    accessLogPath,
+    getAccessLog: () => readAccessLog(accessLogPath),
 
     listProjects: () => loadProjects(projectsFile),
     registerProject: (name, repoPath) =>
@@ -287,9 +305,11 @@ export async function main(): Promise<void> {
       const isSplitPane = url.searchParams.get("pane") === "1";
 
       if (!isValidSessionName(sessionName) || !verifyToken(token, config.token)) {
+        logWsAccess(accessLogPath, clientIp, url.pathname, "denied");
         rejectUnauthorizedUpgrade(socket, clientIp, wsAuthFailureLimiter);
         return;
       }
+      logWsAccess(accessLogPath, clientIp, url.pathname, "authorized");
 
       let targetSessionName = sessionName;
       if (isSplitPane) {
@@ -326,9 +346,11 @@ export async function main(): Promise<void> {
 
     if (url.pathname === "/ws/logs") {
       if (!verifyToken(token, config.token)) {
+        logWsAccess(accessLogPath, clientIp, url.pathname, "denied");
         rejectUnauthorizedUpgrade(socket, clientIp, wsAuthFailureLimiter);
         return;
       }
+      logWsAccess(accessLogPath, clientIp, url.pathname, "authorized");
 
       const projectId = url.searchParams.get("project") ?? "";
       const sessionSlug = url.searchParams.get("session") ?? "";

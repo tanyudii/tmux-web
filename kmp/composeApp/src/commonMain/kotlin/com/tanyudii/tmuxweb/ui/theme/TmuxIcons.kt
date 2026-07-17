@@ -17,6 +17,7 @@ import androidx.compose.material.icons.outlined.DeleteOutline
 import androidx.compose.material.icons.outlined.Dns
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.Folder
+import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.outlined.KeyboardArrowDown
 import androidx.compose.material.icons.outlined.Link
 import androidx.compose.material.icons.outlined.MoreVert
@@ -79,4 +80,5 @@ object TmuxIcons {
     val Bell: ImageVector = Icons.Outlined.Notifications
     val BellOff: ImageVector = Icons.Outlined.NotificationsOff
     val SplitView: ImageVector = Icons.Outlined.VerticalSplit
+    val History: ImageVector = Icons.Outlined.History
 }

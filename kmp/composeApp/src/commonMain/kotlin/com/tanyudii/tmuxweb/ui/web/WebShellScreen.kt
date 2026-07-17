@@ -12,6 +12,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
@@ -27,15 +29,18 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import com.tanyudii.tmuxweb.di.TmuxWebSessionHolder
+import com.tanyudii.tmuxweb.domain.model.AccessLogEntry
 import com.tanyudii.tmuxweb.domain.model.DiffMode
 import com.tanyudii.tmuxweb.domain.model.EnvStatus
 import com.tanyudii.tmuxweb.domain.model.GroupedChanges
 import com.tanyudii.tmuxweb.domain.model.SessionTemplate
+import com.tanyudii.tmuxweb.domain.repository.AccessLogRepository
 import com.tanyudii.tmuxweb.domain.repository.ChangesRepository
 import com.tanyudii.tmuxweb.domain.repository.EnvironmentRepository
 import com.tanyudii.tmuxweb.domain.repository.ProjectsRepository
 import com.tanyudii.tmuxweb.domain.repository.SessionTemplatesRepository
 import com.tanyudii.tmuxweb.domain.repository.SessionsRepository
+import com.tanyudii.tmuxweb.presentation.AccessLogViewModel
 import com.tanyudii.tmuxweb.presentation.ChangesViewModel
 import com.tanyudii.tmuxweb.presentation.EnvironmentViewModel
 import com.tanyudii.tmuxweb.presentation.PendingDiscard
@@ -91,6 +96,7 @@ fun WebShellScreen(onSwitchServer: () -> Unit) {
     // Compose-level key listener is naturally immune to colliding with
     // terminal shortcuts, with no activeElement check needed.
     var paletteOpen by remember { mutableStateOf(false) }
+    var accessLogOpen by remember { mutableStateOf(false) }
 
     Column(
         modifier = Modifier.fillMaxSize().background(TmuxColors.bgApp)
@@ -118,6 +124,7 @@ fun WebShellScreen(onSwitchServer: () -> Unit) {
                 onDeleteProject = viewModel::requestDeleteProject,
                 onDeleteSession = viewModel::requestDeleteSession,
                 onOpenSettings = onSwitchServer,
+                onOpenAccessLog = { accessLogOpen = true },
             )
             WebMainPane(
                 project = state.selectedProject,
@@ -176,6 +183,76 @@ fun WebShellScreen(onSwitchServer: () -> Unit) {
                 paletteOpen = false
             },
             onDismiss = { paletteOpen = false },
+        )
+    }
+
+    if (accessLogOpen) {
+        AccessLogDialog(onDismiss = { accessLogOpen = false })
+    }
+}
+
+@Composable
+private fun AccessLogDialog(onDismiss: () -> Unit) {
+    val repository: AccessLogRepository = koinInject()
+    val scope = rememberCoroutineScope()
+    val viewModel = remember { AccessLogViewModel(repository, scope) }
+    val state by viewModel.state.collectAsState()
+
+    CenterDialog(
+        title = "Access log",
+        onCancel = onDismiss,
+        footer = {
+            TmuxButton(onClick = viewModel::refresh, text = "Refresh", variant = TmuxButtonVariant.GHOST)
+            TmuxButton(onClick = onDismiss, text = "Close", variant = TmuxButtonVariant.PRIMARY)
+        },
+    ) {
+        Text(
+            "Requests authenticated with this server's shared token -- identifies activity per IP, not per person.",
+            color = TmuxColors.textTertiary,
+            fontFamily = TmuxFonts.sans,
+            fontSize = TmuxTextSize.xs,
+        )
+        when {
+            state.isLoading -> TmuxProgressBar(label = "Loading…")
+            state.errorMessage != null -> ErrorText(state.errorMessage!!)
+            state.entries.isEmpty() -> Text(
+                "No access recorded yet.",
+                color = TmuxColors.textTertiary,
+                fontFamily = TmuxFonts.sans,
+                fontSize = TmuxTextSize.sm,
+            )
+            else -> LazyColumn(modifier = Modifier.heightIn(max = 320.dp)) {
+                items(state.entries, key = { "${it.timestamp}-${it.path}-${it.outcome}" }) { entry ->
+                    AccessLogRow(entry)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun AccessLogRow(entry: AccessLogEntry) {
+    Column(modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(
+                entry.timestamp,
+                color = TmuxColors.textSecondary,
+                fontFamily = TmuxFonts.mono,
+                fontSize = TmuxTextSize.xs,
+            )
+            Text(
+                entry.outcome,
+                color = if (entry.outcome == "authorized") TmuxColors.accent else TmuxColors.red500,
+                fontFamily = TmuxFonts.mono,
+                fontSize = TmuxTextSize.xs,
+                fontWeight = TmuxWeight.semibold,
+            )
+        }
+        Text(
+            "${entry.method} ${entry.path} · ${entry.ip}",
+            color = TmuxColors.textPrimary,
+            fontFamily = TmuxFonts.mono,
+            fontSize = TmuxTextSize.sm,
         )
     }
 }
