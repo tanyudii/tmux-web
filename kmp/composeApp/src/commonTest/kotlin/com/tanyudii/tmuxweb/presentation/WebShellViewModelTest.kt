@@ -6,7 +6,9 @@ import com.tanyudii.tmuxweb.domain.model.Project
 import com.tanyudii.tmuxweb.domain.model.ProjectSession
 import com.tanyudii.tmuxweb.domain.model.SessionCreationPhase
 import com.tanyudii.tmuxweb.domain.model.SessionCreationStatus
+import com.tanyudii.tmuxweb.domain.model.SessionTemplate
 import com.tanyudii.tmuxweb.presentation.fakes.FakeProjectsRepository
+import com.tanyudii.tmuxweb.presentation.fakes.FakeSessionTemplatesRepository
 import com.tanyudii.tmuxweb.presentation.fakes.FakeSessionsRepository
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.test.StandardTestDispatcher
@@ -38,9 +40,10 @@ class WebShellViewModelTest {
     private fun immediateViewModel(
         projects: FakeProjectsRepository = FakeProjectsRepository(),
         sessions: FakeSessionsRepository = FakeSessionsRepository(),
+        templates: FakeSessionTemplatesRepository = FakeSessionTemplatesRepository(),
     ): WebShellViewModel {
         val scope = CoroutineScope(UnconfinedTestDispatcher())
-        return WebShellViewModel(projects, sessions, scope)
+        return WebShellViewModel(projects, sessions, templates, scope)
     }
 
     @Test
@@ -110,7 +113,7 @@ class WebShellViewModelTest {
             ),
         )
         val scope = CoroutineScope(StandardTestDispatcher(testScheduler))
-        val viewModel = WebShellViewModel(FakeProjectsRepository(), sessions, scope)
+        val viewModel = WebShellViewModel(FakeProjectsRepository(), sessions, FakeSessionTemplatesRepository(), scope)
         advanceUntilIdle()
 
         viewModel.showNewSessionDialog("p1")
@@ -128,7 +131,7 @@ class WebShellViewModelTest {
     fun `createSession start failure surfaces error without polling`() = runTest {
         val sessions = FakeSessionsRepository().apply { startCreationError = ApiError.BadRequest("name is required") }
         val scope = CoroutineScope(StandardTestDispatcher(testScheduler))
-        val viewModel = WebShellViewModel(FakeProjectsRepository(), sessions, scope)
+        val viewModel = WebShellViewModel(FakeProjectsRepository(), sessions, FakeSessionTemplatesRepository(), scope)
         advanceUntilIdle()
 
         viewModel.showNewSessionDialog("p1")
@@ -136,6 +139,68 @@ class WebShellViewModelTest {
         advanceUntilIdle()
 
         assertEquals("name is required", viewModel.state.value.newSessionDialog?.errorMessage)
+    }
+
+    @Test
+    fun `showNewSessionDialog loads the project's saved templates into the dialog`() {
+        val template = SessionTemplate(
+            id = "t1",
+            projectId = "p1",
+            name = "Dev server",
+            startupCommand = "npm run dev",
+            createdAt = "now",
+        )
+        val templates = FakeSessionTemplatesRepository(listOf(template))
+        val viewModel = immediateViewModel(templates = templates)
+
+        viewModel.showNewSessionDialog("p1")
+
+        assertEquals(listOf(template), viewModel.state.value.newSessionDialog?.templates)
+    }
+
+    @Test
+    fun `createSession threads the startup command through to the repository`() {
+        val sessions = FakeSessionsRepository()
+        val readyStatus = SessionCreationStatus(phase = SessionCreationPhase.READY, session = session("feature"))
+        sessions.creationStatusQueue.addAll(listOf(Result.success(readyStatus)))
+        val viewModel = immediateViewModel(sessions = sessions)
+
+        viewModel.showNewSessionDialog("p1")
+        viewModel.createSession("feature", "npm run dev")
+
+        val expected = Triple<String, String, String?>("p1", "feature", "npm run dev")
+        assertEquals(listOf(expected), sessions.startCreationCalls)
+    }
+
+    @Test
+    fun `saveAsTemplate adds the created template to the dialog's template list`() {
+        val templates = FakeSessionTemplatesRepository()
+        val viewModel = immediateViewModel(templates = templates)
+
+        viewModel.showNewSessionDialog("p1")
+        viewModel.saveAsTemplate("Dev server", "npm run dev")
+
+        val saved = viewModel.state.value.newSessionDialog?.templates
+        assertEquals(1, saved?.size)
+        assertEquals("Dev server", saved?.first()?.name)
+        assertEquals("npm run dev", saved?.first()?.startupCommand)
+    }
+
+    @Test
+    fun `deleteTemplate removes the template from the dialog's template list`() {
+        val template = SessionTemplate(
+            id = "t1",
+            projectId = "p1",
+            name = "Dev server",
+            createdAt = "now",
+        )
+        val templates = FakeSessionTemplatesRepository(listOf(template))
+        val viewModel = immediateViewModel(templates = templates)
+
+        viewModel.showNewSessionDialog("p1")
+        viewModel.deleteTemplate("t1")
+
+        assertEquals(emptyList(), viewModel.state.value.newSessionDialog?.templates)
     }
 
     @Test

@@ -20,4 +20,4 @@ data class ProjectSession(
 data class SessionListResponse(val sessions: List<ProjectSession>)
 
 @Serializable
-data class NewSessionRequest(val name: String)
+data class NewSessionRequest(val name: String, val startupCommand: String? = null)

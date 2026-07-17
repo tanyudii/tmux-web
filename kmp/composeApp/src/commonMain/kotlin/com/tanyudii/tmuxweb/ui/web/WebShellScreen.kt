@@ -1,6 +1,7 @@
 package com.tanyudii.tmuxweb.ui.web
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
@@ -8,9 +9,11 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
@@ -27,9 +30,11 @@ import com.tanyudii.tmuxweb.di.TmuxWebSessionHolder
 import com.tanyudii.tmuxweb.domain.model.DiffMode
 import com.tanyudii.tmuxweb.domain.model.EnvStatus
 import com.tanyudii.tmuxweb.domain.model.GroupedChanges
+import com.tanyudii.tmuxweb.domain.model.SessionTemplate
 import com.tanyudii.tmuxweb.domain.repository.ChangesRepository
 import com.tanyudii.tmuxweb.domain.repository.EnvironmentRepository
 import com.tanyudii.tmuxweb.domain.repository.ProjectsRepository
+import com.tanyudii.tmuxweb.domain.repository.SessionTemplatesRepository
 import com.tanyudii.tmuxweb.domain.repository.SessionsRepository
 import com.tanyudii.tmuxweb.presentation.ChangesViewModel
 import com.tanyudii.tmuxweb.presentation.EnvironmentViewModel
@@ -38,6 +43,7 @@ import com.tanyudii.tmuxweb.presentation.WebShellUiState
 import com.tanyudii.tmuxweb.presentation.WebShellViewModel
 import com.tanyudii.tmuxweb.ui.components.CommandPaletteItem
 import com.tanyudii.tmuxweb.ui.components.TmuxButton
+import com.tanyudii.tmuxweb.ui.components.TmuxButtonSize
 import com.tanyudii.tmuxweb.ui.components.TmuxButtonVariant
 import com.tanyudii.tmuxweb.ui.components.TmuxCommandPalette
 import com.tanyudii.tmuxweb.ui.components.TmuxConfirmDialog
@@ -49,6 +55,7 @@ import com.tanyudii.tmuxweb.ui.components.commandPaletteShortcut
 import com.tanyudii.tmuxweb.ui.terminal.rememberTerminalSession
 import com.tanyudii.tmuxweb.ui.theme.TmuxColors
 import com.tanyudii.tmuxweb.ui.theme.TmuxFonts
+import com.tanyudii.tmuxweb.ui.theme.TmuxIcons
 import com.tanyudii.tmuxweb.ui.theme.TmuxRadius
 import com.tanyudii.tmuxweb.ui.theme.TmuxTextSize
 import com.tanyudii.tmuxweb.ui.theme.TmuxWeight
@@ -65,9 +72,10 @@ import org.koin.compose.koinInject
 fun WebShellScreen(onSwitchServer: () -> Unit) {
     val projectsRepository: ProjectsRepository = koinInject()
     val sessionsRepository: SessionsRepository = koinInject()
+    val templatesRepository: SessionTemplatesRepository = koinInject()
     val sessionHolder: TmuxWebSessionHolder = koinInject()
     val scope = rememberCoroutineScope()
-    val viewModel = remember { WebShellViewModel(projectsRepository, sessionsRepository, scope) }
+    val viewModel = remember { WebShellViewModel(projectsRepository, sessionsRepository, templatesRepository, scope) }
     val state by viewModel.state.collectAsState()
     val serverHost = remember(sessionHolder) { sessionHolder.require().baseUrl.substringAfter("://").trimEnd('/') }
 
@@ -210,7 +218,10 @@ private fun WebShellDialogs(state: WebShellUiState, viewModel: WebShellViewModel
             isSaving = dialogState.isSaving,
             progressMessage = dialogState.progressMessage,
             errorMessage = dialogState.errorMessage,
+            templates = dialogState.templates,
             onCreate = viewModel::createSession,
+            onSaveAsTemplate = viewModel::saveAsTemplate,
+            onDeleteTemplate = viewModel::deleteTemplate,
             onCancel = viewModel::cancelNewSessionDialog,
         )
     }
@@ -323,23 +334,38 @@ private fun NewSessionDialog(
     isSaving: Boolean,
     progressMessage: String?,
     errorMessage: String?,
-    onCreate: (String) -> Unit,
+    templates: List<SessionTemplate>,
+    onCreate: (name: String, startupCommand: String?) -> Unit,
+    onSaveAsTemplate: (name: String, startupCommand: String?) -> Unit,
+    onDeleteTemplate: (templateId: String) -> Unit,
     onCancel: () -> Unit,
 ) {
     var name by remember { mutableStateOf("") }
+    var startupCommand by remember { mutableStateOf("") }
     CenterDialog(
         title = "New session · $projectName",
         onCancel = { if (!isSaving) onCancel() },
         footer = {
             TmuxButton(onClick = onCancel, text = "Cancel", variant = TmuxButtonVariant.GHOST, enabled = !isSaving)
             TmuxButton(
-                onClick = { onCreate(name) },
+                onClick = { onCreate(name, startupCommand.takeIf { it.isNotBlank() }) },
                 text = "Create session",
                 variant = TmuxButtonVariant.PRIMARY,
                 loading = isSaving,
             )
         },
     ) {
+        if (templates.isNotEmpty()) {
+            TemplatePicker(
+                templates = templates,
+                enabled = !isSaving,
+                onApply = { template ->
+                    name = template.name
+                    startupCommand = template.startupCommand.orEmpty()
+                },
+                onDelete = onDeleteTemplate,
+            )
+        }
         TmuxTextField(
             value = name,
             onValueChange = { name = it },
@@ -348,10 +374,74 @@ private fun NewSessionDialog(
             mono = true,
             enabled = !isSaving,
         )
+        TmuxTextField(
+            value = startupCommand,
+            onValueChange = { startupCommand = it },
+            label = "Startup command (optional)",
+            placeholder = "npm run dev",
+            mono = true,
+            enabled = !isSaving,
+        )
+        TmuxButton(
+            onClick = { onSaveAsTemplate(name, startupCommand.takeIf { it.isNotBlank() }) },
+            text = "Save as template",
+            variant = TmuxButtonVariant.SECONDARY,
+            size = TmuxButtonSize.SM,
+            enabled = !isSaving && name.isNotBlank(),
+        )
         if (isSaving) {
             TmuxProgressBar(label = progressMessage ?: "Creating session… polling backend")
         }
         errorMessage?.let { ErrorText(it) }
+    }
+}
+
+/** EMB-220: saved per-project session templates, offered as one-click fill-ins for name + startup command. */
+@Composable
+private fun TemplatePicker(
+    templates: List<SessionTemplate>,
+    enabled: Boolean,
+    onApply: (SessionTemplate) -> Unit,
+    onDelete: (templateId: String) -> Unit,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text("Templates", color = TmuxColors.textTertiary, fontFamily = TmuxFonts.sans, fontSize = TmuxTextSize.xs)
+        Column(
+            modifier = Modifier.heightIn(max = 140.dp)
+                .background(TmuxColors.bgApp, RoundedCornerShape(TmuxRadius.md)),
+        ) {
+            templates.forEach { template ->
+                TemplateRow(
+                    template = template,
+                    enabled = enabled,
+                    onApply = { onApply(template) },
+                    onDelete = { onDelete(template.id) },
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun TemplateRow(template: SessionTemplate, enabled: Boolean, onApply: () -> Unit, onDelete: () -> Unit) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier.fillMaxWidth()
+            .clickable(enabled = enabled, onClick = onApply)
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(template.name, color = TmuxColors.textPrimary, fontFamily = TmuxFonts.mono, fontSize = TmuxTextSize.sm)
+            template.startupCommand?.let {
+                Text(it, color = TmuxColors.textTertiary, fontFamily = TmuxFonts.mono, fontSize = TmuxTextSize.xs)
+            }
+        }
+        Icon(
+            TmuxIcons.Trash,
+            contentDescription = "Delete template",
+            tint = TmuxColors.textTertiary,
+            modifier = Modifier.clickable(enabled = enabled, onClick = onDelete),
+        )
     }
 }
 

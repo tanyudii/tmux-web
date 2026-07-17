@@ -193,4 +193,82 @@ class KtorRepositoriesTest {
         assertEquals("a.txt", capturedRequest.url.parameters["path"])
         assertEquals("unstaged", capturedRequest.url.parameters["mode"])
     }
+
+    // MARK: Session templates (EMB-220)
+
+    @Suppress("MaxLineLength") // JSON fixture reads better on one line than wrapped
+    @Test
+    fun `listTemplates decodes the templates envelope`() = runTest {
+        val repo = KtorSessionTemplatesRepository(
+            client(
+                HttpStatusCode.OK,
+                """{"templates":[{"id":"t1","projectId":"p1","name":"Dev server","startupCommand":"npm run dev","createdAt":"2026-01-01T00:00:00.000Z"}]}""",
+            ),
+        )
+
+        val templates = repo.listTemplates("p1")
+
+        assertEquals(1, templates.size)
+        assertEquals("Dev server", templates.single().name)
+        assertEquals("npm run dev", templates.single().startupCommand)
+    }
+
+    @Test
+    fun `createTemplate sends POST with name and startupCommand and decodes the created template`() = runTest {
+        val repo = KtorSessionTemplatesRepository(
+            client(
+                HttpStatusCode.Created,
+                """{"id":"t1","projectId":"p1","name":"Dev server","startupCommand":"npm run dev","createdAt":"2026-01-01T00:00:00.000Z"}""",
+            ),
+        )
+
+        val template = repo.createTemplate("p1", "Dev server", "npm run dev")
+
+        assertEquals("POST", capturedRequest.method.value)
+        assertEquals("t1", template.id)
+        assertEquals("Dev server", template.name)
+    }
+
+    @Test
+    fun `createTemplate bad request throws BadRequest with server message`() = runTest {
+        val repo = KtorSessionTemplatesRepository(
+            client(HttpStatusCode.BadRequest, """{"error":"Template name must not be empty"}"""),
+        )
+
+        val error = assertFailsWith<ApiError.BadRequest> { repo.createTemplate("p1", "", null) }
+        assertEquals("Template name must not be empty", error.serverMessage)
+    }
+
+    @Test
+    fun `updateTemplate sends PUT and decodes the returned body via decodeBody`() = runTest {
+        val repo = KtorSessionTemplatesRepository(
+            client(
+                HttpStatusCode.OK,
+                """{"id":"t1","projectId":"p1","name":"Renamed","startupCommand":"npm test","createdAt":"2026-01-01T00:00:00.000Z"}""",
+            ),
+        )
+
+        val template = repo.updateTemplate("p1", "t1", "Renamed", "npm test")
+
+        assertEquals("PUT", capturedRequest.method.value)
+        assertEquals("Renamed", template.name)
+        assertEquals("npm test", template.startupCommand)
+    }
+
+    @Test
+    fun `updateTemplate not found throws NotFound`() = runTest {
+        val repo = KtorSessionTemplatesRepository(client(HttpStatusCode.NotFound, """{"error":"Template not found"}"""))
+
+        assertFailsWith<ApiError.NotFound> { repo.updateTemplate("p1", "missing", "x", null) }
+    }
+
+    @Test
+    fun `deleteTemplate sends DELETE to the template endpoint and succeeds on 204`() = runTest {
+        val repo = KtorSessionTemplatesRepository(client(HttpStatusCode.NoContent, ""))
+
+        repo.deleteTemplate("p1", "t1")
+
+        assertEquals("DELETE", capturedRequest.method.value)
+        assertTrue(capturedRequest.url.encodedPath.endsWith("/templates/t1"))
+    }
 }

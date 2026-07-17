@@ -38,6 +38,7 @@ function makeDeps(overrides: Partial<ProjectSessionsDeps> = {}): ProjectSessions
     listWindows: async () => [],
     createSession: async () => {},
     killSession: async () => {},
+    sendKeys: async () => {},
     addWorktree: async () => {},
     removeWorktree: async () => {},
     getChangedFiles: async () => ({ staged: [], unstaged: [], untracked: [], conflicted: [], repoState: "clean" }),
@@ -150,6 +151,47 @@ test("createProjectSession rolls back the worktree if creating the tmux session 
 
   await assert.rejects(() => createProjectSession(PROJECT, "feature-x", deps), /tmux exploded/);
   assert.deepEqual(removeCalls, [{ path: "/data/worktrees/proj1-ab12cd/feature-x", force: true }]);
+});
+
+test("createProjectSession sends the startup command as keystrokes to the new session after it's created", async () => {
+  const calls: string[] = [];
+  const deps = makeDeps({
+    createSession: async (name) => {
+      calls.push(`createSession:${name}`);
+    },
+    sendKeys: async (name, text) => {
+      calls.push(`sendKeys:${name}:${text}`);
+    },
+  });
+
+  await createProjectSession(PROJECT, "feature-x", deps, undefined, "npm run dev");
+
+  assert.deepEqual(calls, ["createSession:proj1-ab12cd__feature-x", "sendKeys:proj1-ab12cd__feature-x:npm run dev"]);
+});
+
+test("createProjectSession never calls sendKeys when no startup command is given", async () => {
+  let called = false;
+  const deps = makeDeps({
+    sendKeys: async () => {
+      called = true;
+    },
+  });
+
+  await createProjectSession(PROJECT, "feature-x", deps);
+
+  assert.equal(called, false);
+});
+
+test("createProjectSession swallows a sendKeys failure -- session creation still succeeds", async () => {
+  const deps = makeDeps({
+    sendKeys: async () => {
+      throw new Error("tmux send-keys exploded");
+    },
+  });
+
+  const result = await createProjectSession(PROJECT, "feature-x", deps, undefined, "npm run dev");
+
+  assert.equal(result.fullName, "proj1-ab12cd__feature-x");
 });
 
 test("createProjectSession propagates WorktreeConflictError from addWorktree", async () => {

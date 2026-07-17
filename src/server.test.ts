@@ -20,6 +20,7 @@ import {
 import { EnvConfigError } from "./env-config.ts";
 import { PortCollisionError } from "./docker-compose.ts";
 import { SessionCreationNotFoundError, type SessionCreationStatus } from "./project-sessions.ts";
+import { TemplateValidationError, TemplateNotFoundError, type SessionTemplate } from "./session-templates.ts";
 import {
   InvalidDirectoryPathError,
   DirectoryNotFoundError,
@@ -33,6 +34,14 @@ const SAMPLE_PROJECT: Project = {
   id: "proj1-ab12cd",
   name: "My Project",
   repoPath: "/repo",
+  createdAt: "2026-01-01T00:00:00.000Z",
+};
+
+const SAMPLE_TEMPLATE: SessionTemplate = {
+  id: "tmpl1-ab12cd",
+  projectId: SAMPLE_PROJECT.id,
+  name: "Dev server",
+  startupCommand: "npm run dev",
   createdAt: "2026-01-01T00:00:00.000Z",
 };
 
@@ -56,7 +65,7 @@ function makeDeps(overrides: Partial<ServerDeps> = {}): ServerDeps {
       truncated: false,
     }),
     listProjectSessions: async () => [],
-    startProjectSessionCreation: async (_project: Project, name: string) => ({
+    startProjectSessionCreation: async (_project: Project, name: string, _startupCommand?: string) => ({
       name,
       fullName: `${SAMPLE_PROJECT.id}__${name}`,
     }),
@@ -80,6 +89,20 @@ function makeDeps(overrides: Partial<ServerDeps> = {}): ServerDeps {
     subscribePush: async () => {},
     unsubscribePush: async () => {},
     notifyBell: async () => {},
+    listProjectTemplates: async () => [SAMPLE_TEMPLATE],
+    createProjectTemplate: async (_project: Project, name: string, startupCommand?: string) => ({
+      ...SAMPLE_TEMPLATE,
+      id: "new-template-id",
+      name,
+      startupCommand,
+    }),
+    updateProjectTemplate: async (_project: Project, templateId: string, name: string, startupCommand?: string) => ({
+      ...SAMPLE_TEMPLATE,
+      id: templateId,
+      name,
+      startupCommand,
+    }),
+    deleteProjectTemplate: async () => {},
     ...overrides,
   };
 }
@@ -1452,6 +1475,202 @@ test("POST /internal/bell from a loopback client (no bearer token) triggers noti
 test("POST /internal/bell without a session query param returns 400", async () => {
   await withServer(makeDeps(), async (baseUrl) => {
     const res = await fetch(`${baseUrl}/internal/bell`, { method: "POST" });
+    assert.equal(res.status, 400);
+  });
+});
+
+test("GET /api/projects/:id/templates without a token returns 401", async () => {
+  await withServer(makeDeps(), async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/projects/${SAMPLE_PROJECT.id}/templates`);
+    assert.equal(res.status, 401);
+  });
+});
+
+test("GET /api/projects/:id/templates lists the project's templates", async () => {
+  await withServer(makeDeps(), async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/projects/${SAMPLE_PROJECT.id}/templates`, { headers: authHeaders() });
+    assert.equal(res.status, 200);
+    const body = (await res.json()) as { templates: SessionTemplate[] };
+    assert.deepEqual(body.templates, [SAMPLE_TEMPLATE]);
+  });
+});
+
+test("GET /api/projects/:id/templates returns 404 for an unknown project", async () => {
+  await withServer(makeDeps(), async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/projects/unknown-id/templates`, { headers: authHeaders() });
+    assert.equal(res.status, 404);
+  });
+});
+
+test("POST /api/projects/:id/templates creates a template and returns 201", async () => {
+  const calls: Array<{ name: string; startupCommand: string | undefined }> = [];
+  const deps = makeDeps({
+    createProjectTemplate: async (_project: Project, name: string, startupCommand?: string) => {
+      calls.push({ name, startupCommand });
+      return { ...SAMPLE_TEMPLATE, id: "new-id", name, startupCommand };
+    },
+  });
+  await withServer(deps, async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/projects/${SAMPLE_PROJECT.id}/templates`, {
+      method: "POST",
+      headers: { ...authHeaders(), "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "Dev server", startupCommand: "npm run dev" }),
+    });
+    assert.equal(res.status, 201);
+    const body = (await res.json()) as SessionTemplate;
+    assert.equal(body.id, "new-id");
+    assert.deepEqual(calls, [{ name: "Dev server", startupCommand: "npm run dev" }]);
+  });
+});
+
+test("POST /api/projects/:id/templates returns 400 when name is missing", async () => {
+  await withServer(makeDeps(), async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/projects/${SAMPLE_PROJECT.id}/templates`, {
+      method: "POST",
+      headers: { ...authHeaders(), "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    assert.equal(res.status, 400);
+  });
+});
+
+test("POST /api/projects/:id/templates returns 400 when startupCommand is not a string", async () => {
+  await withServer(makeDeps(), async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/projects/${SAMPLE_PROJECT.id}/templates`, {
+      method: "POST",
+      headers: { ...authHeaders(), "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "Dev server", startupCommand: 42 }),
+    });
+    assert.equal(res.status, 400);
+  });
+});
+
+test("POST /api/projects/:id/templates returns 400 for a TemplateValidationError", async () => {
+  const deps = makeDeps({
+    createProjectTemplate: async () => {
+      throw new TemplateValidationError("bad name");
+    },
+  });
+  await withServer(deps, async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/projects/${SAMPLE_PROJECT.id}/templates`, {
+      method: "POST",
+      headers: { ...authHeaders(), "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "x" }),
+    });
+    assert.equal(res.status, 400);
+  });
+});
+
+test("POST /api/projects/:id/templates returns 404 for an unknown project", async () => {
+  await withServer(makeDeps(), async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/projects/unknown-id/templates`, {
+      method: "POST",
+      headers: { ...authHeaders(), "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "x" }),
+    });
+    assert.equal(res.status, 404);
+  });
+});
+
+test("PUT /api/projects/:id/templates/:templateId updates the template and returns 200", async () => {
+  const calls: Array<{ templateId: string; name: string; startupCommand: string | undefined }> = [];
+  const deps = makeDeps({
+    updateProjectTemplate: async (_project: Project, templateId: string, name: string, startupCommand?: string) => {
+      calls.push({ templateId, name, startupCommand });
+      return { ...SAMPLE_TEMPLATE, id: templateId, name, startupCommand };
+    },
+  });
+  await withServer(deps, async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/projects/${SAMPLE_PROJECT.id}/templates/${SAMPLE_TEMPLATE.id}`, {
+      method: "PUT",
+      headers: { ...authHeaders(), "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "Renamed", startupCommand: "npm test" }),
+    });
+    assert.equal(res.status, 200);
+    assert.deepEqual(calls, [{ templateId: SAMPLE_TEMPLATE.id, name: "Renamed", startupCommand: "npm test" }]);
+  });
+});
+
+test("PUT /api/projects/:id/templates/:templateId returns 404 for a TemplateNotFoundError", async () => {
+  const deps = makeDeps({
+    updateProjectTemplate: async () => {
+      throw new TemplateNotFoundError("not found");
+    },
+  });
+  await withServer(deps, async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/projects/${SAMPLE_PROJECT.id}/templates/missing-id`, {
+      method: "PUT",
+      headers: { ...authHeaders(), "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "Renamed" }),
+    });
+    assert.equal(res.status, 404);
+  });
+});
+
+test("PUT /api/projects/:id/templates/:templateId returns 400 when name is missing", async () => {
+  await withServer(makeDeps(), async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/projects/${SAMPLE_PROJECT.id}/templates/${SAMPLE_TEMPLATE.id}`, {
+      method: "PUT",
+      headers: { ...authHeaders(), "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    assert.equal(res.status, 400);
+  });
+});
+
+test("DELETE /api/projects/:id/templates/:templateId deletes the template and returns 204", async () => {
+  const calls: string[] = [];
+  const deps = makeDeps({
+    deleteProjectTemplate: async (_project: Project, templateId: string) => {
+      calls.push(templateId);
+    },
+  });
+  await withServer(deps, async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/projects/${SAMPLE_PROJECT.id}/templates/${SAMPLE_TEMPLATE.id}`, {
+      method: "DELETE",
+      headers: authHeaders(),
+    });
+    assert.equal(res.status, 204);
+    assert.deepEqual(calls, [SAMPLE_TEMPLATE.id]);
+  });
+});
+
+test("DELETE /api/projects/:id/templates/:templateId returns 404 for an unknown project", async () => {
+  await withServer(makeDeps(), async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/projects/unknown-id/templates/${SAMPLE_TEMPLATE.id}`, {
+      method: "DELETE",
+      headers: authHeaders(),
+    });
+    assert.equal(res.status, 404);
+  });
+});
+
+test("POST /api/projects/:id/sessions accepts an optional startupCommand and threads it through", async () => {
+  const calls: Array<{ name: string; startupCommand: string | undefined }> = [];
+  const deps = makeDeps({
+    startProjectSessionCreation: async (_project: Project, name: string, startupCommand?: string) => {
+      calls.push({ name, startupCommand });
+      return { name, fullName: `${SAMPLE_PROJECT.id}__${name}` };
+    },
+  });
+  await withServer(deps, async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/projects/${SAMPLE_PROJECT.id}/sessions`, {
+      method: "POST",
+      headers: { ...authHeaders(), "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "feature-x", startupCommand: "npm run dev" }),
+    });
+    assert.equal(res.status, 202);
+    assert.deepEqual(calls, [{ name: "feature-x", startupCommand: "npm run dev" }]);
+  });
+});
+
+test("POST /api/projects/:id/sessions returns 400 when startupCommand is not a string", async () => {
+  await withServer(makeDeps(), async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/projects/${SAMPLE_PROJECT.id}/sessions`, {
+      method: "POST",
+      headers: { ...authHeaders(), "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "feature-x", startupCommand: 42 }),
+    });
     assert.equal(res.status, 400);
   });
 });

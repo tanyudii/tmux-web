@@ -13,6 +13,7 @@ import {
   cancelCopyMode,
   setBellHook,
   ensureLinkedSession,
+  sendKeysToSession,
   ValidationError,
 } from "./tmux.ts";
 
@@ -367,6 +368,31 @@ test("setBellHook sets the alert-bell hook (not 'bell' -- that hook name doesn't
   const runShellCommand = calls[0].args[4];
   assert.match(runShellCommand, /^run-shell -b '/);
   assert.match(runShellCommand, /curl -fsS -m 3 -X POST "http:\/\/127\.0\.0\.1:5309\/internal\/bell\?session=proj1-ab12cd__feature-x"/);
+});
+
+test("sendKeysToSession rejects invalid session names without calling exec", async () => {
+  let called = false;
+  const fakeExec = async () => {
+    called = true;
+    return { stdout: "" };
+  };
+
+  await assert.rejects(() => sendKeysToSession("../etc", "npm run dev", fakeExec), ValidationError);
+  assert.equal(called, false);
+});
+
+test("sendKeysToSession sends the text followed by Enter as a single argv element (no shell)", async () => {
+  const calls: Array<{ file: string; args: string[] }> = [];
+  const fakeExec = async (file: string, args: string[]) => {
+    calls.push({ file, args });
+    return { stdout: "" };
+  };
+
+  await sendKeysToSession("main", "npm run dev && echo done", fakeExec);
+
+  assert.deepEqual(calls, [
+    { file: "tmux", args: ["send-keys", "-t", "main", "npm run dev && echo done", "Enter"] },
+  ]);
 });
 
 test("ensureLinkedSession rejects invalid names without calling exec", async () => {

@@ -9,6 +9,7 @@ import {
   listWindows,
   createSession,
   killSession,
+  sendKeysToSession,
   isValidSessionName,
   setBellHook,
   ensureLinkedSession,
@@ -51,6 +52,12 @@ import {
   writeProjectSessionEnvFile as writeProjectSessionEnvFileImpl,
   type ProjectSessionsDeps,
 } from "./project-sessions.ts";
+import {
+  listProjectTemplates as listProjectTemplatesImpl,
+  createTemplate as createTemplateImpl,
+  updateTemplate as updateTemplateImpl,
+  deleteTemplate as deleteTemplateImpl,
+} from "./session-templates.ts";
 import { loadEnvConfig } from "./env-config.ts";
 import { listEnvFiles, readEnvFile, writeEnvFile } from "./env-editor.ts";
 import { composeUp, composeDown, composePs, composePort, checkPortCollisions } from "./docker-compose.ts";
@@ -128,6 +135,7 @@ export async function main(): Promise<void> {
   }
 
   const projectsFile = join(configDir, "projects.json");
+  const templatesFile = join(configDir, "session-templates.json");
   const worktreesRoot = join(configDir, "worktrees");
 
   const sessionEnvDeps: SessionEnvDeps = {
@@ -149,6 +157,7 @@ export async function main(): Promise<void> {
     listWindows,
     createSession,
     killSession,
+    sendKeys: sendKeysToSession,
     addWorktree,
     removeWorktree,
     getChangedFiles,
@@ -210,8 +219,8 @@ export async function main(): Promise<void> {
       listDirectoryImpl(path, browseRoot ? { homedir: () => browseRoot } : {}),
 
     listProjectSessions: (project) => listProjectSessionsImpl(project, projectSessionsDeps),
-    startProjectSessionCreation: (project, name) =>
-      startProjectSessionCreationImpl(project, name, projectSessionsDeps, sessionCreationStore),
+    startProjectSessionCreation: (project, name, startupCommand) =>
+      startProjectSessionCreationImpl(project, name, projectSessionsDeps, sessionCreationStore, startupCommand),
     getProjectSessionCreationStatus: (project, slug) =>
       getSessionCreationStatusImpl(project, slug, sessionCreationStore),
     killProjectSession: (project, slug, options) =>
@@ -251,6 +260,13 @@ export async function main(): Promise<void> {
     subscribePush: (subscription) => addPushSubscription(configDir, subscription),
     unsubscribePush: (endpoint) => removePushSubscription(configDir, endpoint),
     notifyBell: notifyBellImpl,
+
+    listProjectTemplates: (project) => listProjectTemplatesImpl(templatesFile, project.id),
+    createProjectTemplate: (project, name, startupCommand) =>
+      createTemplateImpl(templatesFile, project.id, name, startupCommand),
+    updateProjectTemplate: (project, templateId, name, startupCommand) =>
+      updateTemplateImpl(templatesFile, project.id, templateId, name, startupCommand),
+    deleteProjectTemplate: (project, templateId) => deleteTemplateImpl(templatesFile, project.id, templateId),
   });
 
   const wss = new WebSocketServer({ noServer: true });

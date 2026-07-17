@@ -4,7 +4,9 @@ import com.tanyudii.tmuxweb.data.remote.ApiError
 import com.tanyudii.tmuxweb.domain.model.Project
 import com.tanyudii.tmuxweb.domain.model.ProjectSession
 import com.tanyudii.tmuxweb.domain.model.SessionCreationPhase
+import com.tanyudii.tmuxweb.domain.model.SessionTemplate
 import com.tanyudii.tmuxweb.domain.repository.ProjectsRepository
+import com.tanyudii.tmuxweb.domain.repository.SessionTemplatesRepository
 import com.tanyudii.tmuxweb.domain.repository.SessionsRepository
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -45,6 +47,11 @@ data class WebShellUiState(
         val isSaving: Boolean = true,
         val progressMessage: String? = null,
         val errorMessage: String? = null,
+        // EMB-220: this project's saved session templates, offered as
+        // one-click name/startup-command fill-ins -- loaded once when the
+        // dialog opens (see showNewSessionDialog), not re-fetched on every
+        // keystroke.
+        val templates: List<SessionTemplate> = emptyList(),
     )
 
     sealed interface PendingDelete {
@@ -93,6 +100,7 @@ data class WebShellUiState(
 class WebShellViewModel(
     private val projectsRepository: ProjectsRepository,
     private val sessionsRepository: SessionsRepository,
+    private val templatesRepository: SessionTemplatesRepository,
     private val scope: CoroutineScope,
 ) {
     private val _state = MutableStateFlow(WebShellUiState())
@@ -208,6 +216,16 @@ class WebShellViewModel(
         _state.update {
             it.copy(newSessionDialog = WebShellUiState.NewSessionDialogUiState(projectId = projectId, isSaving = false))
         }
+        scope.launch {
+            runSuspendCatching { templatesRepository.listTemplates(projectId) }
+                .onSuccess { templates ->
+                    _state.update { state ->
+                        state.copy(newSessionDialog = state.newSessionDialog?.copy(templates = templates))
+                    }
+                }
+            // A failed template load must never block session creation itself
+            // -- silently leave the dialog's template list empty on failure.
+        }
     }
 
     fun cancelNewSessionDialog() {
@@ -215,14 +233,48 @@ class WebShellViewModel(
         _state.update { it.copy(newSessionDialog = null) }
     }
 
-    fun createSession(name: String) {
+    fun createSession(name: String, startupCommand: String? = null) {
         val projectId = _state.value.newSessionDialog?.projectId ?: return
         sessionCreationJob?.cancel()
         _state.update { it.copy(newSessionDialog = WebShellUiState.NewSessionDialogUiState(projectId = projectId)) }
         sessionCreationJob = scope.launch {
-            runSuspendCatching { sessionsRepository.startSessionCreation(projectId, name) }
+            runSuspendCatching { sessionsRepository.startSessionCreation(projectId, name, startupCommand) }
                 .onSuccess { pending -> pollSessionCreation(projectId, pending.name) }
                 .onFailure { error -> failSessionCreation(projectId, error.toUiMessage()) }
+        }
+    }
+
+    /** Persists the dialog's current name/startup-command as a reusable template (EMB-220). */
+    fun saveAsTemplate(name: String, startupCommand: String?) {
+        val projectId = _state.value.newSessionDialog?.projectId ?: return
+        scope.launch {
+            runSuspendCatching { templatesRepository.createTemplate(projectId, name, startupCommand) }
+                .onSuccess { template ->
+                    _state.update { state ->
+                        val dialog = state.newSessionDialog ?: return@update state
+                        state.copy(newSessionDialog = dialog.copy(templates = dialog.templates + template))
+                    }
+                }
+                .onFailure { error ->
+                    _state.update { state ->
+                        val dialog = state.newSessionDialog ?: return@update state
+                        state.copy(newSessionDialog = dialog.copy(errorMessage = error.toUiMessage()))
+                    }
+                }
+        }
+    }
+
+    fun deleteTemplate(templateId: String) {
+        val projectId = _state.value.newSessionDialog?.projectId ?: return
+        scope.launch {
+            runSuspendCatching { templatesRepository.deleteTemplate(projectId, templateId) }
+                .onSuccess {
+                    _state.update { state ->
+                        val dialog = state.newSessionDialog ?: return@update state
+                        val remaining = dialog.templates.filterNot { it.id == templateId }
+                        state.copy(newSessionDialog = dialog.copy(templates = remaining))
+                    }
+                }
         }
     }
 

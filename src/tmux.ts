@@ -108,6 +108,19 @@ export async function killSession(name: string, exec: ExecFn = defaultExec): Pro
   await exec("tmux", ["kill-session", "-t", name]);
 }
 
+// EMB-220 session templates: types `text` into the session's active pane
+// followed by Enter, as if the user had typed it themselves right after the
+// session was created -- used for a template's optional startup command.
+// Passed as a single execFile argv element (never through a shell), so
+// there's no injection risk despite `text` being arbitrary user input; tmux
+// itself interprets it as literal keys, not a shell command line.
+export async function sendKeysToSession(name: string, text: string, exec: ExecFn = defaultExec): Promise<void> {
+  if (!isValidSessionName(name)) {
+    throw new ValidationError(`Invalid session name: ${name}`);
+  }
+  await exec("tmux", ["send-keys", "-t", name, text, "Enter"]);
+}
+
 // EMB-217 split-pane: creates `name` as a tmux *linked session* onto
 // `sourceName` (`tmux new-session -t <sourceName> -s <name>`) if it doesn't
 // already exist -- confirmed live that this shares the source's windows

@@ -15,13 +15,19 @@ class FakeSessionsRepository(initialSessions: List<ProjectSession> = emptyList()
 
     /** Queue of statuses `sessionCreationStatus` returns in order, one per poll tick. */
     val creationStatusQueue = ArrayDeque<Result<SessionCreationStatus>>()
+    val startCreationCalls = mutableListOf<Triple<String, String, String?>>()
 
     override suspend fun listSessions(projectId: String): List<ProjectSession> {
         listError?.let { throw it }
         return sessions.toList()
     }
 
-    override suspend fun startSessionCreation(projectId: String, name: String): PendingSessionCreation {
+    override suspend fun startSessionCreation(
+        projectId: String,
+        name: String,
+        startupCommand: String?,
+    ): PendingSessionCreation {
+        startCreationCalls.add(Triple(projectId, name, startupCommand))
         startCreationError?.let { throw it }
         return PendingSessionCreation(name = name, fullName = "${projectId}__$name")
     }

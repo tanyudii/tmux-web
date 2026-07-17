@@ -10,7 +10,11 @@ import com.tanyudii.tmuxweb.domain.model.SessionListResponse
 /** Mirrors the `/api/projects/:id/sessions*` endpoints (src/server.ts) — see plan §2.2. */
 interface SessionsRepository {
     suspend fun listSessions(projectId: String): List<ProjectSession>
-    suspend fun startSessionCreation(projectId: String, name: String): PendingSessionCreation
+    suspend fun startSessionCreation(
+        projectId: String,
+        name: String,
+        startupCommand: String? = null,
+    ): PendingSessionCreation
     suspend fun sessionCreationStatus(projectId: String, sessionName: String): SessionCreationStatus
     suspend fun deleteSession(projectId: String, sessionName: String, force: Boolean = false)
 
@@ -22,8 +26,12 @@ class KtorSessionsRepository(private val client: TmuxWebHttpClient) : SessionsRe
     override suspend fun listSessions(projectId: String): List<ProjectSession> =
         client.getJson<SessionListResponse>("/api/projects/$projectId/sessions").sessions
 
-    override suspend fun startSessionCreation(projectId: String, name: String): PendingSessionCreation =
-        client.postJson("/api/projects/$projectId/sessions", NewSessionRequest(name))
+    override suspend fun startSessionCreation(
+        projectId: String,
+        name: String,
+        startupCommand: String?,
+    ): PendingSessionCreation =
+        client.postJson("/api/projects/$projectId/sessions", NewSessionRequest(name, startupCommand))
 
     override suspend fun sessionCreationStatus(projectId: String, sessionName: String): SessionCreationStatus =
         client.getJson("/api/projects/$projectId/sessions/$sessionName/creation")

@@ -41,6 +41,9 @@ export interface ProjectSessionsDeps {
   listWindows: (fullName: string) => Promise<TmuxWindow[]>;
   createSession: (name: string, options?: CreateSessionOptions) => Promise<void>;
   killSession: (name: string) => Promise<void>;
+  // EMB-220: types a session template's optional startup command into the
+  // new session's first window right after creation.
+  sendKeys: (name: string, text: string) => Promise<void>;
   addWorktree: (repoPath: string, worktreePath: string, branchName: string, onProgress?: (message: string) => void) => Promise<void>;
   removeWorktree: (repoPath: string, worktreePath: string, options?: RemoveWorktreeOptions) => Promise<void>;
   getChangedFiles: (worktreePath: string) => Promise<GroupedChanges>;
@@ -119,6 +122,7 @@ export async function createProjectSession(
   rawName: string,
   deps: ProjectSessionsDeps,
   onProgress?: (message: string) => void,
+  startupCommand?: string,
 ): Promise<ProjectSession> {
   const { sessionSlug, fullName } = resolveSessionIdentity(project, rawName);
   const worktreePath = resolveWorktreePath(project.id, sessionSlug, deps.worktreesRoot);
@@ -134,6 +138,15 @@ export async function createProjectSession(
     throw error;
   }
 
+  // Best-effort: a startup command that fails to send must never fail
+  // session creation itself -- the session and worktree are already real
+  // and usable at this point, this is just a convenience typed on the
+  // user's behalf.
+  if (startupCommand) {
+    onProgress?.("Running startup command…");
+    await deps.sendKeys(fullName, startupCommand).catch(() => {});
+  }
+
   return { name: sessionSlug, fullName, windows: 1, attached: false };
 }
 
@@ -147,6 +160,7 @@ export async function startProjectSessionCreation(
   rawName: string,
   deps: ProjectSessionsDeps,
   store: SessionCreationStore,
+  startupCommand?: string,
 ): Promise<{ name: string; fullName: string }> {
   const { sessionSlug, fullName } = resolveSessionIdentity(project, rawName);
 
@@ -158,7 +172,7 @@ export async function startProjectSessionCreation(
   // gap (same TOCTOU-avoidance as startSessionEnv in session-env.ts).
   store.set(fullName, { phase: "creating" });
 
-  void runSessionCreation(project, sessionSlug, fullName, deps, store);
+  void runSessionCreation(project, sessionSlug, fullName, deps, store, startupCommand);
 
   return { name: sessionSlug, fullName };
 }
@@ -169,11 +183,18 @@ async function runSessionCreation(
   fullName: string,
   deps: ProjectSessionsDeps,
   store: SessionCreationStore,
+  startupCommand?: string,
 ): Promise<void> {
   try {
-    const session = await createProjectSession(project, sessionSlug, deps, (message) => {
-      store.set(fullName, { phase: "creating", message });
-    });
+    const session = await createProjectSession(
+      project,
+      sessionSlug,
+      deps,
+      (message) => {
+        store.set(fullName, { phase: "creating", message });
+      },
+      startupCommand,
+    );
     store.set(fullName, { phase: "ready", session });
   } catch (error) {
     store.set(fullName, {

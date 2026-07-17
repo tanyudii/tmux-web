@@ -38,6 +38,7 @@ import { EnvEditorError, EnvFileNotFoundError, EnvFileValidationError, type EnvF
 import { PortCollisionError } from "./docker-compose.ts";
 import { RateLimiter, type RateLimiterOptions } from "./rate-limit.ts";
 import type { PushSubscriptionRecord } from "./push-notifications.ts";
+import { TemplateValidationError, TemplateNotFoundError, type SessionTemplate } from "./session-templates.ts";
 
 const DIFF_MODES: readonly DiffMode[] = ["staged", "unstaged", "untracked"];
 
@@ -52,7 +53,11 @@ export interface ServerDeps {
   browseDirectory: (path: string | undefined) => Promise<DirectoryListing>;
 
   listProjectSessions: (project: Project) => Promise<ProjectSession[]>;
-  startProjectSessionCreation: (project: Project, name: string) => Promise<{ name: string; fullName: string }>;
+  startProjectSessionCreation: (
+    project: Project,
+    name: string,
+    startupCommand?: string,
+  ) => Promise<{ name: string; fullName: string }>;
   getProjectSessionCreationStatus: (project: Project, sessionSlug: string) => Promise<SessionCreationStatus>;
   killProjectSession: (
     project: Project,
@@ -60,6 +65,17 @@ export interface ServerDeps {
     options: { force?: boolean },
   ) => Promise<void>;
   killProjectSessionSplit: (project: Project, sessionSlug: string) => Promise<void>;
+
+  // EMB-220 session templates.
+  listProjectTemplates: (project: Project) => Promise<SessionTemplate[]>;
+  createProjectTemplate: (project: Project, name: string, startupCommand?: string) => Promise<SessionTemplate>;
+  updateProjectTemplate: (
+    project: Project,
+    templateId: string,
+    name: string,
+    startupCommand?: string,
+  ) => Promise<SessionTemplate>;
+  deleteProjectTemplate: (project: Project, templateId: string) => Promise<void>;
 
   getProjectSessionChanges: (project: Project, sessionSlug: string) => Promise<GroupedChanges>;
   getProjectSessionDiff: (
@@ -272,6 +288,14 @@ function sendMappedError(res: ServerResponse, error: unknown): boolean {
     sendJson(res, 403, { error: error.message });
     return true;
   }
+  if (error instanceof TemplateValidationError) {
+    sendJson(res, 400, { error: error.message });
+    return true;
+  }
+  if (error instanceof TemplateNotFoundError) {
+    sendJson(res, 404, { error: error.message });
+    return true;
+  }
   return false;
 }
 
@@ -392,17 +416,97 @@ export function createServer(deps: ServerDeps): Server {
         } catch {
           return sendJson(res, 400, { error: "Malformed JSON body" });
         }
-        const name = (body as { name?: unknown })?.name;
+        const { name, startupCommand } = body as { name?: unknown; startupCommand?: unknown };
         if (typeof name !== "string") {
           return sendJson(res, 400, { error: "Missing session name" });
+        }
+        if (startupCommand !== undefined && typeof startupCommand !== "string") {
+          return sendJson(res, 400, { error: "startupCommand must be a string" });
         }
 
         const sessionCreateLimit = expensiveActionLimiter.check(clientIp);
         if (sessionCreateLimit.limited) return sendTooManyRequests(res, sessionCreateLimit.retryAfterMs);
 
         try {
-          const pending = await deps.startProjectSessionCreation(project, name);
+          const pending = await deps.startProjectSessionCreation(project, name, startupCommand);
           return sendJson(res, 202, { ...pending, phase: "creating" });
+        } catch (error) {
+          if (sendMappedError(res, error)) return;
+          throw error;
+        }
+      }
+
+      // EMB-220 session templates.
+      const templatesMatch = path.match(/^\/api\/projects\/([^/]+)\/templates$/);
+      if (templatesMatch && (req.method === "GET" || req.method === "POST")) {
+        if (!checkAuthorized(req, res, deps.token, clientIp, authFailureLimiter)) return;
+
+        const project = await deps.getProject(decodeURIComponent(templatesMatch[1]));
+        if (!project) return sendJson(res, 404, { error: "Project not found" });
+
+        if (req.method === "GET") {
+          return sendJson(res, 200, { templates: await deps.listProjectTemplates(project) });
+        }
+
+        let body: unknown;
+        try {
+          body = await readJsonBody(req);
+        } catch {
+          return sendJson(res, 400, { error: "Malformed JSON body" });
+        }
+        const { name: templateName, startupCommand: templateStartupCommand } = body as {
+          name?: unknown;
+          startupCommand?: unknown;
+        };
+        if (typeof templateName !== "string") {
+          return sendJson(res, 400, { error: "Missing template name" });
+        }
+        if (templateStartupCommand !== undefined && typeof templateStartupCommand !== "string") {
+          return sendJson(res, 400, { error: "startupCommand must be a string" });
+        }
+
+        try {
+          const template = await deps.createProjectTemplate(project, templateName, templateStartupCommand);
+          return sendJson(res, 201, template);
+        } catch (error) {
+          if (sendMappedError(res, error)) return;
+          throw error;
+        }
+      }
+
+      const templateMatch = path.match(/^\/api\/projects\/([^/]+)\/templates\/([^/]+)$/);
+      if (templateMatch && (req.method === "PUT" || req.method === "DELETE")) {
+        if (!checkAuthorized(req, res, deps.token, clientIp, authFailureLimiter)) return;
+
+        const project = await deps.getProject(decodeURIComponent(templateMatch[1]));
+        if (!project) return sendJson(res, 404, { error: "Project not found" });
+        const templateId = decodeURIComponent(templateMatch[2]);
+
+        if (req.method === "DELETE") {
+          await deps.deleteProjectTemplate(project, templateId);
+          return sendEmpty(res, 204);
+        }
+
+        let body: unknown;
+        try {
+          body = await readJsonBody(req);
+        } catch {
+          return sendJson(res, 400, { error: "Malformed JSON body" });
+        }
+        const { name: templateName, startupCommand: templateStartupCommand } = body as {
+          name?: unknown;
+          startupCommand?: unknown;
+        };
+        if (typeof templateName !== "string") {
+          return sendJson(res, 400, { error: "Missing template name" });
+        }
+        if (templateStartupCommand !== undefined && typeof templateStartupCommand !== "string") {
+          return sendJson(res, 400, { error: "startupCommand must be a string" });
+        }
+
+        try {
+          const template = await deps.updateProjectTemplate(project, templateId, templateName, templateStartupCommand);
+          return sendJson(res, 200, template);
         } catch (error) {
           if (sendMappedError(res, error)) return;
           throw error;
