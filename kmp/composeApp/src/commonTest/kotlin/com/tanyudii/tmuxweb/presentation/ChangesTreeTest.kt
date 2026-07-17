@@ -23,7 +23,30 @@ class ChangesTreeTest {
         staged: List<String> = emptyList(),
         unstaged: List<String> = emptyList(),
         untracked: List<String> = emptyList(),
-    ) = GroupedChanges(staged.map(::file), unstaged.map(::file), untracked.map(::file))
+        conflicted: List<String> = emptyList(),
+    ) = GroupedChanges(
+        staged.map(::file),
+        unstaged.map(::file),
+        untracked.map(::file),
+        conflicted.map { ChangedFile(path = it, oldPath = null, status = FileStatus.MODIFIED, staged = false, conflicted = true) },
+    )
+
+    @Test
+    fun `conflicted section produces its own group with a distinct key from the unstaged section`() {
+        val rows = buildChangeRows(
+            changes(unstaged = listOf("shared.txt"), conflicted = listOf("shared.txt")),
+            collapsedKeys = emptySet(),
+        )
+
+        val headers = rows.filterIsInstance<ChangeRow.GroupHeader>()
+        assertEquals(listOf("Changes", "Conflicted"), headers.map { it.label })
+        // Regression guard: both sections use DiffMode.UNSTAGED (see SECTIONS'
+        // kdoc), so keys MUST be derived from something else -- a collision
+        // here would crash LazyColumn's `key = { it.key }` at runtime.
+        assertEquals(headers.size, headers.map { it.key }.toSet().size)
+        val nodeKeys = rows.filterIsInstance<ChangeRow.Node>().map { it.key }
+        assertEquals(nodeKeys.size, nodeKeys.toSet().size)
+    }
 
     @Test
     fun `null changes produce no rows`() {
@@ -95,7 +118,7 @@ class ChangesTreeTest {
     fun `group header count reflects total file count in that section regardless of collapse`() {
         val rows = buildChangeRows(
             changes(untracked = listOf("x.txt", "dir/y.txt")),
-            collapsedKeys = setOf("group:UNTRACKED"),
+            collapsedKeys = setOf("group:Untracked"),
         )
 
         val header = rows.filterIsInstance<ChangeRow.GroupHeader>().single()

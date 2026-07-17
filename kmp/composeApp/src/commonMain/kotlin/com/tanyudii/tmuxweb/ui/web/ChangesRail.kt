@@ -34,6 +34,7 @@ import com.tanyudii.tmuxweb.domain.model.ChangedFile
 import com.tanyudii.tmuxweb.domain.model.DiffMode
 import com.tanyudii.tmuxweb.domain.model.FileStatus
 import com.tanyudii.tmuxweb.domain.model.GroupedChanges
+import com.tanyudii.tmuxweb.domain.model.RepoState
 import com.tanyudii.tmuxweb.presentation.ChangeRow
 import com.tanyudii.tmuxweb.presentation.buildChangeRows
 import com.tanyudii.tmuxweb.ui.components.TmuxButton
@@ -95,6 +96,9 @@ internal fun ChangesRail(
                 fontSize = TmuxTextSize.sm,
                 fontWeight = TmuxWeight.semibold,
             )
+        }
+        if (changes?.repoState == RepoState.MERGING || changes?.repoState == RepoState.REBASING) {
+            RepoStateBanner(changes.repoState)
         }
         LazyColumn(modifier = Modifier.weight(1f), contentPadding = PaddingValues(vertical = 6.dp)) {
             items(rows, key = { it.key }) { row ->
@@ -184,6 +188,32 @@ private fun ChangeRowItem(
     }
 }
 
+/** Shown above the file list while the worktree is mid-merge or mid-rebase -- EMB-208. */
+@Composable
+private fun RepoStateBanner(state: RepoState) {
+    val message = when (state) {
+        RepoState.MERGING -> "Merge in progress — resolve conflicts, then stage and commit."
+        RepoState.REBASING -> "Rebase in progress — resolve conflicts, then stage and continue."
+        RepoState.CLEAN -> return
+    }
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(TmuxColors.amberGlow)
+            .padding(horizontal = 14.dp, vertical = 8.dp),
+    ) {
+        Icon(TmuxIcons.Alert, contentDescription = null, tint = TmuxColors.amber500, modifier = Modifier.size(14.dp))
+        Text(
+            message,
+            color = TmuxColors.amber500,
+            fontFamily = TmuxFonts.sans,
+            fontSize = TmuxTextSize.xs,
+        )
+    }
+}
+
 @Composable
 private fun ChangeGroupHeaderRow(label: String, count: Int, collapsed: Boolean, onClick: () -> Unit) {
     Row(
@@ -249,7 +279,10 @@ private fun ChangeNodeRow(
                 modifier = Modifier.size(14.dp),
             )
         } else {
-            val (marker, color) = node.file?.status?.let(::fileStatusMarker) ?: ("?" to TmuxColors.textTertiary)
+            val (marker, color) = when {
+                node.file?.conflicted == true -> "!" to TmuxColors.red500
+                else -> node.file?.status?.let(::fileStatusMarker) ?: ("?" to TmuxColors.textTertiary)
+            }
             Text(
                 marker,
                 color = color,
