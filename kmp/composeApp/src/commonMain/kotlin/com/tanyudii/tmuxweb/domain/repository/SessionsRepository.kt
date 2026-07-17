@@ -13,6 +13,9 @@ interface SessionsRepository {
     suspend fun startSessionCreation(projectId: String, name: String): PendingSessionCreation
     suspend fun sessionCreationStatus(projectId: String, sessionName: String): SessionCreationStatus
     suspend fun deleteSession(projectId: String, sessionName: String, force: Boolean = false)
+
+    /** Tears down the EMB-217 split viewport's linked tmux session -- see killProjectSessionSplit (src/server.ts). */
+    suspend fun closeSplitPane(projectId: String, sessionName: String)
 }
 
 class KtorSessionsRepository(private val client: TmuxWebHttpClient) : SessionsRepository {
@@ -30,5 +33,9 @@ class KtorSessionsRepository(private val client: TmuxWebHttpClient) : SessionsRe
             "/api/projects/$projectId/sessions/$sessionName",
             if (force) mapOf("force" to "true") else emptyMap(),
         )
+    }
+
+    override suspend fun closeSplitPane(projectId: String, sessionName: String) {
+        client.delete("/api/projects/$projectId/sessions/$sessionName/split")
     }
 }

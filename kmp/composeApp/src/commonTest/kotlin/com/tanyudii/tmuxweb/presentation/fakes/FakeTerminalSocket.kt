@@ -8,12 +8,14 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 
 class FakeTerminalSocket : TerminalSocket {
     val connectedSessions = mutableListOf<String>()
+    val connectedPanes = mutableListOf<Int>()
     val sentMessages = mutableListOf<ClientMessage>()
     var closeCallCount = 0
     val events = MutableSharedFlow<TerminalEvent>(extraBufferCapacity = 16)
 
-    override fun connect(sessionFullName: String): Flow<TerminalEvent> {
+    override fun connect(sessionFullName: String, pane: Int): Flow<TerminalEvent> {
         connectedSessions.add(sessionFullName)
+        connectedPanes.add(pane)
         return events
     }
 

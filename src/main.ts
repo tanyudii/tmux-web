@@ -4,8 +4,16 @@ import { join } from "node:path";
 import { createServer } from "./server.ts";
 import { readConfig, ConfigError, defaultConfigDir } from "./config.ts";
 import { resolveWebBuildDir } from "./web-build.ts";
-import { listSessions, listWindows, createSession, killSession, isValidSessionName, setBellHook } from "./tmux.ts";
-import { parseSessionName } from "./session-naming.ts";
+import {
+  listSessions,
+  listWindows,
+  createSession,
+  killSession,
+  isValidSessionName,
+  setBellHook,
+  ensureLinkedSession,
+} from "./tmux.ts";
+import { parseSessionName, splitPaneSessionName } from "./session-naming.ts";
 import {
   loadOrCreateVapidKeys,
   addPushSubscription,
@@ -31,6 +39,7 @@ import {
   getSessionCreationStatus as getSessionCreationStatusImpl,
   createSessionCreationStore,
   killProjectSession as killProjectSessionImpl,
+  killProjectSessionSplit as killProjectSessionSplitImpl,
   getProjectSessionChanges as getProjectSessionChangesImpl,
   getProjectSessionDiff as getProjectSessionDiffImpl,
   stageProjectSessionFile as stageProjectSessionFileImpl,
@@ -207,6 +216,8 @@ export async function main(): Promise<void> {
       getSessionCreationStatusImpl(project, slug, sessionCreationStore),
     killProjectSession: (project, slug, options) =>
       killProjectSessionImpl(project, slug, projectSessionsDeps, options),
+    killProjectSessionSplit: (project, slug) =>
+      killProjectSessionSplitImpl(project, slug, projectSessionsDeps),
 
     getProjectSessionChanges: (project, slug) =>
       getProjectSessionChangesImpl(project, slug, projectSessionsDeps),
@@ -252,16 +263,33 @@ export async function main(): Promise<void> {
 
     if (url.pathname === "/ws") {
       const sessionName = url.searchParams.get("session") ?? "";
+      // EMB-217: `pane=1` attaches to a linked tmux session instead of the
+      // primary one, so the split viewport can independently browse a
+      // different window than pane 0 -- see splitPaneSessionName's doc
+      // comment (session-naming.ts) for why this is a linked session
+      // rather than the same session twice.
+      const isSplitPane = url.searchParams.get("pane") === "1";
 
       if (!isValidSessionName(sessionName) || !verifyToken(token, config.token)) {
         rejectUnauthorizedUpgrade(socket, clientIp, wsAuthFailureLimiter);
         return;
       }
 
+      let targetSessionName = sessionName;
+      if (isSplitPane) {
+        targetSessionName = splitPaneSessionName(sessionName);
+        try {
+          await ensureLinkedSession(targetSessionName, sessionName);
+        } catch {
+          rejectUpgrade(socket, 500, "Internal Server Error");
+          return;
+        }
+      }
+
       wss.handleUpgrade(req, socket, head, (ws) => {
         attachPtyToSocket(
           ws as unknown as WebSocket & SocketLike,
-          sessionName,
+          targetSessionName,
           DEFAULT_COLS,
           DEFAULT_ROWS,
         );
@@ -269,8 +297,13 @@ export async function main(): Promise<void> {
         // session creation) so it self-heals for sessions created before
         // this feature shipped and after a server restart on a different
         // port -- see setBellHook's doc comment. A failure here (e.g. tmux
-        // gone) must never block the terminal itself from working.
-        void setBellHook(sessionName, config.port).catch(() => {});
+        // gone) must never block the terminal itself from working. Only
+        // set from the primary pane: both linked sessions share the same
+        // underlying windows, so setting this hook on the split session
+        // too would fire the bell push notification twice per bell.
+        if (!isSplitPane) {
+          void setBellHook(sessionName, config.port).catch(() => {});
+        }
       });
       return;
     }

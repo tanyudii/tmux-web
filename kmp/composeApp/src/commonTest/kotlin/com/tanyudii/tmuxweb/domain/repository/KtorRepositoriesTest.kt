@@ -106,6 +106,16 @@ class KtorRepositoriesTest {
         assertEquals(null, error.sessionCount)
     }
 
+    @Test
+    fun `closeSplitPane sends DELETE to the split endpoint and succeeds on 204`() = runTest {
+        val repo = KtorSessionsRepository(client(HttpStatusCode.NoContent, ""))
+
+        repo.closeSplitPane("p1", "my-branch")
+
+        assertEquals("DELETE", capturedRequest.method.value)
+        assertTrue(capturedRequest.url.encodedPath.endsWith("/sessions/my-branch/split"))
+    }
+
     // MARK: Environment (docker-compose)
 
     @Test

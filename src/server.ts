@@ -59,6 +59,7 @@ export interface ServerDeps {
     sessionSlug: string,
     options: { force?: boolean },
   ) => Promise<void>;
+  killProjectSessionSplit: (project: Project, sessionSlug: string) => Promise<void>;
 
   getProjectSessionChanges: (project: Project, sessionSlug: string) => Promise<GroupedChanges>;
   getProjectSessionDiff: (
@@ -424,6 +425,21 @@ export function createServer(deps: ServerDeps): Server {
           if (sendMappedError(res, error)) return;
           throw error;
         }
+        return sendEmpty(res, 204);
+      }
+
+      // EMB-217: tears down the split pane's linked tmux session -- see
+      // project-sessions.ts's killProjectSessionSplit. Always 204, even if
+      // the split was never opened (nothing to tear down).
+      const sessionSplitMatch = path.match(/^\/api\/projects\/([^/]+)\/sessions\/([^/]+)\/split$/);
+      if (sessionSplitMatch && req.method === "DELETE") {
+        if (!checkAuthorized(req, res, deps.token, clientIp, authFailureLimiter)) return;
+
+        const project = await deps.getProject(decodeURIComponent(sessionSplitMatch[1]));
+        if (!project) return sendJson(res, 404, { error: "Project not found" });
+
+        const sessionSlug = decodeURIComponent(sessionSplitMatch[2]);
+        await deps.killProjectSessionSplit(project, sessionSlug);
         return sendEmpty(res, 204);
       }
 

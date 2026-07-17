@@ -7,6 +7,7 @@ import {
   getSessionCreationStatus,
   createSessionCreationStore,
   killProjectSession,
+  killProjectSessionSplit,
   getProjectSessionChanges,
   getProjectSessionDiff,
   stageProjectSessionFile,
@@ -22,6 +23,7 @@ import type { Project } from "./projects.ts";
 import type { GroupedChanges } from "./git-status.ts";
 import { ValidationError } from "./tmux.ts";
 import { WorktreeConflictError } from "./worktree.ts";
+import { splitPaneSessionName } from "./session-naming.ts";
 
 const PROJECT: Project = {
   id: "proj1-ab12cd",
@@ -173,7 +175,11 @@ test("killProjectSession kills the tmux session then removes the worktree", asyn
 
   await killProjectSession(PROJECT, "feature-x", deps);
 
+  // The split pane's linked session (see splitPaneSessionName) is killed
+  // first, best-effort, before the primary session -- see killProjectSession's
+  // own doc comment.
   assert.deepEqual(calls, [
+    `kill:${splitPaneSessionName("proj1-ab12cd__feature-x")}`,
     "kill:proj1-ab12cd__feature-x",
     "remove:/repo:/data/worktrees/proj1-ab12cd/feature-x:false",
   ]);
@@ -252,7 +258,9 @@ test("killProjectSession tears down the session's docker-compose environment bef
 
   await killProjectSession(PROJECT, "feature-x", deps);
 
-  assert.deepEqual(calls, ["kill", "stopEnv:proj1-ab12cd:feature-x", "remove"]);
+  // Two "kill" entries: the split pane's linked session (best-effort) then
+  // the primary session.
+  assert.deepEqual(calls, ["kill", "kill", "stopEnv:proj1-ab12cd:feature-x", "remove"]);
 });
 
 test("killProjectSession tolerates stopSessionEnv failing (best-effort teardown)", async () => {
@@ -269,6 +277,29 @@ test("killProjectSession tolerates stopSessionEnv failing (best-effort teardown)
   await killProjectSession(PROJECT, "feature-x", deps);
 
   assert.deepEqual(removeCalls, ["/data/worktrees/proj1-ab12cd/feature-x"]);
+});
+
+test("killProjectSessionSplit kills only the split pane's linked session", async () => {
+  const calls: string[] = [];
+  const deps = makeDeps({
+    killSession: async (name) => {
+      calls.push(name);
+    },
+  });
+
+  await killProjectSessionSplit(PROJECT, "feature-x", deps);
+
+  assert.deepEqual(calls, [splitPaneSessionName("proj1-ab12cd__feature-x")]);
+});
+
+test("killProjectSessionSplit tolerates the split never having been opened", async () => {
+  const deps = makeDeps({
+    killSession: async () => {
+      throw new Error("can't find session");
+    },
+  });
+
+  await killProjectSessionSplit(PROJECT, "feature-x", deps);
 });
 
 test("getProjectSessionChanges resolves the worktree path and delegates to getChangedFiles", async () => {

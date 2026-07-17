@@ -1,5 +1,5 @@
 import type { Project } from "./projects.ts";
-import { buildSessionName, parseSessionName, belongsToProject } from "./session-naming.ts";
+import { buildSessionName, parseSessionName, belongsToProject, splitPaneSessionName } from "./session-naming.ts";
 import { resolveWorktreePath } from "./worktree.ts";
 import { slugifyBranchName } from "./slug.ts";
 import { ValidationError, type TmuxSession, type TmuxWindow, type CreateSessionOptions } from "./tmux.ts";
@@ -204,6 +204,13 @@ export async function killProjectSession(
 ): Promise<void> {
   const fullName = buildFullNameOrThrowValidation(project, sessionSlug);
 
+  // Best-effort, and killed before the primary session below: a split
+  // pane's linked session (see splitPaneSessionName) shares the primary's
+  // windows rather than owning independent ones -- killing it first avoids
+  // leaving it as a dangling, no-longer-discoverable session holding those
+  // windows open after the primary and worktree are already gone.
+  await deps.killSession(splitPaneSessionName(fullName)).catch(() => {});
+
   try {
     await deps.killSession(fullName);
   } catch (error) {
@@ -220,6 +227,21 @@ export async function killProjectSession(
 
   const worktreePath = resolveWorktreePath(project.id, sessionSlug, deps.worktreesRoot);
   await deps.removeWorktree(project.repoPath, worktreePath, options);
+}
+
+// Closing a split pane in the UI (as opposed to a network blip / tab close,
+// which should leave it attachable again -- see main.ts's /ws handler)
+// tears down its linked tmux session outright, matching how the split is
+// modeled as ephemeral in the UI: reopening it re-creates the linked
+// session via ensureLinkedSession (tmux.ts) rather than reusing state.
+// Tolerates the split never having been opened at all (nothing to kill).
+export async function killProjectSessionSplit(
+  project: Project,
+  sessionSlug: string,
+  deps: ProjectSessionsDeps,
+): Promise<void> {
+  const fullName = buildFullNameOrThrowValidation(project, sessionSlug);
+  await deps.killSession(splitPaneSessionName(fullName)).catch(() => {});
 }
 
 export async function getProjectSessionChanges(

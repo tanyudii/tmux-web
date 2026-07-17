@@ -62,6 +62,7 @@ function makeDeps(overrides: Partial<ServerDeps> = {}): ServerDeps {
     }),
     getProjectSessionCreationStatus: async () => ({ phase: "creating" }),
     killProjectSession: async () => {},
+    killProjectSessionSplit: async () => {},
     getProjectSessionChanges: async () => ({ staged: [], unstaged: [], untracked: [], conflicted: [], repoState: "clean" }),
     getProjectSessionDiff: async () => ({ diff: "", isUntracked: false, isBinary: false }),
     stageProjectSessionFile: async () => {},
@@ -512,6 +513,42 @@ test("DELETE /api/projects/:id/sessions/:name propagates an unexpected error as 
 test("DELETE /api/projects/:id/sessions/:name returns 404 for an unknown project", async () => {
   await withServer(makeDeps(), async (baseUrl) => {
     const res = await fetch(`${baseUrl}/api/projects/unknown-id/sessions/feature-x`, {
+      method: "DELETE",
+      headers: authHeaders(),
+    });
+    assert.equal(res.status, 404);
+  });
+});
+
+test("DELETE /api/projects/:id/sessions/:name/split tears down the split pane and returns 204", async () => {
+  const calls: Array<{ projectId: string; slug: string }> = [];
+  const deps = makeDeps({
+    killProjectSessionSplit: async (project, slug) => {
+      calls.push({ projectId: project.id, slug });
+    },
+  });
+  await withServer(deps, async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/projects/${SAMPLE_PROJECT.id}/sessions/feature-x/split`, {
+      method: "DELETE",
+      headers: authHeaders(),
+    });
+    assert.equal(res.status, 204);
+    assert.deepEqual(calls, [{ projectId: SAMPLE_PROJECT.id, slug: "feature-x" }]);
+  });
+});
+
+test("DELETE /api/projects/:id/sessions/:name/split without a token returns 401", async () => {
+  await withServer(makeDeps(), async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/projects/${SAMPLE_PROJECT.id}/sessions/feature-x/split`, {
+      method: "DELETE",
+    });
+    assert.equal(res.status, 401);
+  });
+});
+
+test("DELETE /api/projects/:id/sessions/:name/split returns 404 for an unknown project", async () => {
+  await withServer(makeDeps(), async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/projects/unknown-id/sessions/feature-x/split`, {
       method: "DELETE",
       headers: authHeaders(),
     });

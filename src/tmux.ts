@@ -108,6 +108,32 @@ export async function killSession(name: string, exec: ExecFn = defaultExec): Pro
   await exec("tmux", ["kill-session", "-t", name]);
 }
 
+// EMB-217 split-pane: creates `name` as a tmux *linked session* onto
+// `sourceName` (`tmux new-session -t <sourceName> -s <name>`) if it doesn't
+// already exist -- confirmed live that this shares the source's windows
+// and panes exactly (same content/processes) while giving `name` its own
+// independent current-window pointer, which is what lets a split viewport
+// show a different window than the primary session. Idempotent: `has-session`
+// probes first so re-opening an already-open split reattaches to the same
+// linked session (and whatever window it was last showing) instead of
+// resetting it back to window 0.
+export async function ensureLinkedSession(
+  name: string,
+  sourceName: string,
+  exec: ExecFn = defaultExec,
+): Promise<void> {
+  if (!isValidSessionName(name) || !isValidSessionName(sourceName)) {
+    throw new ValidationError(`Invalid session name: ${name} / ${sourceName}`);
+  }
+  try {
+    await exec("tmux", ["has-session", "-t", name]);
+    return;
+  } catch {
+    // Doesn't exist yet -- fall through and create it.
+  }
+  await exec("tmux", ["new-session", "-d", "-t", sourceName, "-s", name]);
+}
+
 export type ScrollDirection = "up" | "down";
 
 // Whether the session's active pane is currently in a tmux "mode" (copy-mode

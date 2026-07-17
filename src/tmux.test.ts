@@ -12,6 +12,7 @@ import {
   scrollPane,
   cancelCopyMode,
   setBellHook,
+  ensureLinkedSession,
   ValidationError,
 } from "./tmux.ts";
 
@@ -366,4 +367,44 @@ test("setBellHook sets the alert-bell hook (not 'bell' -- that hook name doesn't
   const runShellCommand = calls[0].args[4];
   assert.match(runShellCommand, /^run-shell -b '/);
   assert.match(runShellCommand, /curl -fsS -m 3 -X POST "http:\/\/127\.0\.0\.1:5309\/internal\/bell\?session=proj1-ab12cd__feature-x"/);
+});
+
+test("ensureLinkedSession rejects invalid names without calling exec", async () => {
+  let called = false;
+  const fakeExec = async () => {
+    called = true;
+    return { stdout: "" };
+  };
+
+  await assert.rejects(() => ensureLinkedSession("../etc", "main", fakeExec), ValidationError);
+  await assert.rejects(() => ensureLinkedSession("split1", "../etc", fakeExec), ValidationError);
+  assert.equal(called, false);
+});
+
+test("ensureLinkedSession does nothing when the session already exists", async () => {
+  const calls: Array<{ file: string; args: string[] }> = [];
+  const fakeExec = async (file: string, args: string[]) => {
+    calls.push({ file, args });
+    return { stdout: "" };
+  };
+
+  await ensureLinkedSession("split1", "main", fakeExec);
+
+  assert.deepEqual(calls, [{ file: "tmux", args: ["has-session", "-t", "split1"] }]);
+});
+
+test("ensureLinkedSession creates a linked session onto the source when it doesn't exist yet", async () => {
+  const calls: Array<{ file: string; args: string[] }> = [];
+  const fakeExec = async (file: string, args: string[]) => {
+    calls.push({ file, args });
+    if (args[0] === "has-session") throw new Error("can't find session split1");
+    return { stdout: "" };
+  };
+
+  await ensureLinkedSession("split1", "main", fakeExec);
+
+  assert.deepEqual(calls, [
+    { file: "tmux", args: ["has-session", "-t", "split1"] },
+    { file: "tmux", args: ["new-session", "-d", "-t", "main", "-s", "split1"] },
+  ]);
 });

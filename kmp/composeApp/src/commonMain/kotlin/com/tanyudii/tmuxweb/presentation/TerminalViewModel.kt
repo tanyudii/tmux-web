@@ -42,29 +42,32 @@ class TerminalViewModel(
     private var connectionJob: Job? = null
     private var retryJob: Job? = null
     private var connectedSessionFullName: String? = null
+    private var connectedPane: Int = 0
     private var lastBellAlertAt: Long? = null
     private var lastRequestedSize: Pair<Int, Int>? = null
     private var isManualDisconnect = false
     private var retryDelayMs = INITIAL_RETRY_DELAY_MS
 
-    fun connect(sessionFullName: String) {
+    /** [pane] 0 is the primary session; 1 is the EMB-217 split viewport -- see TerminalSocket.connect. */
+    fun connect(sessionFullName: String, pane: Int = 0) {
         isManualDisconnect = false
         connectedSessionFullName = sessionFullName
+        connectedPane = pane
         retryJob?.cancel()
         connectionJob?.cancel()
         connectionJob = scope.launch {
-            socket.connect(sessionFullName).collect(::handleEvent)
+            socket.connect(sessionFullName, pane).collect(::handleEvent)
         }
     }
 
     /**
-     * Re-attaches to the same session — iOS Safari (and the native app) suspends/closes the
-     * socket while backgrounded, unlike a desktop tab. Also invoked automatically: see
+     * Re-attaches to the same session (and pane) — iOS Safari (and the native app) suspends/closes
+     * the socket while backgrounded, unlike a desktop tab. Also invoked automatically: see
      * [scheduleReconnect] for the unexpected-close retry loop, and `ObserveAppForeground` for the
      * foreground fast path.
      */
     fun reconnect() {
-        connectedSessionFullName?.let(::connect)
+        connectedSessionFullName?.let { connect(it, connectedPane) }
     }
 
     fun disconnect() {

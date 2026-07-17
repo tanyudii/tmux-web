@@ -10,6 +10,8 @@ class FakeSessionsRepository(initialSessions: List<ProjectSession> = emptyList()
     var listError: Throwable? = null
     var deleteError: Throwable? = null
     var startCreationError: Throwable? = null
+    var closeSplitPaneError: Throwable? = null
+    val closeSplitPaneCalls = mutableListOf<Pair<String, String>>()
 
     /** Queue of statuses `sessionCreationStatus` returns in order, one per poll tick. */
     val creationStatusQueue = ArrayDeque<Result<SessionCreationStatus>>()
@@ -33,5 +35,10 @@ class FakeSessionsRepository(initialSessions: List<ProjectSession> = emptyList()
     override suspend fun deleteSession(projectId: String, sessionName: String, force: Boolean) {
         deleteError?.let { throw it }
         sessions.removeAll { it.name == sessionName }
+    }
+
+    override suspend fun closeSplitPane(projectId: String, sessionName: String) {
+        closeSplitPaneError?.let { throw it }
+        closeSplitPaneCalls.add(projectId to sessionName)
     }
 }

@@ -36,9 +36,9 @@ class KtorTerminalSocket(
 ) : TerminalSocket {
     private var session: DefaultClientWebSocketSession? = null
 
-    override fun connect(sessionFullName: String): Flow<TerminalEvent> = channelFlow {
+    override fun connect(sessionFullName: String, pane: Int): Flow<TerminalEvent> = channelFlow {
         val events: SendChannel<TerminalEvent> = channel
-        val wsUrl = buildWsUrl(sessionFullName)
+        val wsUrl = buildWsUrl(sessionFullName, pane)
         httpClient.webSocket(wsUrl) {
             session = this
             events.send(TerminalEvent.Opened)
@@ -71,12 +71,13 @@ class KtorTerminalSocket(
         session = null
     }
 
-    private fun buildWsUrl(sessionFullName: String): String {
+    private fun buildWsUrl(sessionFullName: String, pane: Int): String {
         val builder = URLBuilder(baseUrl)
         builder.protocol = if (builder.protocol == URLProtocol.HTTPS) URLProtocol.WSS else URLProtocol.WS
         builder.encodedPath = "/ws"
         builder.parameters.append("session", sessionFullName)
         builder.parameters.append("token", token)
+        if (pane != 0) builder.parameters.append("pane", pane.toString())
         return builder.buildString()
     }
 }

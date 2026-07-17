@@ -28,6 +28,7 @@ import androidx.compose.material.icons.outlined.Remove
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.Stop
 import androidx.compose.material.icons.outlined.Terminal
+import androidx.compose.material.icons.outlined.VerticalSplit
 import androidx.compose.material.icons.outlined.ViewColumn
 import androidx.compose.material.icons.outlined.WarningAmber
 import androidx.compose.material.icons.outlined.WifiOff
@@ -77,4 +78,5 @@ object TmuxIcons {
     val Logs: ImageVector = Icons.AutoMirrored.Outlined.Article
     val Bell: ImageVector = Icons.Outlined.Notifications
     val BellOff: ImageVector = Icons.Outlined.NotificationsOff
+    val SplitView: ImageVector = Icons.Outlined.VerticalSplit
 }

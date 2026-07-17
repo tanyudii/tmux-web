@@ -55,13 +55,21 @@ class TerminalSession internal constructor(
     }
 }
 
+/**
+ * [pane] 0 (default) is the primary viewport; 1 is the EMB-217 split
+ * viewport, which attaches to its own linked tmux session (see
+ * TerminalSocket.connect) -- keying every `remember` here on both
+ * [sessionFullName] and [pane] is what gives the split its own independent
+ * [TerminalViewModel]/socket/handle instead of accidentally sharing pane
+ * 0's.
+ */
 @Composable
-fun rememberTerminalSession(sessionFullName: String): TerminalSession {
+fun rememberTerminalSession(sessionFullName: String, pane: Int = 0): TerminalSession {
     val socket: TerminalSocket = koinInject()
     val scope = rememberCoroutineScope()
-    val viewModel = remember(sessionFullName) { TerminalViewModel(socket, scope) }
+    val viewModel = remember(sessionFullName, pane) { TerminalViewModel(socket, scope) }
     val state by viewModel.state.collectAsState()
-    var handle by remember(sessionFullName) { mutableStateOf<PlatformTerminalHandle?>(null) }
+    var handle by remember(sessionFullName, pane) { mutableStateOf<PlatformTerminalHandle?>(null) }
     // sessionFullName is "<projectId>__<sessionSlug>" (see backend's
     // session-naming.ts SESSION_NAME_SEPARATOR) -- the slug is the
     // human-readable part, so it's what buildBellTitle should show rather
@@ -74,9 +82,9 @@ fun rememberTerminalSession(sessionFullName: String): TerminalSession {
         // SharedFlow, so a subscriber that attaches after emissions start
         // would miss the shell's first bytes (prompt / tmux attach output).
         launch { viewModel.output.collect { bytes -> readyHandle.write(bytes.decodeToString()) } }
-        viewModel.connect(sessionFullName)
+        viewModel.connect(sessionFullName, pane)
     }
-    DisposableEffect(sessionFullName) { onDispose { viewModel.disconnect() } }
+    DisposableEffect(sessionFullName, pane) { onDispose { viewModel.disconnect() } }
     // Fast path for the reported iOS Safari bug (and the equivalent gap on
     // the native iOS app, see AppForegroundObserver.ios.kt): the moment the
     // tab/app comes back to the foreground, try to reconnect immediately

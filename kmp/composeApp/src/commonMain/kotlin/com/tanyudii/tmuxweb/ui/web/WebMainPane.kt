@@ -18,7 +18,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -41,7 +40,6 @@ import com.tanyudii.tmuxweb.domain.repository.EnvironmentRepository
 import com.tanyudii.tmuxweb.presentation.DiffViewModel
 import com.tanyudii.tmuxweb.presentation.EnvFileEditorViewModel
 import com.tanyudii.tmuxweb.presentation.LogsViewModel
-import com.tanyudii.tmuxweb.terminal.PlatformTerminalView
 import com.tanyudii.tmuxweb.terminal.observeAppForeground
 import com.tanyudii.tmuxweb.ui.components.PushNotificationToggle
 import com.tanyudii.tmuxweb.ui.components.TmuxButton
@@ -115,6 +113,7 @@ fun WebMainPane(
     var windowDialogOpen by remember { mutableStateOf(false) }
     var diffTarget by remember(session?.name) { mutableStateOf<DiffTarget?>(null) }
     var envEditorOpen by remember(session?.name) { mutableStateOf(false) }
+    var splitOpen by remember(session?.name) { mutableStateOf(false) } // EMB-217, reset per session
 
     Column(modifier = modifier.fillMaxSize().background(TmuxColors.bgApp)) {
         if (session == null || terminal == null) {
@@ -147,6 +146,8 @@ fun WebMainPane(
                     diffTarget == null && logsService == null && !hasPendingDiscard && !envEditorOpen,
                 onEnvironmentMenuOpenChanged = { environmentMenuOpen = it },
                 onDialogOpenChanged = { windowDialogOpen = it },
+                splitOpen = splitOpen,
+                onToggleSplit = { splitOpen = !splitOpen },
                 modifier = Modifier.weight(1f).fillMaxHeight(),
             )
             if (railOpen) {
@@ -237,6 +238,8 @@ private fun MainContent(
     terminalVisible: Boolean,
     onEnvironmentMenuOpenChanged: (Boolean) -> Unit,
     onDialogOpenChanged: (Boolean) -> Unit,
+    splitOpen: Boolean,
+    onToggleSplit: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Column(modifier = modifier) {
@@ -253,6 +256,8 @@ private fun MainContent(
                 onEnvironmentEditConfig = onEnvironmentEditConfig,
             onViewLogs = onViewLogs,
             onEnvironmentMenuOpenChanged = onEnvironmentMenuOpenChanged,
+            splitOpen = splitOpen,
+            onToggleSplit = onToggleSplit,
         )
         WindowTabs(
             windowCount = session.windows,
@@ -273,19 +278,15 @@ private fun MainContent(
         }
 
         Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
-            // Keyed by session identity -- without this, switching sessions
-            // directly (no intermediate null selection) reuses the xterm.js
-            // instance instead of recreating it.
-            key(session.fullName) {
-                PlatformTerminalView(
-                    modifier = Modifier.fillMaxSize(),
-                    onInput = terminal::onInput,
-                    onBell = terminal::onBell,
-                    onResize = terminal::onResize,
-                    handleReady = terminal.onHandleReady,
-                    isVisible = terminalVisible,
-                )
-            }
+            TerminalArea(
+                projectId = project?.id.orEmpty(),
+                sessionFullName = session.fullName,
+                sessionSlug = session.name,
+                primaryTerminal = terminal,
+                terminalVisible = terminalVisible,
+                splitOpen = splitOpen,
+                onSplitClosed = onToggleSplit,
+            )
         }
 
         StatusFooter(session = session)
@@ -420,6 +421,8 @@ private fun TopBar(
     onEnvironmentEditConfig: () -> Unit,
     onViewLogs: (String) -> Unit,
     onEnvironmentMenuOpenChanged: (Boolean) -> Unit,
+    splitOpen: Boolean,
+    onToggleSplit: () -> Unit,
 ) {
     Row(
         verticalAlignment = Alignment.CenterVertically,
@@ -455,6 +458,12 @@ private fun TopBar(
             onOpenChanged = onEnvironmentMenuOpenChanged,
         )
         PushNotificationToggle()
+        TmuxIconButton(
+            icon = TmuxIcons.SplitView,
+            contentDescription = if (splitOpen) "Close split" else "Split terminal",
+            onClick = onToggleSplit,
+            variant = if (splitOpen) TmuxIconButtonVariant.FILLED else TmuxIconButtonVariant.GHOST,
+        )
         TmuxIconButton(
             TmuxIcons.GitBranch,
             "Changes",
