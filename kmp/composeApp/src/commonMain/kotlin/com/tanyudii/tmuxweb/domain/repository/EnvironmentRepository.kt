@@ -8,6 +8,7 @@ interface EnvironmentRepository {
     suspend fun envStatus(projectId: String, sessionName: String): EnvStatus
     suspend fun startEnv(projectId: String, sessionName: String)
     suspend fun stopEnv(projectId: String, sessionName: String)
+    suspend fun cancelEnv(projectId: String, sessionName: String)
 }
 
 class KtorEnvironmentRepository(private val client: TmuxWebHttpClient) : EnvironmentRepository {
@@ -20,5 +21,9 @@ class KtorEnvironmentRepository(private val client: TmuxWebHttpClient) : Environ
 
     override suspend fun stopEnv(projectId: String, sessionName: String) {
         client.delete("/api/projects/$projectId/sessions/$sessionName/env")
+    }
+
+    override suspend fun cancelEnv(projectId: String, sessionName: String) {
+        client.post("/api/projects/$projectId/sessions/$sessionName/env/cancel")
     }
 }

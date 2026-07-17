@@ -98,6 +98,7 @@ private fun TerminalScreen(
                     onStop = environment::requestStop,
                     onViewLogs = environment::showLogs,
                     onOpenChanged = { environmentMenuOpen = it },
+                    onCancel = environment::cancel,
                 )
             },
         )

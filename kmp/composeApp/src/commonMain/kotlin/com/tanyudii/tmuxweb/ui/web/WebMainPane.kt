@@ -87,6 +87,7 @@ fun WebMainPane(
     onNewSession: () -> Unit,
     onEnvironmentRun: () -> Unit,
     onEnvironmentStop: () -> Unit,
+    onEnvironmentCancel: () -> Unit,
     onViewLogs: (String) -> Unit,
     onSwitchLogsService: (String) -> Unit,
     onHideLogs: () -> Unit,
@@ -134,6 +135,7 @@ fun WebMainPane(
                 onToggleRail = onToggleRail,
                 onEnvironmentRun = onEnvironmentRun,
                 onEnvironmentStop = onEnvironmentStop,
+                onEnvironmentCancel = onEnvironmentCancel,
                 onViewLogs = onViewLogs,
                 terminalVisible = isTerminalVisible && !environmentMenuOpen && !windowDialogOpen &&
                     diffTarget == null && logsService == null && !hasPendingDiscard,
@@ -196,6 +198,7 @@ private fun MainContent(
     onToggleRail: () -> Unit,
     onEnvironmentRun: () -> Unit,
     onEnvironmentStop: () -> Unit,
+    onEnvironmentCancel: () -> Unit,
     onViewLogs: (String) -> Unit,
     terminalVisible: Boolean,
     onEnvironmentMenuOpenChanged: (Boolean) -> Unit,
@@ -212,6 +215,7 @@ private fun MainContent(
             onToggleRail = onToggleRail,
             onEnvironmentRun = onEnvironmentRun,
             onEnvironmentStop = onEnvironmentStop,
+                onEnvironmentCancel = onEnvironmentCancel,
             onViewLogs = onViewLogs,
             onEnvironmentMenuOpenChanged = onEnvironmentMenuOpenChanged,
         )
@@ -377,6 +381,7 @@ private fun TopBar(
     onToggleRail: () -> Unit,
     onEnvironmentRun: () -> Unit,
     onEnvironmentStop: () -> Unit,
+    onEnvironmentCancel: () -> Unit,
     onViewLogs: (String) -> Unit,
     onEnvironmentMenuOpenChanged: (Boolean) -> Unit,
 ) {
@@ -408,6 +413,7 @@ private fun TopBar(
             isBusy = environmentBusy,
             onRun = onEnvironmentRun,
             onStop = onEnvironmentStop,
+            onCancel = onEnvironmentCancel,
             onViewLogs = onViewLogs,
             onOpenChanged = onEnvironmentMenuOpenChanged,
         )

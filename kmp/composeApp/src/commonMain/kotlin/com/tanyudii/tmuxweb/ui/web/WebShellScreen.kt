@@ -110,6 +110,7 @@ fun WebShellScreen(onSwitchServer: () -> Unit) {
                 onNewSession = { state.selectedProjectId?.let(viewModel::showNewSessionDialog) },
                 onEnvironmentRun = { environmentState?.viewModel?.setup() },
                 onEnvironmentStop = { environmentState?.viewModel?.stop() },
+                onEnvironmentCancel = { environmentState?.viewModel?.cancel() },
                 onViewLogs = { service -> environmentState?.viewModel?.showLogs(service) },
                 onSwitchLogsService = { service -> environmentState?.viewModel?.switchLogsService(service) },
                 onHideLogs = { environmentState?.viewModel?.hideLogs() },

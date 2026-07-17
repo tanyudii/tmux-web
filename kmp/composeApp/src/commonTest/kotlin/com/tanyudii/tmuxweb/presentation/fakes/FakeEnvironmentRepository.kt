@@ -10,8 +10,10 @@ class FakeEnvironmentRepository(private val default: EnvStatus = EnvStatus(phase
     val statusQueue = ArrayDeque<Result<EnvStatus>>()
     var startError: Throwable? = null
     var stopError: Throwable? = null
+    var cancelError: Throwable? = null
     var startCallCount = 0
     var stopCallCount = 0
+    var cancelCallCount = 0
 
     override suspend fun envStatus(projectId: String, sessionName: String): EnvStatus =
         (statusQueue.removeFirstOrNull() ?: Result.success(default)).getOrThrow()
@@ -24,5 +26,10 @@ class FakeEnvironmentRepository(private val default: EnvStatus = EnvStatus(phase
     override suspend fun stopEnv(projectId: String, sessionName: String) {
         stopCallCount++
         stopError?.let { throw it }
+    }
+
+    override suspend fun cancelEnv(projectId: String, sessionName: String) {
+        cancelCallCount++
+        cancelError?.let { throw it }
     }
 }

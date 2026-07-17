@@ -139,6 +139,38 @@ class EnvironmentViewModelTest {
     }
 
     @Test
+    fun `cancel calls cancelEnv and refreshes status`() = runTest {
+        val repository = FakeEnvironmentRepository()
+        repository.statusQueue.addAll(
+            listOf(
+                Result.success(EnvStatus(phase = EnvPhase.STARTING)),
+                Result.success(EnvStatus(phase = EnvPhase.ERROR, message = "Cancelled")),
+            ),
+        )
+        val viewModel = viewModel(repository)
+        runCurrent()
+
+        viewModel.cancel()
+        runCurrent()
+
+        assertEquals(1, repository.cancelCallCount)
+        assertEquals(EnvPhase.ERROR, viewModel.state.value.status?.phase)
+    }
+
+    @Test
+    fun `cancel failure surfaces an error message`() = runTest {
+        val repository = FakeEnvironmentRepository()
+        repository.cancelError = RuntimeException("not currently starting")
+        val viewModel = viewModel(repository)
+        runCurrent()
+
+        viewModel.cancel()
+        runCurrent()
+
+        assertEquals("not currently starting", viewModel.state.value.errorMessage)
+    }
+
+    @Test
     fun `showLogs sets the selected service -- switchLogsService changes it -- hideLogs clears it`() = runTest {
         val repository = FakeEnvironmentRepository()
         val viewModel = viewModel(repository)
