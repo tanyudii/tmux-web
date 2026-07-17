@@ -163,3 +163,30 @@ export async function cancelCopyMode(name: string, exec: ExecFn = defaultExec): 
   if (!inMode) return;
   await exec("tmux", ["send-keys", "-X", "-t", name, "cancel"]);
 }
+
+// Wires this session's `alert-bell` hook (confirmed live: NOT "bell" -- that
+// hook name doesn't exist in tmux, "unknown value" is what tmux 3.6 returns
+// for it) so a BEL byte reaches the backend's /internal/bell endpoint (see
+// server.ts + push-notifications.ts) even when no browser tab has this
+// session's terminal open. This fires from tmux's own bell-monitoring
+// (monitor-bell, on by default), which runs independently of any attached
+// client -- unlike the WS-relayed PTY stream in pty-bridge.ts, which only
+// exists while a tab is actually attached. Confirmed live with a real tmux
+// session + a real HTTP listener + `tmux send-keys ... printf '\a'` with no
+// client ever attached.
+//
+// Re-set (not appended) on every call -- session-scoped hooks in tmux
+// replace rather than accumulate, so calling this again after a server
+// restart on a different port self-heals instead of leaving a stale port
+// number behind. `-b` runs curl in the background so a slow/unreachable
+// backend never blocks tmux itself; output is discarded since nothing reads
+// it. `name` is validated above and `port` is always a number, so the
+// embedded command string is safe from shell-metacharacter injection
+// despite tmux itself re-parsing it as a shell command via `/bin/sh -c`.
+export async function setBellHook(name: string, port: number, exec: ExecFn = defaultExec): Promise<void> {
+  if (!isValidSessionName(name)) {
+    throw new ValidationError(`Invalid session name: ${name}`);
+  }
+  const command = `curl -fsS -m 3 -X POST "http://127.0.0.1:${port}/internal/bell?session=${name}" >/dev/null 2>&1`;
+  await exec("tmux", ["set-hook", "-t", name, "alert-bell", `run-shell -b '${command}'`]);
+}

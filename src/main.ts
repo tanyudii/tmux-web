@@ -4,7 +4,15 @@ import { join } from "node:path";
 import { createServer } from "./server.ts";
 import { readConfig, ConfigError, defaultConfigDir } from "./config.ts";
 import { resolveWebBuildDir } from "./web-build.ts";
-import { listSessions, listWindows, createSession, killSession, isValidSessionName } from "./tmux.ts";
+import { listSessions, listWindows, createSession, killSession, isValidSessionName, setBellHook } from "./tmux.ts";
+import { parseSessionName } from "./session-naming.ts";
+import {
+  loadOrCreateVapidKeys,
+  addPushSubscription,
+  removePushSubscription,
+  sendBellPush,
+  BellPushDebouncer,
+} from "./push-notifications.ts";
 import { extractQueryToken, verifyToken } from "./auth.ts";
 import { RateLimiter } from "./rate-limit.ts";
 import { attachPtyToSocket, type SocketLike } from "./pty-bridge.ts";
@@ -54,6 +62,17 @@ import { sanitizeServiceName } from "./service-name.ts";
 
 const DEFAULT_COLS = 80;
 const DEFAULT_ROWS = 24;
+
+// VAPID subject per RFC 8292 -- required by the spec but push services
+// (Chrome/Firefox's own endpoints) don't actually validate or contact it;
+// it's a fixed placeholder rather than a real mailbox, same as other
+// self-hosted apps that don't have a per-install contact address to use.
+const VAPID_SUBJECT = "mailto:tmux-web@localhost";
+
+// Debounces repeated pushes for the same session's bell -- a busy command
+// (progress bars, build output) can emit many BEL bytes in a row; without
+// this every one would fan out its own push to every subscribed device.
+const BELL_PUSH_COOLDOWN_MS = 30_000;
 
 // Default location of the KMP Web client's compiled output relative to this
 // file (src/main.ts) -- see kmp/composeApp/build.gradle.kts's wasmJs target
@@ -147,6 +166,24 @@ export async function main(): Promise<void> {
 
   const browseRoot = process.env.TMUX_WEB_BROWSE_ROOT;
 
+  const vapidKeys = await loadOrCreateVapidKeys(configDir);
+  const bellPushDebouncer = new BellPushDebouncer(BELL_PUSH_COOLDOWN_MS);
+
+  // Driven by /internal/bell (server.ts), itself driven by the tmux
+  // `alert-bell` hook set in setBellHook below -- fires even when no
+  // browser tab has this session's terminal open, since the hook is tmux's
+  // own bell-monitoring rather than anything relayed through a WS. The
+  // session slug (not the opaque project-id-prefixed full name) is used as
+  // the human-readable label, matching BellAlert.kt's buildBellTitle.
+  async function notifyBellImpl(sessionFullName: string): Promise<void> {
+    if (!bellPushDebouncer.shouldSend(sessionFullName)) return;
+    const label = parseSessionName(sessionFullName)?.sessionSlug ?? sessionFullName;
+    await sendBellPush(configDir, { subject: VAPID_SUBJECT, ...vapidKeys }, {
+      title: `🔔 ${label} needs you`,
+      body: "tmux-web",
+    });
+  }
+
   const httpServer = createServer({
     token: config.token,
     publicDir: webBuildDir,
@@ -198,6 +235,11 @@ export async function main(): Promise<void> {
       stopSessionEnvImpl(project, slug, sessionEnvDeps, sessionEnvStore),
     cancelProjectSessionEnv: (project, slug) =>
       Promise.resolve(cancelSessionEnvImpl(project, slug, sessionEnvStore, sessionEnvControllers)),
+
+    getPushPublicKey: () => vapidKeys.publicKey,
+    subscribePush: (subscription) => addPushSubscription(configDir, subscription),
+    unsubscribePush: (endpoint) => removePushSubscription(configDir, endpoint),
+    notifyBell: notifyBellImpl,
   });
 
   const wss = new WebSocketServer({ noServer: true });
@@ -223,6 +265,12 @@ export async function main(): Promise<void> {
           DEFAULT_COLS,
           DEFAULT_ROWS,
         );
+        // Best-effort and fire-and-forget: re-set on every attach (not just
+        // session creation) so it self-heals for sessions created before
+        // this feature shipped and after a server restart on a different
+        // port -- see setBellHook's doc comment. A failure here (e.g. tmux
+        // gone) must never block the terminal itself from working.
+        void setBellHook(sessionName, config.port).catch(() => {});
       });
       return;
     }

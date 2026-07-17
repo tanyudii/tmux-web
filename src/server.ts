@@ -37,6 +37,7 @@ import { EnvConfigError } from "./env-config.ts";
 import { EnvEditorError, EnvFileNotFoundError, EnvFileValidationError, type EnvFileEntry } from "./env-editor.ts";
 import { PortCollisionError } from "./docker-compose.ts";
 import { RateLimiter, type RateLimiterOptions } from "./rate-limit.ts";
+import type { PushSubscriptionRecord } from "./push-notifications.ts";
 
 const DIFF_MODES: readonly DiffMode[] = ["staged", "unstaged", "untracked"];
 
@@ -88,6 +89,16 @@ export interface ServerDeps {
   startProjectSessionEnv: (project: Project, sessionSlug: string) => Promise<void>;
   stopProjectSessionEnv: (project: Project, sessionSlug: string) => Promise<void>;
   cancelProjectSessionEnv: (project: Project, sessionSlug: string) => Promise<void>;
+
+  // Web Push (EMB-212) -- see push-notifications.ts. getPushPublicKey is
+  // sync (the VAPID key pair is loaded once at startup, see main.ts).
+  getPushPublicKey: () => string;
+  subscribePush: (subscription: PushSubscriptionRecord) => Promise<void>;
+  unsubscribePush: (endpoint: string) => Promise<void>;
+  // Called from the /internal/bell route below, itself driven by the tmux
+  // `alert-bell` hook set in setBellHook (tmux.ts) -- NOT part of the public
+  // authenticated API surface, see the loopback-only check at its call site.
+  notifyBell: (sessionFullName: string) => Promise<void>;
 }
 
 const MIME_TYPES: Record<string, string> = {
@@ -256,6 +267,18 @@ function sendMappedError(res: ServerResponse, error: unknown): boolean {
     return true;
   }
   return false;
+}
+
+// /internal/bell (below) is deliberately NOT part of the bearer-token-
+// authenticated API -- it's called by a `curl` embedded in a tmux
+// `run-shell` hook command (see tmux.ts's setBellHook), which has no way to
+// carry this app's own auth token without leaking it into `tmux
+// show-hooks`/process-list output visible to anyone with shell access to the
+// box. Restricting it to loopback callers only closes that gap: even if
+// this server's own host binds 0.0.0.0 (see README/deployment notes), this
+// one route only ever accepts requests that originate on the same machine.
+function isLoopbackAddress(ip: string): boolean {
+  return ip === "127.0.0.1" || ip === "::1" || ip === "::ffff:127.0.0.1";
 }
 
 async function serveStatic(publicDir: string, urlPath: string, res: ServerResponse): Promise<boolean> {
@@ -681,6 +704,61 @@ export function createServer(deps: ServerDeps): Server {
           if (sendMappedError(res, error)) return;
           throw error;
         }
+        return sendEmpty(res, 204);
+      }
+
+      if (path === "/api/push/public-key" && req.method === "GET") {
+        if (!checkAuthorized(req, res, deps.token, clientIp, authFailureLimiter)) return;
+        return sendJson(res, 200, { publicKey: deps.getPushPublicKey() });
+      }
+
+      if (path === "/api/push/subscribe" && req.method === "POST") {
+        if (!checkAuthorized(req, res, deps.token, clientIp, authFailureLimiter)) return;
+
+        let body: unknown;
+        try {
+          body = await readJsonBody(req);
+        } catch {
+          return sendJson(res, 400, { error: "Malformed JSON body" });
+        }
+        const { endpoint, keys } = body as { endpoint?: unknown; keys?: { p256dh?: unknown; auth?: unknown } };
+        if (
+          typeof endpoint !== "string" ||
+          !endpoint ||
+          typeof keys?.p256dh !== "string" ||
+          typeof keys?.auth !== "string"
+        ) {
+          return sendJson(res, 400, { error: "Missing endpoint or keys.p256dh/keys.auth" });
+        }
+        await deps.subscribePush({ endpoint, keys: { p256dh: keys.p256dh, auth: keys.auth } });
+        return sendEmpty(res, 204);
+      }
+
+      if (path === "/api/push/unsubscribe" && req.method === "POST") {
+        if (!checkAuthorized(req, res, deps.token, clientIp, authFailureLimiter)) return;
+
+        let body: unknown;
+        try {
+          body = await readJsonBody(req);
+        } catch {
+          return sendJson(res, 400, { error: "Malformed JSON body" });
+        }
+        const { endpoint } = body as { endpoint?: unknown };
+        if (typeof endpoint !== "string" || !endpoint) {
+          return sendJson(res, 400, { error: "Missing endpoint" });
+        }
+        await deps.unsubscribePush(endpoint);
+        return sendEmpty(res, 204);
+      }
+
+      // No bearer-token auth by design -- see isLoopbackAddress's comment.
+      if (path === "/internal/bell" && req.method === "POST") {
+        if (!isLoopbackAddress(clientIp)) return sendJson(res, 404, { error: "Not found" });
+
+        const session = url.searchParams.get("session") ?? "";
+        if (!session) return sendJson(res, 400, { error: "Missing session" });
+
+        await deps.notifyBell(session);
         return sendEmpty(res, 204);
       }
 

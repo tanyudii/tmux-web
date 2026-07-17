@@ -75,6 +75,10 @@ function makeDeps(overrides: Partial<ServerDeps> = {}): ServerDeps {
     listProjectSessionEnvFiles: async () => [],
     readProjectSessionEnvFile: async () => "",
     writeProjectSessionEnvFile: async () => {},
+    getPushPublicKey: () => "test-public-key",
+    subscribePush: async () => {},
+    unsubscribePush: async () => {},
+    notifyBell: async () => {},
     ...overrides,
   };
 }
@@ -1275,5 +1279,112 @@ test("GET requests are never counted against the expensive-action limit (multi-t
       const res = await fetch(`${baseUrl}/api/projects/${SAMPLE_PROJECT.id}/sessions`, { headers: authHeaders() });
       assert.equal(res.status, 200);
     }
+  });
+});
+
+test("GET /api/push/public-key returns the VAPID public key", async () => {
+  const deps = makeDeps({ getPushPublicKey: () => "vapid-public-key-123" });
+  await withServer(deps, async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/push/public-key`, { headers: authHeaders() });
+    assert.equal(res.status, 200);
+    const body = await res.json();
+    assert.deepEqual(body, { publicKey: "vapid-public-key-123" });
+  });
+});
+
+test("GET /api/push/public-key without a token returns 401", async () => {
+  await withServer(makeDeps(), async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/push/public-key`);
+    assert.equal(res.status, 401);
+  });
+});
+
+test("POST /api/push/subscribe stores the subscription and returns 204", async () => {
+  const calls: unknown[] = [];
+  const deps = makeDeps({
+    subscribePush: async (subscription) => {
+      calls.push(subscription);
+    },
+  });
+  await withServer(deps, async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/push/subscribe`, {
+      method: "POST",
+      headers: { ...authHeaders(), "Content-Type": "application/json" },
+      body: JSON.stringify({ endpoint: "https://push.example.com/a", keys: { p256dh: "p", auth: "a" } }),
+    });
+    assert.equal(res.status, 204);
+    assert.deepEqual(calls, [{ endpoint: "https://push.example.com/a", keys: { p256dh: "p", auth: "a" } }]);
+  });
+});
+
+test("POST /api/push/subscribe returns 400 when endpoint or keys are missing", async () => {
+  await withServer(makeDeps(), async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/push/subscribe`, {
+      method: "POST",
+      headers: { ...authHeaders(), "Content-Type": "application/json" },
+      body: JSON.stringify({ endpoint: "https://push.example.com/a" }),
+    });
+    assert.equal(res.status, 400);
+  });
+});
+
+test("POST /api/push/subscribe without a token returns 401", async () => {
+  await withServer(makeDeps(), async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/push/subscribe`, { method: "POST" });
+    assert.equal(res.status, 401);
+  });
+});
+
+test("POST /api/push/unsubscribe removes the subscription and returns 204", async () => {
+  const calls: string[] = [];
+  const deps = makeDeps({
+    unsubscribePush: async (endpoint) => {
+      calls.push(endpoint);
+    },
+  });
+  await withServer(deps, async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/push/unsubscribe`, {
+      method: "POST",
+      headers: { ...authHeaders(), "Content-Type": "application/json" },
+      body: JSON.stringify({ endpoint: "https://push.example.com/a" }),
+    });
+    assert.equal(res.status, 204);
+    assert.deepEqual(calls, ["https://push.example.com/a"]);
+  });
+});
+
+test("POST /api/push/unsubscribe returns 400 when endpoint is missing", async () => {
+  await withServer(makeDeps(), async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/push/unsubscribe`, {
+      method: "POST",
+      headers: { ...authHeaders(), "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    assert.equal(res.status, 400);
+  });
+});
+
+test("POST /internal/bell from a loopback client (no bearer token) triggers notifyBell and returns 204", async () => {
+  const calls: string[] = [];
+  const deps = makeDeps({
+    notifyBell: async (sessionFullName) => {
+      calls.push(sessionFullName);
+    },
+  });
+  await withServer(deps, async (baseUrl) => {
+    // withServer binds to 127.0.0.1 (see its definition above), so this
+    // fetch -- like the real tmux `alert-bell` hook's own curl call -- is
+    // itself a loopback client, exercising the same allow-path without a
+    // bearer token.
+    const res = await fetch(`${baseUrl}/internal/bell?session=proj1-ab12cd__feature-x`, { method: "POST" });
+    assert.equal(res.status, 204);
+    assert.deepEqual(calls, ["proj1-ab12cd__feature-x"]);
+  });
+});
+
+test("POST /internal/bell without a session query param returns 400", async () => {
+  await withServer(makeDeps(), async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/internal/bell`, { method: "POST" });
+    assert.equal(res.status, 400);
   });
 });

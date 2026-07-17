@@ -11,6 +11,7 @@ import {
   getPaneMode,
   scrollPane,
   cancelCopyMode,
+  setBellHook,
   ValidationError,
 } from "./tmux.ts";
 
@@ -336,4 +337,33 @@ test("cancelCopyMode is a no-op when the pane is not in copy-mode", async () => 
   assert.deepEqual(calls, [
     { file: "tmux", args: ["display-message", "-p", "-t", "main", "#{pane_in_mode}"] },
   ]);
+});
+
+test("setBellHook rejects invalid session names without calling exec", async () => {
+  let called = false;
+  const fakeExec = async () => {
+    called = true;
+    return { stdout: "" };
+  };
+
+  await assert.rejects(() => setBellHook("../etc", 5309, fakeExec), ValidationError);
+  assert.equal(called, false);
+});
+
+test("setBellHook sets the alert-bell hook (not 'bell' -- that hook name doesn't exist in tmux) to curl the internal endpoint", async () => {
+  const calls: Array<{ file: string; args: string[] }> = [];
+  const fakeExec = async (file: string, args: string[]) => {
+    calls.push({ file, args });
+    return { stdout: "" };
+  };
+
+  await setBellHook("proj1-ab12cd__feature-x", 5309, fakeExec);
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].file, "tmux");
+  assert.deepEqual(calls[0].args.slice(0, 3), ["set-hook", "-t", "proj1-ab12cd__feature-x"]);
+  assert.equal(calls[0].args[3], "alert-bell");
+  const runShellCommand = calls[0].args[4];
+  assert.match(runShellCommand, /^run-shell -b '/);
+  assert.match(runShellCommand, /curl -fsS -m 3 -X POST "http:\/\/127\.0\.0\.1:5309\/internal\/bell\?session=proj1-ab12cd__feature-x"/);
 });

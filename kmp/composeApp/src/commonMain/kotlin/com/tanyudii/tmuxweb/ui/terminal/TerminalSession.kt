@@ -11,6 +11,9 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import com.tanyudii.tmuxweb.data.remote.terminal.ClientMessage
 import com.tanyudii.tmuxweb.data.remote.terminal.TerminalSocket
+import com.tanyudii.tmuxweb.domain.buildBellTitle
+import com.tanyudii.tmuxweb.domain.hasWindowFocus
+import com.tanyudii.tmuxweb.domain.isPageHidden
 import com.tanyudii.tmuxweb.presentation.TerminalViewModel
 import com.tanyudii.tmuxweb.terminal.PlatformTerminalHandle
 import com.tanyudii.tmuxweb.terminal.observeAppForeground
@@ -32,6 +35,7 @@ class TerminalSession internal constructor(
     val viewModel: TerminalViewModel,
     val isConnected: Boolean,
     val onHandleReady: (PlatformTerminalHandle) -> Unit,
+    private val sessionLabel: String,
 ) {
     fun onInput(text: String) = viewModel.onInput(text)
 
@@ -45,8 +49,8 @@ class TerminalSession internal constructor(
     @OptIn(ExperimentalTime::class)
     fun onBell() {
         val now = Clock.System.now().toEpochMilliseconds()
-        if (viewModel.onBell(muted = false, hasFocus = true, hidden = false, now = now)) {
-            triggerBellFeedback()
+        if (viewModel.onBell(muted = false, hasFocus = hasWindowFocus(), hidden = isPageHidden(), now = now)) {
+            triggerBellFeedback(buildBellTitle(sessionLabel))
         }
     }
 }
@@ -58,6 +62,11 @@ fun rememberTerminalSession(sessionFullName: String): TerminalSession {
     val viewModel = remember(sessionFullName) { TerminalViewModel(socket, scope) }
     val state by viewModel.state.collectAsState()
     var handle by remember(sessionFullName) { mutableStateOf<PlatformTerminalHandle?>(null) }
+    // sessionFullName is "<projectId>__<sessionSlug>" (see backend's
+    // session-naming.ts SESSION_NAME_SEPARATOR) -- the slug is the
+    // human-readable part, so it's what buildBellTitle should show rather
+    // than the opaque project-id-prefixed full name.
+    val sessionLabel = remember(sessionFullName) { sessionFullName.substringAfter("__", sessionFullName) }
 
     LaunchedEffect(handle) {
         val readyHandle = handle ?: return@LaunchedEffect
@@ -80,7 +89,12 @@ fun rememberTerminalSession(sessionFullName: String): TerminalSession {
         onDispose(dispose)
     }
 
-    return remember(viewModel, state.isConnected) {
-        TerminalSession(viewModel = viewModel, isConnected = state.isConnected, onHandleReady = { handle = it })
+    return remember(viewModel, state.isConnected, sessionLabel) {
+        TerminalSession(
+            viewModel = viewModel,
+            isConnected = state.isConnected,
+            onHandleReady = { handle = it },
+            sessionLabel = sessionLabel,
+        )
     }
 }
