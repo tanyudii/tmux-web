@@ -15,7 +15,7 @@ import {
 } from "./projects.ts";
 import { isGitRepo, addWorktree, removeWorktree } from "./worktree.ts";
 import { listDirectory as listDirectoryImpl } from "./directory-browser.ts";
-import { getChangedFiles, getFileDiff, stageFile, unstageFile, discardFile } from "./git-status.ts";
+import { getChangedFiles, getFileDiff, stageFile, unstageFile, discardFile, commitStaged } from "./git-status.ts";
 import {
   listProjectSessions as listProjectSessionsImpl,
   startProjectSessionCreation as startProjectSessionCreationImpl,
@@ -27,6 +27,7 @@ import {
   stageProjectSessionFile as stageProjectSessionFileImpl,
   unstageProjectSessionFile as unstageProjectSessionFileImpl,
   discardProjectSessionFile as discardProjectSessionFileImpl,
+  commitProjectSessionChanges as commitProjectSessionChangesImpl,
   type ProjectSessionsDeps,
 } from "./project-sessions.ts";
 import { loadEnvConfig } from "./env-config.ts";
@@ -105,6 +106,7 @@ export async function main(): Promise<void> {
     stageFile,
     unstageFile,
     discardFile,
+    commitStaged,
     stopSessionEnv: (project, sessionSlug) =>
       stopSessionEnvImpl(project, sessionSlug, sessionEnvDeps, sessionEnvStore),
     worktreesRoot,
@@ -154,6 +156,8 @@ export async function main(): Promise<void> {
       unstageProjectSessionFileImpl(project, slug, filePath, projectSessionsDeps),
     discardProjectSessionFile: (project, slug, filePath, mode) =>
       discardProjectSessionFileImpl(project, slug, filePath, mode, projectSessionsDeps),
+    commitProjectSessionChanges: (project, slug, message) =>
+      commitProjectSessionChangesImpl(project, slug, message, projectSessionsDeps),
 
     getProjectSessionEnvStatus: (project, slug, requestHost) =>
       getSessionEnvStatusImpl(project, slug, sessionEnvDeps, sessionEnvStore, requestHost),

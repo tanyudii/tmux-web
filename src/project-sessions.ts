@@ -47,6 +47,7 @@ export interface ProjectSessionsDeps {
   stageFile: (worktreePath: string, filePath: string) => Promise<void>;
   unstageFile: (worktreePath: string, filePath: string) => Promise<void>;
   discardFile: (worktreePath: string, filePath: string, mode: DiffMode) => Promise<void>;
+  commitStaged: (worktreePath: string, message: string) => Promise<void>;
   // Optional: tears down the session's docker-compose environment (see
   // session-env.ts). Best-effort -- a session with no environment, or a
   // docker daemon that's gone away, must not block killing the session.
@@ -266,4 +267,14 @@ export async function discardProjectSessionFile(
 ): Promise<void> {
   const worktreePath = resolveWorktreePath(project.id, sessionSlug, deps.worktreesRoot);
   return deps.discardFile(worktreePath, filePath, mode);
+}
+
+export async function commitProjectSessionChanges(
+  project: Project,
+  sessionSlug: string,
+  message: string,
+  deps: ProjectSessionsDeps,
+): Promise<void> {
+  const worktreePath = resolveWorktreePath(project.id, sessionSlug, deps.worktreesRoot);
+  return deps.commitStaged(worktreePath, message);
 }

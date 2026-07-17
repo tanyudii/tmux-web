@@ -12,8 +12,10 @@ import {
   stageFile,
   unstageFile,
   discardFile,
+  commitStaged,
   WorktreeNotFoundError,
   GitStatusError,
+  NothingStagedError,
 } from "./git-status.ts";
 
 const execFileAsync = promisify(execFileCb);
@@ -216,6 +218,39 @@ test("discardFile rejects a path that escapes the worktree", async () => {
   await assert.rejects(() => discardFile("/repo", "../../etc/passwd", "unstaged"), GitStatusError);
 });
 
+// --- commitStaged (fake exec) ---
+
+test("commitStaged runs git commit -m with the trimmed message", async () => {
+  const calls: string[][] = [];
+  const fakeExec = async (_file: string, args: string[]) => {
+    calls.push(args);
+    return { stdout: "" };
+  };
+  await commitStaged("/repo", "  fix: a bug  ", fakeExec);
+  assert.deepEqual(calls, [["-C", "/repo", "commit", "-m", "fix: a bug"]]);
+});
+
+test("commitStaged rejects an empty/whitespace-only message without calling exec", async () => {
+  await assert.rejects(
+    () => commitStaged("/repo", "   ", async () => { throw new Error("exec must not be called"); }),
+    GitStatusError,
+  );
+});
+
+test("commitStaged throws NothingStagedError when git reports nothing to commit", async () => {
+  const fakeExec = async () => {
+    throw new Error("nothing to commit, working tree clean");
+  };
+  await assert.rejects(() => commitStaged("/repo", "msg", fakeExec), NothingStagedError);
+});
+
+test("commitStaged rethrows unrelated git errors", async () => {
+  const fakeExec = async () => {
+    throw new Error("fatal: not a git repository");
+  };
+  await assert.rejects(() => commitStaged("/repo", "msg", fakeExec), /not a git repository/);
+});
+
 // --- getFileDiff (untracked, real fs) ---
 
 async function withTempDir(fn: (dir: string) => Promise<void>): Promise<void> {
@@ -358,6 +393,33 @@ test(
       await writeFile(join(dir, "scratch.txt"), "temp\n");
       await discardFile(dir, "scratch.txt", "untracked");
       await assert.rejects(() => stat(join(dir, "scratch.txt")));
+    });
+  },
+);
+
+test(
+  "real git integration: commitStaged commits staged changes and rejects when nothing is staged",
+  { skip: !isGitAvailable() },
+  async () => {
+    await withTempDir(async (dir) => {
+      await execFileAsync("git", ["init", "--quiet", dir]);
+      await execFileAsync("git", ["-C", dir, "config", "user.email", "test@example.com"]);
+      await execFileAsync("git", ["-C", dir, "config", "user.name", "Test"]);
+      await writeFile(join(dir, "tracked.txt"), "original\n");
+      await execFileAsync("git", ["-C", dir, "add", "tracked.txt"]);
+      await execFileAsync("git", ["-C", dir, "commit", "--quiet", "-m", "initial"]);
+
+      await assert.rejects(() => commitStaged(dir, "should fail"), NothingStagedError);
+
+      await writeFile(join(dir, "tracked.txt"), "changed\n");
+      await execFileAsync("git", ["-C", dir, "add", "tracked.txt"]);
+      await commitStaged(dir, "update tracked.txt");
+
+      const { stdout } = await execFileAsync("git", ["-C", dir, "log", "-1", "--format=%s"]);
+      assert.equal(stdout.trim(), "update tracked.txt");
+      const changes = await getChangedFiles(dir);
+      assert.deepEqual(changes.staged, []);
+      assert.deepEqual(changes.unstaged, []);
     });
   },
 );

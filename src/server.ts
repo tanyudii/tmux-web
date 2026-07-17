@@ -12,7 +12,14 @@ import {
   type DirectoryListing,
 } from "./directory-browser.ts";
 import { WorktreeConflictError, DirtyWorktreeError } from "./worktree.ts";
-import { WorktreeNotFoundError, GitStatusError, type GroupedChanges, type FileDiff, type DiffMode } from "./git-status.ts";
+import {
+  WorktreeNotFoundError,
+  GitStatusError,
+  NothingStagedError,
+  type GroupedChanges,
+  type FileDiff,
+  type DiffMode,
+} from "./git-status.ts";
 import {
   SessionCreationInProgressError,
   SessionCreationNotFoundError,
@@ -63,6 +70,7 @@ export interface ServerDeps {
     filePath: string,
     mode: DiffMode,
   ) => Promise<void>;
+  commitProjectSessionChanges: (project: Project, sessionSlug: string, message: string) => Promise<void>;
 
   getProjectSessionEnvStatus: (project: Project, sessionSlug: string, requestHost?: string) => Promise<EnvStatus>;
   startProjectSessionEnv: (project: Project, sessionSlug: string) => Promise<void>;
@@ -128,6 +136,10 @@ function sendMappedError(res: ServerResponse, error: unknown): boolean {
     return true;
   }
   if (error instanceof WorktreeConflictError || error instanceof DirtyWorktreeError) {
+    sendJson(res, 409, { error: error.message });
+    return true;
+  }
+  if (error instanceof NothingStagedError) {
     sendJson(res, 409, { error: error.message });
     return true;
   }
@@ -438,6 +450,34 @@ export function createServer(deps: ServerDeps): Server {
         const sessionSlug = decodeURIComponent(discardMatch[2]);
         try {
           await deps.discardProjectSessionFile(project, sessionSlug, filePath, mode as DiffMode);
+        } catch (error) {
+          if (sendMappedError(res, error)) return;
+          throw error;
+        }
+        return sendEmpty(res, 204);
+      }
+
+      const commitMatch = path.match(/^\/api\/projects\/([^/]+)\/sessions\/([^/]+)\/commit$/);
+      if (commitMatch && req.method === "POST") {
+        if (!isAuthorized(req, deps.token)) return sendEmpty(res, 401);
+
+        const project = await deps.getProject(decodeURIComponent(commitMatch[1]));
+        if (!project) return sendJson(res, 404, { error: "Project not found" });
+
+        let body: unknown;
+        try {
+          body = await readJsonBody(req);
+        } catch {
+          return sendJson(res, 400, { error: "Malformed JSON body" });
+        }
+        const message = (body as { message?: unknown })?.message;
+        if (typeof message !== "string" || message.trim().length === 0) {
+          return sendJson(res, 400, { error: "Missing commit message" });
+        }
+
+        const sessionSlug = decodeURIComponent(commitMatch[2]);
+        try {
+          await deps.commitProjectSessionChanges(project, sessionSlug, message);
         } catch (error) {
           if (sendMappedError(res, error)) return;
           throw error;

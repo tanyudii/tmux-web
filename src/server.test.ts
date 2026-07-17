@@ -9,7 +9,7 @@ import { createServer, type ServerDeps } from "./server.ts";
 import { ValidationError } from "./tmux.ts";
 import { ProjectValidationError, type Project } from "./projects.ts";
 import { WorktreeConflictError, DirtyWorktreeError } from "./worktree.ts";
-import { WorktreeNotFoundError, GitStatusError, type GroupedChanges } from "./git-status.ts";
+import { WorktreeNotFoundError, GitStatusError, NothingStagedError, type GroupedChanges } from "./git-status.ts";
 import { EnvUnavailableError, EnvAlreadyRunningError, EnvNotRunningError, type EnvStatus } from "./session-env.ts";
 import { EnvConfigError } from "./env-config.ts";
 import { SessionCreationNotFoundError, type SessionCreationStatus } from "./project-sessions.ts";
@@ -60,6 +60,7 @@ function makeDeps(overrides: Partial<ServerDeps> = {}): ServerDeps {
     stageProjectSessionFile: async () => {},
     unstageProjectSessionFile: async () => {},
     discardProjectSessionFile: async () => {},
+    commitProjectSessionChanges: async () => {},
     getProjectSessionEnvStatus: async () => ({ phase: "unavailable" }),
     startProjectSessionEnv: async () => {},
     stopProjectSessionEnv: async () => {},
@@ -787,6 +788,80 @@ test("POST /api/projects/:id/sessions/:name/discard returns 404 for an unknown p
       method: "POST",
       headers: { ...authHeaders(), "Content-Type": "application/json" },
       body: JSON.stringify({ path: "a.txt", mode: "unstaged" }),
+    });
+    assert.equal(res.status, 404);
+  });
+});
+
+test("POST /api/projects/:id/sessions/:name/commit without a token returns 401", async () => {
+  await withServer(makeDeps(), async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/projects/${SAMPLE_PROJECT.id}/sessions/feature-x/commit`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message: "fix: a bug" }),
+    });
+    assert.equal(res.status, 401);
+  });
+});
+
+test("POST /api/projects/:id/sessions/:name/commit commits with the given message", async () => {
+  const calls: Array<{ slug: string; message: string }> = [];
+  const deps = makeDeps({
+    commitProjectSessionChanges: async (_project: Project, slug: string, message: string) => {
+      calls.push({ slug, message });
+    },
+  });
+  await withServer(deps, async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/projects/${SAMPLE_PROJECT.id}/sessions/feature-x/commit`, {
+      method: "POST",
+      headers: { ...authHeaders(), "Content-Type": "application/json" },
+      body: JSON.stringify({ message: "fix: a bug" }),
+    });
+    assert.equal(res.status, 204);
+    assert.deepEqual(calls, [{ slug: "feature-x", message: "fix: a bug" }]);
+  });
+});
+
+test("POST /api/projects/:id/sessions/:name/commit returns 400 when message is missing or blank", async () => {
+  await withServer(makeDeps(), async (baseUrl) => {
+    const missing = await fetch(`${baseUrl}/api/projects/${SAMPLE_PROJECT.id}/sessions/feature-x/commit`, {
+      method: "POST",
+      headers: { ...authHeaders(), "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    assert.equal(missing.status, 400);
+
+    const blank = await fetch(`${baseUrl}/api/projects/${SAMPLE_PROJECT.id}/sessions/feature-x/commit`, {
+      method: "POST",
+      headers: { ...authHeaders(), "Content-Type": "application/json" },
+      body: JSON.stringify({ message: "   " }),
+    });
+    assert.equal(blank.status, 400);
+  });
+});
+
+test("POST /api/projects/:id/sessions/:name/commit returns 409 when nothing is staged", async () => {
+  const deps = makeDeps({
+    commitProjectSessionChanges: async () => {
+      throw new NothingStagedError("No staged changes to commit");
+    },
+  });
+  await withServer(deps, async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/projects/${SAMPLE_PROJECT.id}/sessions/feature-x/commit`, {
+      method: "POST",
+      headers: { ...authHeaders(), "Content-Type": "application/json" },
+      body: JSON.stringify({ message: "fix: a bug" }),
+    });
+    assert.equal(res.status, 409);
+  });
+});
+
+test("POST /api/projects/:id/sessions/:name/commit returns 404 for an unknown project", async () => {
+  await withServer(makeDeps(), async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/projects/unknown-id/sessions/feature-x/commit`, {
+      method: "POST",
+      headers: { ...authHeaders(), "Content-Type": "application/json" },
+      body: JSON.stringify({ message: "fix: a bug" }),
     });
     assert.equal(res.status, 404);
   });

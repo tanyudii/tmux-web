@@ -12,6 +12,7 @@ import {
   stageProjectSessionFile,
   unstageProjectSessionFile,
   discardProjectSessionFile,
+  commitProjectSessionChanges,
   SessionCreationInProgressError,
   SessionCreationNotFoundError,
   type ProjectSessionsDeps,
@@ -41,6 +42,7 @@ function makeDeps(overrides: Partial<ProjectSessionsDeps> = {}): ProjectSessions
     stageFile: async () => {},
     unstageFile: async () => {},
     discardFile: async () => {},
+    commitStaged: async () => {},
     worktreesRoot: "/data/worktrees",
     ...overrides,
   };
@@ -340,6 +342,21 @@ test("discardProjectSessionFile resolves the worktree path and delegates to disc
 
   assert.deepEqual(calls, [
     { worktreePath: "/data/worktrees/proj1-ab12cd/feature-x", filePath: "src/index.ts", mode: "unstaged" },
+  ]);
+});
+
+test("commitProjectSessionChanges resolves the worktree path and delegates to commitStaged", async () => {
+  const calls: Array<{ worktreePath: string; message: string }> = [];
+  const deps = makeDeps({
+    commitStaged: async (worktreePath: string, message: string) => {
+      calls.push({ worktreePath, message });
+    },
+  });
+
+  await commitProjectSessionChanges(PROJECT, "feature-x", "fix: a bug", deps);
+
+  assert.deepEqual(calls, [
+    { worktreePath: "/data/worktrees/proj1-ab12cd/feature-x", message: "fix: a bug" },
   ]);
 });
 

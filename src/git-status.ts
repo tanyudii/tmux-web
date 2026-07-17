@@ -13,6 +13,7 @@ function defaultExec(file: string, args: string[]): Promise<{ stdout: string }> 
 
 export class GitStatusError extends Error {}
 export class WorktreeNotFoundError extends Error {}
+export class NothingStagedError extends GitStatusError {}
 
 export type FileStatus = "modified" | "added" | "deleted" | "renamed" | "untracked";
 
@@ -214,4 +215,34 @@ export async function discardFile(
     await exec("git", ["-C", worktreePath, "reset", "--", filePath]);
     await rm(safePath, { force: true });
   }
+}
+
+const NOTHING_STAGED_PATTERN = /nothing to commit|nothing added to commit/i;
+
+export async function commitStaged(
+  worktreePath: string,
+  message: string,
+  exec: ExecFn = defaultExec,
+): Promise<void> {
+  const trimmed = message.trim();
+  if (!trimmed) throw new GitStatusError("Commit message must not be empty");
+
+  try {
+    await exec("git", ["-C", worktreePath, "commit", "-m", trimmed]);
+  } catch (error) {
+    if (NOTHING_STAGED_PATTERN.test(execErrorOutput(error))) {
+      throw new NothingStagedError("No staged changes to commit");
+    }
+    throw error;
+  }
+}
+
+// Node's child_process exec error carries the command's stdout/stderr as
+// extra properties on the Error, NOT folded into `.message` (which is just
+// "Command failed: <cmd>") -- and git prints "nothing to commit" to STDOUT,
+// not stderr, so checking `.message` alone silently never matches it.
+function execErrorOutput(error: unknown): string {
+  if (!(error instanceof Error)) return String(error);
+  const { stdout, stderr } = error as Error & { stdout?: unknown; stderr?: unknown };
+  return [error.message, typeof stdout === "string" ? stdout : "", typeof stderr === "string" ? stderr : ""].join("\n");
 }
