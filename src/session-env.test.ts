@@ -5,10 +5,13 @@ import {
   getSessionEnvStatus,
   startSessionEnv,
   stopSessionEnv,
+  cancelSessionEnv,
   createSessionEnvStore,
+  createSessionEnvControllerStore,
   EnvUnavailableError,
   EnvAlreadyRunningError,
   EnvNotRunningError,
+  EnvNotStartingError,
   type SessionEnvDeps,
 } from "./session-env.ts";
 import type { Project } from "./projects.ts";
@@ -54,6 +57,7 @@ async function flush(): Promise<void> {
 test("getSessionEnvStatus returns 'unavailable' when the project hasn't opted in", async () => {
   const deps = makeDeps({ loadEnvConfig: async () => null });
   const store = createSessionEnvStore();
+  const controllers = createSessionEnvControllerStore();
 
   const status = await getSessionEnvStatus(PROJECT, "feature-x", deps, store);
 
@@ -63,6 +67,7 @@ test("getSessionEnvStatus returns 'unavailable' when the project hasn't opted in
 test("getSessionEnvStatus returns 'idle' when no containers are up", async () => {
   const deps = makeDeps({ composePs: async () => [] });
   const store = createSessionEnvStore();
+  const controllers = createSessionEnvControllerStore();
 
   const status = await getSessionEnvStatus(PROJECT, "feature-x", deps, store);
 
@@ -76,6 +81,7 @@ test("getSessionEnvStatus falls back to 'idle' when composePs itself fails (e.g.
     },
   });
   const store = createSessionEnvStore();
+  const controllers = createSessionEnvControllerStore();
 
   const status = await getSessionEnvStatus(PROJECT, "feature-x", deps, store);
 
@@ -96,6 +102,7 @@ test("getSessionEnvStatus reports 'stopping' while teardown is still in flight",
       }),
   });
   const store = createSessionEnvStore();
+  const controllers = createSessionEnvControllerStore();
 
   const stopPromise = stopSessionEnv(PROJECT, "feature-x", deps, store);
   await composeDownStarted;
@@ -114,6 +121,7 @@ test("getSessionEnvStatus derives 'running' + openLinks live from docker, withou
     composePort: async (_ctx, service, port) => (service === "web" && port === 3000 ? 54321 : null),
   });
   const store = createSessionEnvStore();
+  const controllers = createSessionEnvControllerStore();
 
   const status = await getSessionEnvStatus(PROJECT, "feature-x", deps, store);
 
@@ -129,6 +137,7 @@ test("getSessionEnvStatus builds openLinks urls from the given requestHost inste
     composePort: async (_ctx, service, port) => (service === "web" && port === 3000 ? 54321 : null),
   });
   const store = createSessionEnvStore();
+  const controllers = createSessionEnvControllerStore();
 
   const status = await getSessionEnvStatus(PROJECT, "feature-x", deps, store, "10.8.0.2");
 
@@ -143,6 +152,7 @@ test("getSessionEnvStatus falls back to deps.openHost, then localhost, when no r
     openHost: "192.168.1.50",
   });
   const store = createSessionEnvStore();
+  const controllers = createSessionEnvControllerStore();
 
   const status = await getSessionEnvStatus(PROJECT, "feature-x", deps, store);
 
@@ -168,6 +178,7 @@ test("getSessionEnvStatus resolves multiple openLinks independently, omitting en
     composePort: async (_ctx, service, port) => (service === "web" && port === 3000 ? 54321 : null),
   });
   const store = createSessionEnvStore();
+  const controllers = createSessionEnvControllerStore();
 
   const status = await getSessionEnvStatus(PROJECT, "feature-x", deps, store);
 
@@ -193,6 +204,7 @@ test("getSessionEnvStatus resolves every configured openLinks entry once all ser
     composePort: async (_ctx, service) => ports[service] ?? null,
   });
   const store = createSessionEnvStore();
+  const controllers = createSessionEnvControllerStore();
 
   const status = await getSessionEnvStatus(PROJECT, "feature-x", deps, store);
 
@@ -207,6 +219,7 @@ test("getSessionEnvStatus reports no openLinks when the config declares none", a
   const config: EnvConfig = { ...AVAILABLE_CONFIG, openLinks: [] };
   const deps = makeDeps({ loadEnvConfig: async () => config, composePs: async () => services });
   const store = createSessionEnvStore();
+  const controllers = createSessionEnvControllerStore();
 
   const status = await getSessionEnvStatus(PROJECT, "feature-x", deps, store);
 
@@ -216,25 +229,28 @@ test("getSessionEnvStatus reports no openLinks when the config declares none", a
 test("startSessionEnv throws EnvUnavailableError when the project hasn't opted in", async () => {
   const deps = makeDeps({ loadEnvConfig: async () => null });
   const store = createSessionEnvStore();
+  const controllers = createSessionEnvControllerStore();
 
-  await assert.rejects(() => startSessionEnv(PROJECT, "feature-x", deps, store), EnvUnavailableError);
+  await assert.rejects(() => startSessionEnv(PROJECT, "feature-x", deps, store, controllers), EnvUnavailableError);
 });
 
 test("startSessionEnv throws EnvAlreadyRunningError when containers are already up", async () => {
   const deps = makeDeps({ composePs: async () => [{ service: "web", state: "running" }] });
   const store = createSessionEnvStore();
+  const controllers = createSessionEnvControllerStore();
 
-  await assert.rejects(() => startSessionEnv(PROJECT, "feature-x", deps, store), EnvAlreadyRunningError);
+  await assert.rejects(() => startSessionEnv(PROJECT, "feature-x", deps, store, controllers), EnvAlreadyRunningError);
 });
 
 test("startSessionEnv throws EnvAlreadyRunningError when already starting", async () => {
   const deps = makeDeps({ composeUp: () => new Promise(() => {}) }); // never resolves during this test
   const store = createSessionEnvStore();
+  const controllers = createSessionEnvControllerStore();
 
-  await startSessionEnv(PROJECT, "feature-x", deps, store);
+  await startSessionEnv(PROJECT, "feature-x", deps, store, controllers);
   assert.equal(store.get(FULL_NAME)?.phase, "starting");
 
-  await assert.rejects(() => startSessionEnv(PROJECT, "feature-x", deps, store), EnvAlreadyRunningError);
+  await assert.rejects(() => startSessionEnv(PROJECT, "feature-x", deps, store, controllers), EnvAlreadyRunningError);
 });
 
 test("startSessionEnv reports 'Running pre-run script…' while the pre-run script is in flight", async () => {
@@ -244,8 +260,9 @@ test("startSessionEnv reports 'Running pre-run script…' while the pre-run scri
     runScript: () => new Promise(() => {}), // never resolves during this test
   });
   const store = createSessionEnvStore();
+  const controllers = createSessionEnvControllerStore();
 
-  await startSessionEnv(PROJECT, "feature-x", deps, store);
+  await startSessionEnv(PROJECT, "feature-x", deps, store, controllers);
 
   assert.deepEqual(store.get(FULL_NAME), { phase: "starting", message: "Running pre-run script…" });
 });
@@ -253,8 +270,9 @@ test("startSessionEnv reports 'Running pre-run script…' while the pre-run scri
 test("startSessionEnv reports 'Pulling and starting containers…' during compose up", async () => {
   const deps = makeDeps({ composeUp: () => new Promise(() => {}) }); // never resolves during this test
   const store = createSessionEnvStore();
+  const controllers = createSessionEnvControllerStore();
 
-  await startSessionEnv(PROJECT, "feature-x", deps, store);
+  await startSessionEnv(PROJECT, "feature-x", deps, store, controllers);
 
   assert.deepEqual(store.get(FULL_NAME), { phase: "starting", message: "Pulling and starting containers…" });
 });
@@ -266,8 +284,9 @@ test("startSessionEnv reports 'Running post-run script…' once compose up finis
     runScript: () => new Promise(() => {}), // never resolves during this test
   });
   const store = createSessionEnvStore();
+  const controllers = createSessionEnvControllerStore();
 
-  await startSessionEnv(PROJECT, "feature-x", deps, store);
+  await startSessionEnv(PROJECT, "feature-x", deps, store, controllers);
   await flush();
 
   assert.deepEqual(store.get(FULL_NAME), { phase: "starting", message: "Running post-run script…" });
@@ -281,14 +300,15 @@ test("startSessionEnv rejects a second truly concurrent start() for the same ses
     },
   });
   const store = createSessionEnvStore();
+  const controllers = createSessionEnvControllerStore();
 
   // Both calls fire before either has a chance to claim the store entry --
   // this is what a security review flagged as a TOCTOU gap between the
   // "already starting" check and the store.set() that used to happen only
   // after an intervening `await safeComposePs(...)`.
   const results = await Promise.allSettled([
-    startSessionEnv(PROJECT, "feature-x", deps, store),
-    startSessionEnv(PROJECT, "feature-x", deps, store),
+    startSessionEnv(PROJECT, "feature-x", deps, store, controllers),
+    startSessionEnv(PROJECT, "feature-x", deps, store, controllers),
   ]);
 
   const fulfilled = results.filter((r) => r.status === "fulfilled");
@@ -321,8 +341,9 @@ test("startSessionEnv runs pre-run -> compose up -> post-run, then status report
     composePort: async () => 54321,
   });
   const store = createSessionEnvStore();
+  const controllers = createSessionEnvControllerStore();
 
-  await startSessionEnv(PROJECT, "feature-x", deps, store);
+  await startSessionEnv(PROJECT, "feature-x", deps, store, controllers);
   await flush();
 
   assert.deepEqual(calls, [`run:${config.preRunScript}`, "up", `run:${config.postRunScript}`]);
@@ -344,8 +365,9 @@ test("startSessionEnv aborts before compose up when pre-run fails", async () => 
     },
   });
   const store = createSessionEnvStore();
+  const controllers = createSessionEnvControllerStore();
 
-  await startSessionEnv(PROJECT, "feature-x", deps, store);
+  await startSessionEnv(PROJECT, "feature-x", deps, store, controllers);
   await flush();
 
   assert.equal(composeUpCalled, false);
@@ -361,8 +383,9 @@ test("startSessionEnv reports 'error' when compose up itself fails", async () =>
     },
   });
   const store = createSessionEnvStore();
+  const controllers = createSessionEnvControllerStore();
 
-  await startSessionEnv(PROJECT, "feature-x", deps, store);
+  await startSessionEnv(PROJECT, "feature-x", deps, store, controllers);
   await flush();
 
   const status = await getSessionEnvStatus(PROJECT, "feature-x", deps, store);
@@ -385,8 +408,9 @@ test("startSessionEnv reports 'error' with services+openUrl still visible when o
     },
   });
   const store = createSessionEnvStore();
+  const controllers = createSessionEnvControllerStore();
 
-  await startSessionEnv(PROJECT, "feature-x", deps, store);
+  await startSessionEnv(PROJECT, "feature-x", deps, store, controllers);
   await flush();
 
   const status = await getSessionEnvStatus(PROJECT, "feature-x", deps, store);
@@ -399,6 +423,7 @@ test("startSessionEnv reports 'error' with services+openUrl still visible when o
 test("stopSessionEnv throws EnvNotRunningError when nothing is running", async () => {
   const deps = makeDeps({ composePs: async () => [] });
   const store = createSessionEnvStore();
+  const controllers = createSessionEnvControllerStore();
 
   await assert.rejects(() => stopSessionEnv(PROJECT, "feature-x", deps, store), EnvNotRunningError);
 });
@@ -406,6 +431,7 @@ test("stopSessionEnv throws EnvNotRunningError when nothing is running", async (
 test("stopSessionEnv throws EnvUnavailableError when the project hasn't opted in", async () => {
   const deps = makeDeps({ loadEnvConfig: async () => null });
   const store = createSessionEnvStore();
+  const controllers = createSessionEnvControllerStore();
 
   await assert.rejects(() => stopSessionEnv(PROJECT, "feature-x", deps, store), EnvUnavailableError);
 });
@@ -419,6 +445,7 @@ test("stopSessionEnv tears down running containers and clears store state", asyn
     },
   });
   const store = createSessionEnvStore();
+  const controllers = createSessionEnvControllerStore();
 
   await stopSessionEnv(PROJECT, "feature-x", deps, store);
 
@@ -444,3 +471,73 @@ test("requireEnvContext throws EnvUnavailableError when the project hasn't opted
 
   await assert.rejects(() => requireEnvContext(PROJECT, "feature-x", deps), EnvUnavailableError);
 });
+
+// --- cancelSessionEnv ---
+
+test("cancelSessionEnv throws EnvNotStartingError when nothing is starting", () => {
+  const store = createSessionEnvStore();
+  const controllers = createSessionEnvControllerStore();
+
+  assert.throws(() => cancelSessionEnv(PROJECT, "feature-x", store, controllers), EnvNotStartingError);
+});
+
+test("cancelSessionEnv aborts the in-flight controller's signal", async () => {
+  let sawSignal: AbortSignal | undefined;
+  const deps = makeDeps({
+    runScript: async (_scriptPath: string, _cwd: string, _exec: undefined, signal?: AbortSignal) => {
+      sawSignal = signal;
+      // Never resolves on its own -- only the abort should end this.
+      await new Promise<void>((_resolve, reject) => {
+        signal?.addEventListener("abort", () => reject(new Error("aborted")));
+      });
+      return { stdout: "", stderr: "" };
+    },
+    loadEnvConfig: async () => ({ ...AVAILABLE_CONFIG, preRunScript: "/repo/pre-run.sh" }),
+  });
+  const store = createSessionEnvStore();
+  const controllers = createSessionEnvControllerStore();
+
+  await startSessionEnv(PROJECT, "feature-x", deps, store, controllers);
+  await flush();
+  assert.equal(store.get(FULL_NAME)?.phase, "starting");
+
+  cancelSessionEnv(PROJECT, "feature-x", store, controllers);
+  await flush();
+
+  assert.equal(sawSignal?.aborted, true);
+  assert.deepEqual(store.get(FULL_NAME), { phase: "error", message: "Cancelled" });
+  assert.equal(controllers.has(FULL_NAME), false);
+});
+
+test(
+  "real process integration: cancelling a running shell script actually terminates the child process",
+  async () => {
+    const { readFile, mkdtemp, rm } = await import("node:fs/promises");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const { writeFile } = await import("node:fs/promises");
+    const { runScript } = await import("./run-script.ts");
+
+    const dir = await mkdtemp(join(tmpdir(), "session-env-cancel-test-"));
+    try {
+      const markerFile = join(dir, "started");
+      const scriptPath = join(dir, "slow.sh");
+      // Writes a marker as soon as it starts, then sleeps far longer than
+      // this test waits -- if cancellation didn't really kill the process,
+      // the sleep would still be running (harmlessly) after the test exits,
+      // but the assertion below only cares that abort() resolves promptly.
+      await writeFile(scriptPath, `#!/bin/sh\ntouch "${markerFile}"\nsleep 30\n`, { mode: 0o755 });
+
+      const controller = new AbortController();
+      const runPromise = runScript(scriptPath, dir, undefined, controller.signal);
+
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      await readFile(markerFile); // throws if the script never actually started
+      controller.abort();
+
+      await assert.rejects(() => runPromise);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  },
+);

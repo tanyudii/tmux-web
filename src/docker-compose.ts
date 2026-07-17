@@ -3,10 +3,18 @@ import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFileCb);
 
-export type ExecFn = (file: string, args: string[]) => Promise<{ stdout: string; stderr: string }>;
+export type ExecFn = (
+  file: string,
+  args: string[],
+  options?: { signal?: AbortSignal },
+) => Promise<{ stdout: string; stderr: string }>;
 
-function defaultExec(file: string, args: string[]): Promise<{ stdout: string; stderr: string }> {
-  return execFileAsync(file, args);
+function defaultExec(
+  file: string,
+  args: string[],
+  options?: { signal?: AbortSignal },
+): Promise<{ stdout: string; stderr: string }> {
+  return execFileAsync(file, args, { signal: options?.signal });
 }
 
 export class DockerComposeError extends Error {}
@@ -39,10 +47,17 @@ function baseArgs(ctx: ComposeContext): string[] {
   ];
 }
 
-export async function composeUp(ctx: ComposeContext, exec: ExecFn = defaultExec): Promise<void> {
+export class ComposeCancelledError extends DockerComposeError {}
+
+export async function composeUp(
+  ctx: ComposeContext,
+  exec: ExecFn = defaultExec,
+  signal?: AbortSignal,
+): Promise<void> {
   try {
-    await exec("docker", [...baseArgs(ctx), "up", "-d", "--build"]);
+    await exec("docker", [...baseArgs(ctx), "up", "-d", "--build"], { signal });
   } catch (error) {
+    if (signal?.aborted) throw new ComposeCancelledError("Environment setup was cancelled");
     throw new DockerComposeError(messageOf(error));
   }
 }

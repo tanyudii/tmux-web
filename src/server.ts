@@ -30,6 +30,7 @@ import {
   EnvUnavailableError,
   EnvAlreadyRunningError,
   EnvNotRunningError,
+  EnvNotStartingError,
   type EnvStatus,
 } from "./session-env.ts";
 import { EnvConfigError } from "./env-config.ts";
@@ -76,6 +77,7 @@ export interface ServerDeps {
   getProjectSessionEnvStatus: (project: Project, sessionSlug: string, requestHost?: string) => Promise<EnvStatus>;
   startProjectSessionEnv: (project: Project, sessionSlug: string) => Promise<void>;
   stopProjectSessionEnv: (project: Project, sessionSlug: string) => Promise<void>;
+  cancelProjectSessionEnv: (project: Project, sessionSlug: string) => Promise<void>;
 }
 
 const MIME_TYPES: Record<string, string> = {
@@ -198,7 +200,7 @@ function sendMappedError(res: ServerResponse, error: unknown): boolean {
     sendJson(res, 404, { error: error.message });
     return true;
   }
-  if (error instanceof EnvAlreadyRunningError || error instanceof EnvNotRunningError) {
+  if (error instanceof EnvAlreadyRunningError || error instanceof EnvNotRunningError || error instanceof EnvNotStartingError) {
     sendJson(res, 409, { error: error.message });
     return true;
   }
@@ -532,6 +534,23 @@ export function createServer(deps: ServerDeps): Server {
         const sessionSlug = decodeURIComponent(commitMatch[2]);
         try {
           await deps.commitProjectSessionChanges(project, sessionSlug, message);
+        } catch (error) {
+          if (sendMappedError(res, error)) return;
+          throw error;
+        }
+        return sendEmpty(res, 204);
+      }
+
+      const envCancelMatch = path.match(/^\/api\/projects\/([^/]+)\/sessions\/([^/]+)\/env\/cancel$/);
+      if (envCancelMatch && req.method === "POST") {
+        if (!checkAuthorized(req, res, deps.token, clientIp, authFailureLimiter)) return;
+
+        const project = await deps.getProject(decodeURIComponent(envCancelMatch[1]));
+        if (!project) return sendJson(res, 404, { error: "Project not found" });
+
+        const sessionSlug = decodeURIComponent(envCancelMatch[2]);
+        try {
+          await deps.cancelProjectSessionEnv(project, sessionSlug);
         } catch (error) {
           if (sendMappedError(res, error)) return;
           throw error;

@@ -10,7 +10,13 @@ import { ValidationError } from "./tmux.ts";
 import { ProjectValidationError, type Project } from "./projects.ts";
 import { WorktreeConflictError, DirtyWorktreeError } from "./worktree.ts";
 import { WorktreeNotFoundError, GitStatusError, NothingStagedError, type GroupedChanges } from "./git-status.ts";
-import { EnvUnavailableError, EnvAlreadyRunningError, EnvNotRunningError, type EnvStatus } from "./session-env.ts";
+import {
+  EnvUnavailableError,
+  EnvAlreadyRunningError,
+  EnvNotRunningError,
+  EnvNotStartingError,
+  type EnvStatus,
+} from "./session-env.ts";
 import { EnvConfigError } from "./env-config.ts";
 import { SessionCreationNotFoundError, type SessionCreationStatus } from "./project-sessions.ts";
 import {
@@ -64,6 +70,7 @@ function makeDeps(overrides: Partial<ServerDeps> = {}): ServerDeps {
     getProjectSessionEnvStatus: async () => ({ phase: "unavailable" }),
     startProjectSessionEnv: async () => {},
     stopProjectSessionEnv: async () => {},
+    cancelProjectSessionEnv: async () => {},
     ...overrides,
   };
 }
@@ -870,6 +877,47 @@ test("POST /api/projects/:id/sessions/:name/commit returns 404 for an unknown pr
 });
 
 // --- Environment setup ---
+
+test("POST /api/projects/:id/sessions/:name/env/cancel without a token returns 401", async () => {
+  await withServer(makeDeps(), async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/projects/${SAMPLE_PROJECT.id}/sessions/feature-x/env/cancel`, {
+      method: "POST",
+    });
+    assert.equal(res.status, 401);
+  });
+});
+
+test("POST /api/projects/:id/sessions/:name/env/cancel cancels the in-flight setup", async () => {
+  const calls: string[] = [];
+  const deps = makeDeps({
+    cancelProjectSessionEnv: async (_project: Project, slug: string) => {
+      calls.push(slug);
+    },
+  });
+  await withServer(deps, async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/projects/${SAMPLE_PROJECT.id}/sessions/feature-x/env/cancel`, {
+      method: "POST",
+      headers: authHeaders(),
+    });
+    assert.equal(res.status, 204);
+    assert.deepEqual(calls, ["feature-x"]);
+  });
+});
+
+test("POST /api/projects/:id/sessions/:name/env/cancel returns 409 when nothing is starting", async () => {
+  const deps = makeDeps({
+    cancelProjectSessionEnv: async () => {
+      throw new EnvNotStartingError("not currently starting");
+    },
+  });
+  await withServer(deps, async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/projects/${SAMPLE_PROJECT.id}/sessions/feature-x/env/cancel`, {
+      method: "POST",
+      headers: authHeaders(),
+    });
+    assert.equal(res.status, 409);
+  });
+});
 
 test("GET /api/projects/:id/sessions/:name/env without a token returns 401", async () => {
   await withServer(makeDeps(), async (baseUrl) => {

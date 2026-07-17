@@ -38,8 +38,10 @@ import {
   getSessionEnvStatus as getSessionEnvStatusImpl,
   startSessionEnv as startSessionEnvImpl,
   stopSessionEnv as stopSessionEnvImpl,
+  cancelSessionEnv as cancelSessionEnvImpl,
   requireEnvContext,
   createSessionEnvStore,
+  createSessionEnvControllerStore,
   EnvUnavailableError,
   type SessionEnvDeps,
 } from "./session-env.ts";
@@ -106,6 +108,7 @@ export async function main(): Promise<void> {
     worktreesRoot,
   };
   const sessionEnvStore = createSessionEnvStore();
+  const sessionEnvControllers = createSessionEnvControllerStore();
   const sessionCreationStore = createSessionCreationStore();
 
   const projectSessionsDeps: ProjectSessionsDeps = {
@@ -176,9 +179,11 @@ export async function main(): Promise<void> {
     getProjectSessionEnvStatus: (project, slug, requestHost) =>
       getSessionEnvStatusImpl(project, slug, sessionEnvDeps, sessionEnvStore, requestHost),
     startProjectSessionEnv: (project, slug) =>
-      startSessionEnvImpl(project, slug, sessionEnvDeps, sessionEnvStore),
+      startSessionEnvImpl(project, slug, sessionEnvDeps, sessionEnvStore, sessionEnvControllers),
     stopProjectSessionEnv: (project, slug) =>
       stopSessionEnvImpl(project, slug, sessionEnvDeps, sessionEnvStore),
+    cancelProjectSessionEnv: (project, slug) =>
+      Promise.resolve(cancelSessionEnvImpl(project, slug, sessionEnvStore, sessionEnvControllers)),
   });
 
   const wss = new WebSocketServer({ noServer: true });
