@@ -196,6 +196,19 @@ export async function killProjectSession(
 ): Promise<void> {
   const fullName = buildFullNameOrThrowValidation(project, sessionSlug);
 
+  // Stop the environment (docker compose down -v, potentially slow) before
+  // killing the tmux session -- not the other way around. Killing the
+  // session closes the client's attached /ws immediately (see
+  // pty-bridge.ts's term.onExit), and a client that's still watching this
+  // session has no way to tell that close apart from a transient drop, so
+  // it retries against a session that's already gone for as long as this
+  // request keeps running. Doing the slow teardown first keeps that window
+  // as small as possible -- the two have no ordering dependency on each
+  // other (tmux and the session's containers are independent).
+  if (deps.stopSessionEnv) {
+    await deps.stopSessionEnv(project, sessionSlug).catch(() => {});
+  }
+
   try {
     await deps.killSession(fullName);
   } catch (error) {
@@ -204,10 +217,6 @@ export async function killProjectSession(
     // after an earlier attempt killed the session but failed to remove a
     // dirty worktree.
     if (!SESSION_ALREADY_GONE_PATTERN.test(message)) throw error;
-  }
-
-  if (deps.stopSessionEnv) {
-    await deps.stopSessionEnv(project, sessionSlug).catch(() => {});
   }
 
   const worktreePath = resolveWorktreePath(project.id, sessionSlug, deps.worktreesRoot);

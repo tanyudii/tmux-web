@@ -181,6 +181,47 @@ class WebShellViewModelTest {
     }
 
     @Test
+    fun `confirmPendingDelete on the selected session clears its selection before the delete request resolves`() =
+        runTest {
+            // StandardTestDispatcher (unlike the other tests' Unconfined one)
+            // leaves scope.launch queued rather than run to completion, so
+            // this proves the selection is cleared synchronously -- i.e.
+            // before the DELETE call even starts -- rather than merely as a
+            // side effect of it succeeding. This is what tears down the
+            // terminal composable's socket immediately instead of leaving it
+            // open until a possibly-slow delete (env teardown) resolves.
+            val scope = CoroutineScope(StandardTestDispatcher(testScheduler))
+            val sessions = FakeSessionsRepository(listOf(session("build")))
+            val viewModel = WebShellViewModel(FakeProjectsRepository(), sessions, scope)
+
+            viewModel.selectSession("p1", "build")
+            viewModel.requestDeleteSession("p1", session("build"))
+            viewModel.confirmPendingDelete()
+
+            assertNull(viewModel.state.value.selectedSessionName)
+
+            advanceUntilIdle()
+            assertTrue(sessions.sessions.none { it.name == "build" })
+        }
+
+    @Test
+    fun `confirmPendingDelete restores the selection when the session delete fails`() {
+        val sessions = FakeSessionsRepository(listOf(session("build"))).apply {
+            deleteError = ApiError.Conflict("dirty worktree", sessionCount = null)
+        }
+        val viewModel = immediateViewModel(sessions = sessions)
+
+        viewModel.selectSession("p1", "build")
+        viewModel.requestDeleteSession("p1", session("build"))
+        viewModel.confirmPendingDelete()
+
+        val state = viewModel.state.value
+        assertEquals("build", state.selectedSessionName)
+        val pending = state.pendingDelete as WebShellUiState.PendingDelete.OfSession
+        assertTrue(pending.forced)
+    }
+
+    @Test
     fun `cancelPendingDelete clears without deleting`() {
         val projects = FakeProjectsRepository(listOf(project()))
         val viewModel = immediateViewModel(projects = projects)
