@@ -9,6 +9,7 @@ import {
   createSession,
   killSession,
   getPaneMode,
+  capturePane,
   scrollPane,
   cancelCopyMode,
   setBellHook,
@@ -246,6 +247,28 @@ test("getPaneMode returns false when tmux reports 0", async () => {
   const fakeExec = fakeExecWithPaneMode(false, calls);
 
   assert.equal(await getPaneMode("main", fakeExec), false);
+});
+
+test("capturePane rejects invalid session names without calling exec", async () => {
+  let called = false;
+  const fakeExec = async () => {
+    called = true;
+    return { stdout: "" };
+  };
+
+  await assert.rejects(() => capturePane("bad name", fakeExec), ValidationError);
+  assert.equal(called, false);
+});
+
+test("capturePane returns tmux's captured pane text verbatim", async () => {
+  const calls: Array<{ file: string; args: string[] }> = [];
+  const fakeExec = async (file: string, args: string[]) => {
+    calls.push({ file, args });
+    return { stdout: "line one\nline two\n" };
+  };
+
+  assert.equal(await capturePane("main", fakeExec), "line one\nline two\n");
+  assert.deepEqual(calls, [{ file: "tmux", args: ["capture-pane", "-p", "-t", "main"] }]);
 });
 
 test("scrollPane rejects invalid session names without calling exec", async () => {

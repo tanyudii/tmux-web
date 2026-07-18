@@ -12,6 +12,10 @@ Usage:
   tmuxweb service status          Show the systemd --user service status
   tmuxweb upgrade [--tag <tag>] [--app-dir <path>]
                                   Upgrade (or bootstrap) the install to a tag, latest if omitted
+  tmuxweb mcp                     Start the MCP server (stdio, local subprocess use)
+  tmuxweb mcp --http [--host <addr>] [--port <n>]
+                                  Start the MCP server over HTTP instead (remote/VPN use,
+                                  default host 127.0.0.1, default port 5311)
   tmuxweb help                    Show this help
   tmuxweb --version               Print the installed version
 `;

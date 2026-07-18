@@ -108,6 +108,17 @@ export async function killSession(name: string, exec: ExecFn = defaultExec): Pro
   await exec("tmux", ["kill-session", "-t", name]);
 }
 
+// Visible pane text (`tmux capture-pane -p`) -- used by send-message.ts to
+// poll a freshly-launched `claude` REPL for readiness before typing into it,
+// instead of a blind fixed sleep.
+export async function capturePane(name: string, exec: ExecFn = defaultExec): Promise<string> {
+  if (!isValidSessionName(name)) {
+    throw new ValidationError(`Invalid session name: ${name}`);
+  }
+  const { stdout } = await exec("tmux", ["capture-pane", "-p", "-t", name]);
+  return stdout;
+}
+
 // EMB-220 session templates: types `text` into the session's active pane
 // followed by Enter, as if the user had typed it themselves right after the
 // session was created -- used for a template's optional startup command.

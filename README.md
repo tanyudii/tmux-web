@@ -11,10 +11,13 @@ Superset, minus the account/relay: **open a project → it can hold many
 sessions → every session is an isolated git worktree** on its own branch,
 so parallel sessions never collide on the same working directory.
 
-Built to be read in one sitting: the entire core (`src/`) is around 1700
-lines across 16 files, with 2 runtime dependencies (`node-pty`, `ws`) — the
-per-session environment feature below shells out to the `docker`/`docker
-compose` CLIs already on your system rather than adding a client library.
+Built to be read in one sitting: most of the core (`src/`) shells out to
+`tmux`/`git`/`docker` rather than reimplementing them, keeping runtime
+dependencies to `node-pty` and `ws` for the terminal/WebSocket bridge, plus
+`@modelcontextprotocol/sdk` and `zod` for the optional `tmuxweb mcp` server
+below — the per-session environment feature shells out to the
+`docker`/`docker compose` CLIs already on your system rather than adding a
+client library.
 
 The client (web + iOS) is being rebuilt as a single Kotlin Multiplatform +
 Compose Multiplatform project under `kmp/` — see
@@ -453,6 +456,112 @@ Because tmux sessions live in the tmux *server* (a separate process,
 already independent of this Node process), restarting or crash-looping
 `tmux-web.service` never touches your running sessions.
 
+## MCP server (for agent-to-agent use)
+
+`tmuxweb mcp` starts a [Model Context Protocol](https://modelcontextprotocol.io)
+server exposing one tool, `send_message`, so another agent (e.g. your own
+autonomous "Hermes"-style agent) can drive a real, interactive Claude Code
+session inside a tmux-web project worktree and get back either a finished
+result or a question that needs an answer.
+
+**Two transports, depending on where your MCP client runs:**
+
+- **stdio (default)** — for a client that spawns `tmuxweb mcp` itself as a
+  local subprocess on the *same machine*. This is what most MCP clients
+  (Claude Desktop, Claude Code itself, etc.) expect out of the box.
+
+  ```bash
+  tmuxweb mcp
+  ```
+
+  ```json
+  {
+    "mcpServers": {
+      "tmux-web": {
+        "command": "node",
+        "args": ["--experimental-strip-types", "/path/to/tmux-web/bin/tmuxweb.ts", "mcp"]
+      }
+    }
+  }
+  ```
+
+- **`--http`** — for a client that runs on a **different machine** (e.g.
+  your own agent running on a separate server) and needs to reach in over
+  the network. stdio cannot do this at all — it's a same-machine process
+  pipe, not a network protocol. Point `--host` at a private interface
+  (WireGuard/Tailscale, same deployment model as the rest of this app —
+  see "Security model" above) and never at a public one.
+
+  ```bash
+  tmuxweb mcp --http --host 10.8.0.2 --port 5311
+  ```
+
+  This prints a bearer token on first run (persisted at
+  `~/.tmux-web/mcp-token`, mode `0600` — reuse it on subsequent starts,
+  don't regenerate). Your remote MCP client needs to be configured to POST
+  JSON-RPC to `http://10.8.0.2:5311/mcp` with `Authorization: Bearer
+  <token>` — consult your MCP client's docs for how it expects a remote
+  Streamable HTTP server to be configured (field names vary by client).
+
+**How `send_message` works:**
+
+- `send_message({ project, sessionName, message })` — `project` is an
+  existing tmux-web project's name or id (register it first via the normal
+  UI/`~/.tmux-web/projects.json`); `sessionName` identifies the session.
+- The **first** call for a given `sessionName` creates a worktree + tmux
+  session and launches a real, interactive `claude` REPL in it — never
+  `claude -p`. Your `message` is then typed into that REPL exactly as if
+  you'd typed it yourself right after opening the session.
+- **Every subsequent call** with the same `sessionName` types straight into
+  that same still-running REPL, so the full conversation context is never
+  reset between calls — this is the whole point of using a persistent
+  session instead of one-shot invocations.
+- The tool call blocks until Claude either finishes the turn
+  (`status: "result"`) or needs your input/permission
+  (`status: "question"`) — call `send_message` again with the same
+  `sessionName` and your reply to continue. A call against a session that's
+  still mid-turn returns `status: "busy"` instead of queuing.
+- Detecting "finished" vs "needs input" reuses this app's own
+  `Stop`/`Notification` hook mechanism (see the bell-notification feature
+  above) — `tmuxweb mcp` auto-installs both hooks into the session's
+  worktree-local `.claude/settings.local.json` on session creation (merged
+  with, not overwriting, any hooks already there). This never touches your
+  real global `~/.claude/settings.json`, and disappears along with the
+  worktree when the session is deleted.
+
+**Security notes:**
+
+- Anything with access to this MCP server (either transport) can make
+  Claude Code execute arbitrary instructions inside a real worktree on this
+  machine — the same trust level as the main HTTP API's bearer token (see
+  "Security model" above). Only expose it to agents/processes you already
+  trust with shell access to this host.
+- `--http` mode is bearer-token gated with its own dedicated token
+  (`~/.tmux-web/mcp-token`, mode `0600`, separate from both the main API's
+  token and the hook-listener's secret below) — unlike stdio, where "can
+  spawn a local process" is implicitly the trust boundary, a network
+  listener needs an explicit credential, since anything reachable on that
+  network segment could otherwise call `send_message`. Losing control of
+  this token is equivalent to losing control of the main API token: rotate
+  it by deleting the file and restarting `tmuxweb mcp --http` (a fresh one
+  is generated on next start; there's no `tmuxweb mcp generate` command
+  yet, unlike the main token's `tmuxweb generate`).
+- `tmuxweb mcp` also opens a **second**, separate local HTTP listener (port
+  5310 by default) that the installed hooks POST to when a session
+  finishes a turn or needs input. This is a distinct trust boundary from
+  the MCP stdio transport above — it's reachable by any local process, not
+  just whatever you've authorized to speak MCP to this server. It requires
+  a bearer secret (auto-generated once per install at
+  `~/.tmux-web/mcp-hook-secret`, mode `0600`, read directly from that file
+  by the installed hook at the moment it fires — never passed as a
+  command-line argument or embedded in `settings.local.json`, both of
+  which would otherwise leak it to any local user via `ps`/`/proc` or a
+  world-readable config file) on every request, so a same-machine process
+  that doesn't have that file can't forge a session's result/question back
+  to the calling agent — but it's still worth knowing this second listener
+  exists and is a lower trust boundary than "only
+  MCP-authorized callers."
+
 ## Project layout
 
 ```
@@ -477,6 +586,17 @@ src/
   pty-bridge.ts            node-pty <-> WebSocket bridge, resize handling
   config.ts               JSON config read/write (~/.tmux-web/config.json)
   main.ts                 composition root: wires the above into a real server
+  mcp/
+    server.ts               MCP server + send_message tool definition
+    send-message.ts          create/reuse a session, type the message, wait for a hook event
+    pending-tasks.ts         in-memory busy/idle state machine per tmux session
+    hook-listener.ts         loopback HTTP listener that hook-script.ts POSTs to
+    hook-script.ts            invoked by Claude Code's Stop/Notification hooks
+    hook-config-merge.ts      installs those hooks into a worktree's settings.local.json
+    persisted-secret.ts        generic "generate once, persist, 0600" secret file helper
+    hook-secret.ts             hook-listener.ts's secret (via persisted-secret.ts)
+    mcp-token.ts                http-server.ts's bearer token (via persisted-secret.ts)
+    http-server.ts             --http mode: Streamable HTTP transport + bearer auth
   cli/
     index.ts                argv router for the `tmuxweb` command;
                               no subcommand -> help, not the server
@@ -485,6 +605,7 @@ src/
     config-command.ts          `tmuxweb config port|host`
     service-command.ts          `tmuxweb service install|uninstall|status`
     upgrade.ts                   `tmuxweb upgrade [--tag <tag>]`
+    mcp-command.ts                 `tmuxweb mcp` -- wires mcp/ into real tmux/worktree/hook deps
     app-dir.ts                    `~/.local/share/tmux-web` path resolution
     version.ts                     `tmuxweb --version`
     help.ts                         `tmuxweb help`

@@ -6,6 +6,7 @@ import { runConfigCommand } from "./config-command.ts";
 import { runServiceCommand } from "./service-command.ts";
 import { runUpgrade } from "./upgrade.ts";
 import { printVersion } from "./version.ts";
+import { runMcpCommand } from "./mcp-command.ts";
 
 // Overridable in tests so routing can be asserted without starting a real
 // server or touching the filesystem/systemd -- mirrors the ServiceCommandDeps
@@ -18,6 +19,7 @@ export interface RunCliDeps {
   runConfigCommand?: (args: string[]) => Promise<void>;
   runServiceCommand?: (args: string[]) => Promise<void>;
   runUpgrade?: (args: string[]) => Promise<void>;
+  runMcpCommand?: (args: string[]) => Promise<void>;
   printVersion?: () => void;
   exit?: (code: number) => void;
 }
@@ -32,6 +34,7 @@ export async function runCli(argv: string[], deps: RunCliDeps = {}): Promise<voi
     runConfigCommand: config = runConfigCommand,
     runServiceCommand: service = runServiceCommand,
     runUpgrade: upgrade = runUpgrade,
+    runMcpCommand: mcp = runMcpCommand,
     printVersion: version = printVersion,
     exit = (code: number) => process.exit(code),
   } = deps;
@@ -52,6 +55,8 @@ export async function runCli(argv: string[], deps: RunCliDeps = {}): Promise<voi
       return service(rest);
     case "upgrade":
       return upgrade(rest);
+    case "mcp":
+      return mcp(rest);
     case "help":
     case "-h":
     case "--help":
