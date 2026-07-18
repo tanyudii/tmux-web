@@ -327,7 +327,17 @@ private fun SidebarRow(
                 modifier = Modifier.size(14.dp).clickable(onClick = onDelete),
             )
         } else {
-            Text(subtitle, color = TmuxColors.textTertiary, fontFamily = TmuxFonts.mono, fontSize = TmuxTextSize.xs)
+            // maxLines/overflow so a longer subtitle (e.g. a long hostname)
+            // ellipsizes gracefully instead of being hard-clipped by the
+            // row's own bounds with no visual indication it was cut off.
+            Text(
+                subtitle,
+                color = TmuxColors.textTertiary,
+                fontFamily = TmuxFonts.mono,
+                fontSize = TmuxTextSize.xs,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
         }
     }
 }
@@ -353,7 +363,11 @@ private fun SidebarFooter(
             SidebarRow(
                 icon = TmuxIcons.History,
                 label = "Access log",
-                subtitle = "Who accessed this server, and when",
+                // Kept short so it doesn't get clipped inside the 260dp
+                // sidebar row (see SidebarRow's subtitle Text) -- also
+                // deliberately says "by IP", not "who": the bearer token is
+                // shared, not per-user, so this can't identify a person.
+                subtitle = "By IP, not by user",
                 active = false,
                 onClick = onOpenAccessLog,
                 onDelete = {},
