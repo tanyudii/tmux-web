@@ -1,10 +1,13 @@
 import type { Project } from "./projects.ts";
-import { buildSessionName, parseSessionName, belongsToProject } from "./session-naming.ts";
+import { buildSessionName, parseSessionName, belongsToProject, splitPaneSessionName } from "./session-naming.ts";
 import { resolveWorktreePath } from "./worktree.ts";
 import { slugifyBranchName } from "./slug.ts";
 import { ValidationError, type TmuxSession, type TmuxWindow, type CreateSessionOptions } from "./tmux.ts";
 import type { RemoveWorktreeOptions } from "./worktree.ts";
 import type { GroupedChanges, FileDiff, DiffMode } from "./git-status.ts";
+import type { EnvFileEntry } from "./env-editor.ts";
+import type { SessionEventType } from "./session-events.ts";
+import type { SessionMeta } from "./session-meta.ts";
 
 export class SessionCreationInProgressError extends Error {}
 export class SessionCreationNotFoundError extends Error {}
@@ -33,6 +36,11 @@ export interface ProjectSession {
   // WindowTabs.kt) instead of a placeholder after a page refresh.
   windowNames?: string[];
   attached: boolean;
+  // EMB-222: short free-text organizational label + favorite flag,
+  // persisted in session-meta.ts. Absent/false for sessions nobody has
+  // labeled/favorited -- existing sessions need no migration.
+  label?: string;
+  favorite: boolean;
 }
 
 export interface ProjectSessionsDeps {
@@ -40,15 +48,39 @@ export interface ProjectSessionsDeps {
   listWindows: (fullName: string) => Promise<TmuxWindow[]>;
   createSession: (name: string, options?: CreateSessionOptions) => Promise<void>;
   killSession: (name: string) => Promise<void>;
+  // EMB-220: types a session template's optional startup command into the
+  // new session's first window right after creation.
+  sendKeys: (name: string, text: string) => Promise<void>;
   addWorktree: (repoPath: string, worktreePath: string, branchName: string, onProgress?: (message: string) => void) => Promise<void>;
   removeWorktree: (repoPath: string, worktreePath: string, options?: RemoveWorktreeOptions) => Promise<void>;
+  // EMB-207 auto-delete branch on session delete.
+  isBranchMerged: (repoPath: string, branchName: string) => Promise<boolean>;
+  deleteBranch: (repoPath: string, branchName: string) => Promise<void>;
   getChangedFiles: (worktreePath: string) => Promise<GroupedChanges>;
   getFileDiff: (worktreePath: string, filePath: string, mode: DiffMode) => Promise<FileDiff>;
+  stageFile: (worktreePath: string, filePath: string) => Promise<void>;
+  unstageFile: (worktreePath: string, filePath: string) => Promise<void>;
+  discardFile: (worktreePath: string, filePath: string, mode: DiffMode) => Promise<void>;
+  commitStaged: (worktreePath: string, message: string) => Promise<void>;
+  listEnvFiles: (worktreePath: string) => Promise<EnvFileEntry[]>;
+  readEnvFile: (worktreePath: string, filename: string) => Promise<string>;
+  writeEnvFile: (worktreePath: string, filename: string, content: string) => Promise<void>;
   // Optional: tears down the session's docker-compose environment (see
   // session-env.ts). Best-effort -- a session with no environment, or a
   // docker daemon that's gone away, must not block killing the session.
   stopSessionEnv?: (project: Project, sessionSlug: string) => Promise<void>;
+  // EMB-213: appends a lifecycle event ("created"/"deleted" from here --
+  // env-related types come from session-env.ts's own deps). Optional and
+  // best-effort, same reasoning as stopSessionEnv above: a logging failure
+  // must never block the actual session operation.
+  recordEvent?: (projectId: string, sessionSlug: string, type: SessionEventType, message?: string) => Promise<void>;
   worktreesRoot?: string;
+  // EMB-222: bulk-loads label/favorite metadata for every session in the
+  // project in ONE read (see session-meta.ts), looked up per session in
+  // listProjectSessions's loop below rather than one file read per
+  // session. Optional/best-effort like stopSessionEnv/recordEvent above --
+  // sessions just show no label/favorite if this isn't wired up.
+  listSessionMeta?: (projectId: string) => Promise<SessionMeta[]>;
 }
 
 // "no server running" covers the case where the session being killed was
@@ -77,21 +109,32 @@ export async function listProjectSessions(
   deps: ProjectSessionsDeps,
 ): Promise<ProjectSession[]> {
   const allSessions = await deps.listSessions();
+  const metaBySlug = await loadMetaBySlug(project.id, deps);
   const result: ProjectSession[] = [];
 
   for (const session of allSessions) {
     if (!belongsToProject(session.name, project.id)) continue;
     const parsed = parseSessionName(session.name);
+    const sessionSlug = parsed?.sessionSlug ?? session.name;
+    const meta = metaBySlug.get(sessionSlug);
     result.push({
-      name: parsed?.sessionSlug ?? session.name,
+      name: sessionSlug,
       fullName: session.name,
       windows: session.windows,
       windowNames: await fetchWindowNames(session.name, deps),
       attached: session.attached,
+      label: meta?.label,
+      favorite: meta?.favorite ?? false,
     });
   }
 
   return result;
+}
+
+async function loadMetaBySlug(projectId: string, deps: ProjectSessionsDeps): Promise<Map<string, SessionMeta>> {
+  if (!deps.listSessionMeta) return new Map();
+  const entries = await deps.listSessionMeta(projectId);
+  return new Map(entries.map((entry) => [entry.sessionSlug, entry]));
 }
 
 // Best-effort: a session that vanishes between deps.listSessions() and this
@@ -111,6 +154,7 @@ export async function createProjectSession(
   rawName: string,
   deps: ProjectSessionsDeps,
   onProgress?: (message: string) => void,
+  startupCommand?: string,
 ): Promise<ProjectSession> {
   const { sessionSlug, fullName } = resolveSessionIdentity(project, rawName);
   const worktreePath = resolveWorktreePath(project.id, sessionSlug, deps.worktreesRoot);
@@ -126,7 +170,18 @@ export async function createProjectSession(
     throw error;
   }
 
-  return { name: sessionSlug, fullName, windows: 1, attached: false };
+  // Best-effort: a startup command that fails to send must never fail
+  // session creation itself -- the session and worktree are already real
+  // and usable at this point, this is just a convenience typed on the
+  // user's behalf.
+  if (startupCommand) {
+    onProgress?.("Running startup command…");
+    await deps.sendKeys(fullName, startupCommand).catch(() => {});
+  }
+
+  await deps.recordEvent?.(project.id, sessionSlug, "created").catch(() => {});
+
+  return { name: sessionSlug, fullName, windows: 1, attached: false, favorite: false };
 }
 
 // Fast entry point: claims the store slot synchronously (mirroring
@@ -139,6 +194,7 @@ export async function startProjectSessionCreation(
   rawName: string,
   deps: ProjectSessionsDeps,
   store: SessionCreationStore,
+  startupCommand?: string,
 ): Promise<{ name: string; fullName: string }> {
   const { sessionSlug, fullName } = resolveSessionIdentity(project, rawName);
 
@@ -150,7 +206,7 @@ export async function startProjectSessionCreation(
   // gap (same TOCTOU-avoidance as startSessionEnv in session-env.ts).
   store.set(fullName, { phase: "creating" });
 
-  void runSessionCreation(project, sessionSlug, fullName, deps, store);
+  void runSessionCreation(project, sessionSlug, fullName, deps, store, startupCommand);
 
   return { name: sessionSlug, fullName };
 }
@@ -161,11 +217,18 @@ async function runSessionCreation(
   fullName: string,
   deps: ProjectSessionsDeps,
   store: SessionCreationStore,
+  startupCommand?: string,
 ): Promise<void> {
   try {
-    const session = await createProjectSession(project, sessionSlug, deps, (message) => {
-      store.set(fullName, { phase: "creating", message });
-    });
+    const session = await createProjectSession(
+      project,
+      sessionSlug,
+      deps,
+      (message) => {
+        store.set(fullName, { phase: "creating", message });
+      },
+      startupCommand,
+    );
     store.set(fullName, { phase: "ready", session });
   } catch (error) {
     store.set(fullName, {
@@ -188,13 +251,31 @@ export async function getSessionCreationStatus(
   return status;
 }
 
+export interface KillProjectSessionOptions extends RemoveWorktreeOptions {
+  // EMB-207: after the worktree is removed, also force-delete the branch
+  // (git branch -D) that was created for this session. The frontend is
+  // responsible for the two-tier confirmation this implies (default OFF,
+  // plus a distinct warning for an unmerged branch via
+  // isProjectSessionBranchMerged below) *before* setting this -- by the
+  // time this flag is true, the caller has already gotten whatever
+  // confirmation it needed, so this always force-deletes unconditionally.
+  deleteBranch?: boolean;
+}
+
 export async function killProjectSession(
   project: Project,
   sessionSlug: string,
   deps: ProjectSessionsDeps,
-  options: RemoveWorktreeOptions = {},
+  options: KillProjectSessionOptions = {},
 ): Promise<void> {
   const fullName = buildFullNameOrThrowValidation(project, sessionSlug);
+
+  // Best-effort, and killed before the primary session below: a split
+  // pane's linked session (see splitPaneSessionName) shares the primary's
+  // windows rather than owning independent ones -- killing it first avoids
+  // leaving it as a dangling, no-longer-discoverable session holding those
+  // windows open after the primary and worktree are already gone.
+  await deps.killSession(splitPaneSessionName(fullName)).catch(() => {});
 
   // Stop the environment (docker compose down -v, potentially slow) before
   // killing the tmux session -- not the other way around. Killing the
@@ -221,6 +302,39 @@ export async function killProjectSession(
 
   const worktreePath = resolveWorktreePath(project.id, sessionSlug, deps.worktreesRoot);
   await deps.removeWorktree(project.repoPath, worktreePath, options);
+
+  if (options.deleteBranch) {
+    await deps.deleteBranch(project.repoPath, sessionSlug);
+  }
+
+  await deps.recordEvent?.(project.id, sessionSlug, "deleted").catch(() => {});
+}
+
+// EMB-207: backs the "Delete branch too" checkbox's warning UI -- called
+// (read-only, no deletion) before the user commits to deleting a session's
+// branch, so an unmerged branch can be flagged with an extra confirmation
+// step *before* anything destructive happens, not discovered after.
+export async function isProjectSessionBranchMerged(
+  project: Project,
+  sessionSlug: string,
+  deps: ProjectSessionsDeps,
+): Promise<boolean> {
+  return deps.isBranchMerged(project.repoPath, sessionSlug);
+}
+
+// Closing a split pane in the UI (as opposed to a network blip / tab close,
+// which should leave it attachable again -- see main.ts's /ws handler)
+// tears down its linked tmux session outright, matching how the split is
+// modeled as ephemeral in the UI: reopening it re-creates the linked
+// session via ensureLinkedSession (tmux.ts) rather than reusing state.
+// Tolerates the split never having been opened at all (nothing to kill).
+export async function killProjectSessionSplit(
+  project: Project,
+  sessionSlug: string,
+  deps: ProjectSessionsDeps,
+): Promise<void> {
+  const fullName = buildFullNameOrThrowValidation(project, sessionSlug);
+  await deps.killSession(splitPaneSessionName(fullName)).catch(() => {});
 }
 
 export async function getProjectSessionChanges(
@@ -241,4 +355,75 @@ export async function getProjectSessionDiff(
 ): Promise<FileDiff> {
   const worktreePath = resolveWorktreePath(project.id, sessionSlug, deps.worktreesRoot);
   return deps.getFileDiff(worktreePath, filePath, mode);
+}
+
+export async function stageProjectSessionFile(
+  project: Project,
+  sessionSlug: string,
+  filePath: string,
+  deps: ProjectSessionsDeps,
+): Promise<void> {
+  const worktreePath = resolveWorktreePath(project.id, sessionSlug, deps.worktreesRoot);
+  return deps.stageFile(worktreePath, filePath);
+}
+
+export async function unstageProjectSessionFile(
+  project: Project,
+  sessionSlug: string,
+  filePath: string,
+  deps: ProjectSessionsDeps,
+): Promise<void> {
+  const worktreePath = resolveWorktreePath(project.id, sessionSlug, deps.worktreesRoot);
+  return deps.unstageFile(worktreePath, filePath);
+}
+
+export async function discardProjectSessionFile(
+  project: Project,
+  sessionSlug: string,
+  filePath: string,
+  mode: DiffMode,
+  deps: ProjectSessionsDeps,
+): Promise<void> {
+  const worktreePath = resolveWorktreePath(project.id, sessionSlug, deps.worktreesRoot);
+  return deps.discardFile(worktreePath, filePath, mode);
+}
+
+export async function commitProjectSessionChanges(
+  project: Project,
+  sessionSlug: string,
+  message: string,
+  deps: ProjectSessionsDeps,
+): Promise<void> {
+  const worktreePath = resolveWorktreePath(project.id, sessionSlug, deps.worktreesRoot);
+  return deps.commitStaged(worktreePath, message);
+}
+
+export async function listProjectSessionEnvFiles(
+  project: Project,
+  sessionSlug: string,
+  deps: ProjectSessionsDeps,
+): Promise<EnvFileEntry[]> {
+  const worktreePath = resolveWorktreePath(project.id, sessionSlug, deps.worktreesRoot);
+  return deps.listEnvFiles(worktreePath);
+}
+
+export async function readProjectSessionEnvFile(
+  project: Project,
+  sessionSlug: string,
+  filename: string,
+  deps: ProjectSessionsDeps,
+): Promise<string> {
+  const worktreePath = resolveWorktreePath(project.id, sessionSlug, deps.worktreesRoot);
+  return deps.readEnvFile(worktreePath, filename);
+}
+
+export async function writeProjectSessionEnvFile(
+  project: Project,
+  sessionSlug: string,
+  filename: string,
+  content: string,
+  deps: ProjectSessionsDeps,
+): Promise<void> {
+  const worktreePath = resolveWorktreePath(project.id, sessionSlug, deps.worktreesRoot);
+  return deps.writeEnvFile(worktreePath, filename, content);
 }

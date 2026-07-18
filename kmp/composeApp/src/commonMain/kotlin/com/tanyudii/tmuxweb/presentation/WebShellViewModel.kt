@@ -4,7 +4,9 @@ import com.tanyudii.tmuxweb.data.remote.ApiError
 import com.tanyudii.tmuxweb.domain.model.Project
 import com.tanyudii.tmuxweb.domain.model.ProjectSession
 import com.tanyudii.tmuxweb.domain.model.SessionCreationPhase
+import com.tanyudii.tmuxweb.domain.model.SessionTemplate
 import com.tanyudii.tmuxweb.domain.repository.ProjectsRepository
+import com.tanyudii.tmuxweb.domain.repository.SessionTemplatesRepository
 import com.tanyudii.tmuxweb.domain.repository.SessionsRepository
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -45,6 +47,11 @@ data class WebShellUiState(
         val isSaving: Boolean = true,
         val progressMessage: String? = null,
         val errorMessage: String? = null,
+        // EMB-220: this project's saved session templates, offered as
+        // one-click name/startup-command fill-ins -- loaded once when the
+        // dialog opens (see showNewSessionDialog), not re-fetched on every
+        // keystroke.
+        val templates: List<SessionTemplate> = emptyList(),
     )
 
     sealed interface PendingDelete {
@@ -61,6 +68,19 @@ data class WebShellUiState(
             val session: ProjectSession,
             override val forced: Boolean,
             val message: String? = null,
+            // EMB-207: "Delete branch too" checkbox state. deleteBranch is
+            // the checkbox's own checked state; branchMergeChecked/
+            // branchMerged track the async merge-status lookup triggered by
+            // checking it (see setDeleteBranchOnSessionDelete);
+            // unmergedConfirmed is the *second* confirmation tier -- the
+            // first Confirm click while the branch is known-unmerged just
+            // sets this instead of actually deleting, escalating the
+            // dialog's own warning, mirroring how `forced` already escalates
+            // for a worktree/session conflict.
+            val deleteBranch: Boolean = false,
+            val branchMergeChecked: Boolean = false,
+            val branchMerged: Boolean? = null,
+            val unmergedConfirmed: Boolean = false,
         ) : PendingDelete
     }
 
@@ -93,6 +113,7 @@ data class WebShellUiState(
 class WebShellViewModel(
     private val projectsRepository: ProjectsRepository,
     private val sessionsRepository: SessionsRepository,
+    private val templatesRepository: SessionTemplatesRepository,
     private val scope: CoroutineScope,
 ) {
     private val _state = MutableStateFlow(WebShellUiState())
@@ -138,6 +159,19 @@ class WebShellViewModel(
 
     fun toggleSidebarCollapsed() {
         _state.update { it.copy(sidebarCollapsed = !it.sidebarCollapsed) }
+    }
+
+    /**
+     * Eagerly loads sessions for every project not yet expanded -- the
+     * command palette (EMB-218) needs a complete, searchable project+session
+     * list the moment it opens, unlike the sidebar's own lazy
+     * expand-on-click loading (see [toggleProject]). Deliberately does NOT
+     * touch [WebShellUiState.expandedProjectIds], so opening the palette
+     * never visually expands sidebar rows the user hasn't clicked.
+     */
+    fun loadAllSessions() {
+        val loaded = _state.value.sessionsByProjectId.keys
+        _state.value.projects.map { it.id }.filterNot { it in loaded }.forEach(::loadSessions)
     }
 
     /**
@@ -195,6 +229,16 @@ class WebShellViewModel(
         _state.update {
             it.copy(newSessionDialog = WebShellUiState.NewSessionDialogUiState(projectId = projectId, isSaving = false))
         }
+        scope.launch {
+            runSuspendCatching { templatesRepository.listTemplates(projectId) }
+                .onSuccess { templates ->
+                    _state.update { state ->
+                        state.copy(newSessionDialog = state.newSessionDialog?.copy(templates = templates))
+                    }
+                }
+            // A failed template load must never block session creation itself
+            // -- silently leave the dialog's template list empty on failure.
+        }
     }
 
     fun cancelNewSessionDialog() {
@@ -202,14 +246,48 @@ class WebShellViewModel(
         _state.update { it.copy(newSessionDialog = null) }
     }
 
-    fun createSession(name: String) {
+    fun createSession(name: String, startupCommand: String? = null) {
         val projectId = _state.value.newSessionDialog?.projectId ?: return
         sessionCreationJob?.cancel()
         _state.update { it.copy(newSessionDialog = WebShellUiState.NewSessionDialogUiState(projectId = projectId)) }
         sessionCreationJob = scope.launch {
-            runSuspendCatching { sessionsRepository.startSessionCreation(projectId, name) }
+            runSuspendCatching { sessionsRepository.startSessionCreation(projectId, name, startupCommand) }
                 .onSuccess { pending -> pollSessionCreation(projectId, pending.name) }
                 .onFailure { error -> failSessionCreation(projectId, error.toUiMessage()) }
+        }
+    }
+
+    /** Persists the dialog's current name/startup-command as a reusable template (EMB-220). */
+    fun saveAsTemplate(name: String, startupCommand: String?) {
+        val projectId = _state.value.newSessionDialog?.projectId ?: return
+        scope.launch {
+            runSuspendCatching { templatesRepository.createTemplate(projectId, name, startupCommand) }
+                .onSuccess { template ->
+                    _state.update { state ->
+                        val dialog = state.newSessionDialog ?: return@update state
+                        state.copy(newSessionDialog = dialog.copy(templates = dialog.templates + template))
+                    }
+                }
+                .onFailure { error ->
+                    _state.update { state ->
+                        val dialog = state.newSessionDialog ?: return@update state
+                        state.copy(newSessionDialog = dialog.copy(errorMessage = error.toUiMessage()))
+                    }
+                }
+        }
+    }
+
+    fun deleteTemplate(templateId: String) {
+        val projectId = _state.value.newSessionDialog?.projectId ?: return
+        scope.launch {
+            runSuspendCatching { templatesRepository.deleteTemplate(projectId, templateId) }
+                .onSuccess {
+                    _state.update { state ->
+                        val dialog = state.newSessionDialog ?: return@update state
+                        val remaining = dialog.templates.filterNot { it.id == templateId }
+                        state.copy(newSessionDialog = dialog.copy(templates = remaining))
+                    }
+                }
         }
     }
 
@@ -230,7 +308,44 @@ class WebShellViewModel(
     fun confirmPendingDelete() {
         when (val pending = _state.value.pendingDelete ?: return) {
             is WebShellUiState.PendingDelete.OfProject -> deleteProject(pending)
-            is WebShellUiState.PendingDelete.OfSession -> deleteSession(pending)
+            is WebShellUiState.PendingDelete.OfSession -> {
+                val needsUnmergedConfirm = pending.deleteBranch &&
+                    pending.branchMergeChecked &&
+                    pending.branchMerged == false &&
+                    !pending.unmergedConfirmed
+                if (needsUnmergedConfirm) {
+                    _state.update { it.copy(pendingDelete = pending.copy(unmergedConfirmed = true)) }
+                } else {
+                    deleteSession(pending)
+                }
+            }
+        }
+    }
+
+    /** EMB-207: toggles the session-delete dialog's "Delete branch too" checkbox. */
+    fun setDeleteBranchOnSessionDelete(deleteBranch: Boolean) {
+        val pending = _state.value.pendingDelete as? WebShellUiState.PendingDelete.OfSession ?: return
+        _state.update {
+            it.copy(
+                pendingDelete = pending.copy(
+                    deleteBranch = deleteBranch,
+                    branchMergeChecked = false,
+                    branchMerged = null,
+                    unmergedConfirmed = false,
+                ),
+            )
+        }
+        if (!deleteBranch) return
+        scope.launch {
+            runSuspendCatching { sessionsRepository.isBranchMerged(pending.projectId, pending.session.name) }
+                .onSuccess { merged ->
+                    _state.update { state ->
+                        val current = state.pendingDelete as? WebShellUiState.PendingDelete.OfSession
+                            ?: return@update state
+                        state.copy(pendingDelete = current.copy(branchMergeChecked = true, branchMerged = merged))
+                    }
+                }
+                .onFailure { error -> _state.update { it.copy(errorMessage = error.toUiMessage()) } }
         }
     }
 
@@ -360,7 +475,12 @@ class WebShellViewModel(
         }
         scope.launch {
             runSuspendCatching {
-                sessionsRepository.deleteSession(pending.projectId, pending.session.name, force = pending.forced)
+                sessionsRepository.deleteSession(
+                    pending.projectId,
+                    pending.session.name,
+                    force = pending.forced,
+                    deleteBranch = pending.deleteBranch,
+                )
             }
                 .onSuccess {
                     _state.update { state ->
@@ -378,12 +498,7 @@ class WebShellViewModel(
                         _state.update { it.copy(selectedSessionName = pending.session.name) }
                     }
                     handleDeleteConflict(error) { message ->
-                        WebShellUiState.PendingDelete.OfSession(
-                            pending.projectId,
-                            pending.session,
-                            forced = true,
-                            message = message,
-                        )
+                        pending.copy(forced = true, message = message)
                     }
                 }
         }

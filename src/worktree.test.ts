@@ -11,6 +11,8 @@ import {
   resolveOriginDefaultBranch,
   addWorktree,
   removeWorktree,
+  isBranchMerged,
+  deleteBranch,
   WorktreeError,
   WorktreeConflictError,
   DirtyWorktreeError,
@@ -206,6 +208,65 @@ test("removeWorktree passes --force when requested", async () => {
   assert.deepEqual(calls[0], ["-C", "/repo", "worktree", "remove", "--force", "/repo-worktrees/proj1/feature-x"]);
 });
 
+test("isBranchMerged resolves origin's default branch, then checks merge-base --is-ancestor", async () => {
+  const calls: string[][] = [];
+  const fakeExec = async (_file: string, args: string[]) => {
+    calls.push(args);
+    if (args.includes("ls-remote")) return { stdout: "ref: refs/heads/trunk\tHEAD\n" };
+    return { stdout: "" };
+  };
+
+  const merged = await isBranchMerged("/repo", "feature-x", fakeExec);
+
+  assert.equal(merged, true);
+  assert.deepEqual(calls[1], ["-C", "/repo", "merge-base", "--is-ancestor", "feature-x", "origin/trunk"]);
+});
+
+test("isBranchMerged returns false when merge-base --is-ancestor exits 1 (not merged)", async () => {
+  const fakeExec = async (_file: string, args: string[]) => {
+    if (args.includes("ls-remote")) return { stdout: "ref: refs/heads/main\tHEAD\n" };
+    const err = new Error("Command failed") as Error & { code?: number };
+    err.code = 1;
+    throw err;
+  };
+
+  assert.equal(await isBranchMerged("/repo", "feature-x", fakeExec), false);
+});
+
+test("isBranchMerged throws WorktreeError for a real failure (not exit code 1)", async () => {
+  const fakeExec = async (_file: string, args: string[]) => {
+    if (args.includes("ls-remote")) return { stdout: "ref: refs/heads/main\tHEAD\n" };
+    const err = new Error("Command failed") as Error & { code?: number; stderr?: string };
+    err.code = 128;
+    err.stderr = "fatal: Not a valid object name feature-x\n";
+    throw err;
+  };
+
+  await assert.rejects(() => isBranchMerged("/repo", "feature-x", fakeExec), WorktreeError);
+});
+
+test("deleteBranch force-deletes the branch with -D", async () => {
+  const calls: string[][] = [];
+  const fakeExec = async (_file: string, args: string[]) => {
+    calls.push(args);
+    return { stdout: "" };
+  };
+
+  await deleteBranch("/repo", "feature-x", fakeExec);
+
+  assert.deepEqual(calls, [["-C", "/repo", "branch", "-D", "feature-x"]]);
+});
+
+test("deleteBranch throws WorktreeError when git fails", async () => {
+  const fakeExec = async () => {
+    const err = new Error("Command failed") as Error & { stderr?: string };
+    err.stderr = "error: branch 'feature-x' not found\n";
+    throw err;
+  };
+
+  await assert.rejects(() => deleteBranch("/repo", "feature-x", fakeExec), WorktreeError);
+});
+
 function isGitAvailable(): boolean {
   try {
     execFileSync("git", ["--version"], { stdio: "ignore" });
@@ -261,6 +322,51 @@ test(
       await rm(originPath, { recursive: true, force: true });
       await rm(repoPath, { recursive: true, force: true });
       await rm(worktreesRoot, { recursive: true, force: true });
+    }
+  },
+);
+
+test(
+  "real git integration: isBranchMerged distinguishes a merged branch from one with unpushed commits, deleteBranch removes the ref",
+  { skip: !isGitAvailable() },
+  async () => {
+    const originPath = await mkdtemp(join(tmpdir(), "worktree-test-origin-"));
+    const repoPath = await mkdtemp(join(tmpdir(), "worktree-test-repo-"));
+    try {
+      await execFileAsync("git", ["init", "--quiet", "--initial-branch=trunk", originPath]);
+      await execFileAsync("git", ["-C", originPath, "config", "user.email", "test@example.com"]);
+      await execFileAsync("git", ["-C", originPath, "config", "user.name", "Test"]);
+      await writeFile(join(originPath, "README.md"), "from origin\n");
+      await execFileAsync("git", ["-C", originPath, "add", "README.md"]);
+      await execFileAsync("git", ["-C", originPath, "commit", "--quiet", "-m", "origin commit"]);
+
+      await rm(repoPath, { recursive: true, force: true });
+      await execFileAsync("git", ["clone", "--quiet", "--branch", "trunk", originPath, repoPath]);
+      await execFileAsync("git", ["-C", repoPath, "config", "user.email", "test@example.com"]);
+      await execFileAsync("git", ["-C", repoPath, "config", "user.name", "Test"]);
+
+      // A branch pointing at the same commit as origin/trunk -- trivially
+      // fully merged (an ancestor of itself).
+      await execFileAsync("git", ["-C", repoPath, "branch", "merged-branch", "trunk"]);
+
+      // A branch with a local-only commit never pushed to origin -- not
+      // an ancestor of origin/trunk, so must report as unmerged.
+      await execFileAsync("git", ["-C", repoPath, "branch", "unmerged-branch", "trunk"]);
+      await execFileAsync("git", ["-C", repoPath, "checkout", "--quiet", "unmerged-branch"]);
+      await writeFile(join(repoPath, "unpushed.txt"), "never pushed\n");
+      await execFileAsync("git", ["-C", repoPath, "add", "unpushed.txt"]);
+      await execFileAsync("git", ["-C", repoPath, "commit", "--quiet", "-m", "unpushed commit"]);
+      await execFileAsync("git", ["-C", repoPath, "checkout", "--quiet", "trunk"]);
+
+      assert.equal(await isBranchMerged(repoPath, "merged-branch"), true);
+      assert.equal(await isBranchMerged(repoPath, "unmerged-branch"), false);
+
+      await deleteBranch(repoPath, "merged-branch");
+      const { stdout: branchList } = await execFileAsync("git", ["-C", repoPath, "branch", "--list", "merged-branch"]);
+      assert.equal(branchList.trim(), "");
+    } finally {
+      await rm(originPath, { recursive: true, force: true });
+      await rm(repoPath, { recursive: true, force: true });
     }
   },
 );

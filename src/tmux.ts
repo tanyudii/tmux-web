@@ -108,6 +108,45 @@ export async function killSession(name: string, exec: ExecFn = defaultExec): Pro
   await exec("tmux", ["kill-session", "-t", name]);
 }
 
+// EMB-220 session templates: types `text` into the session's active pane
+// followed by Enter, as if the user had typed it themselves right after the
+// session was created -- used for a template's optional startup command.
+// Passed as a single execFile argv element (never through a shell), so
+// there's no injection risk despite `text` being arbitrary user input; tmux
+// itself interprets it as literal keys, not a shell command line.
+export async function sendKeysToSession(name: string, text: string, exec: ExecFn = defaultExec): Promise<void> {
+  if (!isValidSessionName(name)) {
+    throw new ValidationError(`Invalid session name: ${name}`);
+  }
+  await exec("tmux", ["send-keys", "-t", name, text, "Enter"]);
+}
+
+// EMB-217 split-pane: creates `name` as a tmux *linked session* onto
+// `sourceName` (`tmux new-session -t <sourceName> -s <name>`) if it doesn't
+// already exist -- confirmed live that this shares the source's windows
+// and panes exactly (same content/processes) while giving `name` its own
+// independent current-window pointer, which is what lets a split viewport
+// show a different window than the primary session. Idempotent: `has-session`
+// probes first so re-opening an already-open split reattaches to the same
+// linked session (and whatever window it was last showing) instead of
+// resetting it back to window 0.
+export async function ensureLinkedSession(
+  name: string,
+  sourceName: string,
+  exec: ExecFn = defaultExec,
+): Promise<void> {
+  if (!isValidSessionName(name) || !isValidSessionName(sourceName)) {
+    throw new ValidationError(`Invalid session name: ${name} / ${sourceName}`);
+  }
+  try {
+    await exec("tmux", ["has-session", "-t", name]);
+    return;
+  } catch {
+    // Doesn't exist yet -- fall through and create it.
+  }
+  await exec("tmux", ["new-session", "-d", "-t", sourceName, "-s", name]);
+}
+
 export type ScrollDirection = "up" | "down";
 
 // Whether the session's active pane is currently in a tmux "mode" (copy-mode
@@ -162,4 +201,31 @@ export async function cancelCopyMode(name: string, exec: ExecFn = defaultExec): 
   const inMode = await getPaneMode(name, exec);
   if (!inMode) return;
   await exec("tmux", ["send-keys", "-X", "-t", name, "cancel"]);
+}
+
+// Wires this session's `alert-bell` hook (confirmed live: NOT "bell" -- that
+// hook name doesn't exist in tmux, "unknown value" is what tmux 3.6 returns
+// for it) so a BEL byte reaches the backend's /internal/bell endpoint (see
+// server.ts + push-notifications.ts) even when no browser tab has this
+// session's terminal open. This fires from tmux's own bell-monitoring
+// (monitor-bell, on by default), which runs independently of any attached
+// client -- unlike the WS-relayed PTY stream in pty-bridge.ts, which only
+// exists while a tab is actually attached. Confirmed live with a real tmux
+// session + a real HTTP listener + `tmux send-keys ... printf '\a'` with no
+// client ever attached.
+//
+// Re-set (not appended) on every call -- session-scoped hooks in tmux
+// replace rather than accumulate, so calling this again after a server
+// restart on a different port self-heals instead of leaving a stale port
+// number behind. `-b` runs curl in the background so a slow/unreachable
+// backend never blocks tmux itself; output is discarded since nothing reads
+// it. `name` is validated above and `port` is always a number, so the
+// embedded command string is safe from shell-metacharacter injection
+// despite tmux itself re-parsing it as a shell command via `/bin/sh -c`.
+export async function setBellHook(name: string, port: number, exec: ExecFn = defaultExec): Promise<void> {
+  if (!isValidSessionName(name)) {
+    throw new ValidationError(`Invalid session name: ${name}`);
+  }
+  const command = `curl -fsS -m 3 -X POST "http://127.0.0.1:${port}/internal/bell?session=${name}" >/dev/null 2>&1`;
+  await exec("tmux", ["set-hook", "-t", name, "alert-bell", `run-shell -b '${command}'`]);
 }

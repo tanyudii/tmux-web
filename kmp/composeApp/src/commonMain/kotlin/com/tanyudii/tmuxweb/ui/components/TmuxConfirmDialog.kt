@@ -4,6 +4,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -39,6 +40,11 @@ fun TmuxConfirmDialog(
     force: Boolean = false,
     confirmLabel: String = "Delete",
     cancelLabel: String = "Cancel",
+    // Optional extra content (e.g. EMB-207's "Delete branch too" checkbox +
+    // unmerged-branch warning) rendered between the message and the
+    // footer -- null changes nothing for every other caller of this
+    // otherwise-generic dialog.
+    content: (@Composable ColumnScope.() -> Unit)? = null,
 ) {
     Dialog(onDismissRequest = onCancel) {
         Column(
@@ -58,6 +64,7 @@ fun TmuxConfirmDialog(
             if (force) {
                 ForceWarningBanner()
             }
+            content?.invoke(this)
             ConfirmDialogFooter(
                 force = force,
                 confirmLabel = confirmLabel,

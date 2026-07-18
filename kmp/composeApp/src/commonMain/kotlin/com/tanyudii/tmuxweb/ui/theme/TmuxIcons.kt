@@ -11,20 +11,29 @@ import androidx.compose.material.icons.outlined.AccountTree
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Autorenew
 import androidx.compose.material.icons.outlined.Check
+import androidx.compose.material.icons.outlined.CheckBox
+import androidx.compose.material.icons.outlined.CheckBoxOutlineBlank
+import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.outlined.Circle
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.DeleteOutline
 import androidx.compose.material.icons.outlined.Dns
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.Folder
+import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.outlined.KeyboardArrowDown
 import androidx.compose.material.icons.outlined.Link
 import androidx.compose.material.icons.outlined.MoreVert
+import androidx.compose.material.icons.outlined.Notifications
+import androidx.compose.material.icons.outlined.NotificationsOff
 import androidx.compose.material.icons.outlined.PlayArrow
 import androidx.compose.material.icons.outlined.Refresh
+import androidx.compose.material.icons.outlined.Remove
 import androidx.compose.material.icons.outlined.Settings
+import androidx.compose.material.icons.outlined.StarBorder
 import androidx.compose.material.icons.outlined.Stop
 import androidx.compose.material.icons.outlined.Terminal
+import androidx.compose.material.icons.outlined.VerticalSplit
 import androidx.compose.material.icons.outlined.ViewColumn
 import androidx.compose.material.icons.outlined.WarningAmber
 import androidx.compose.material.icons.outlined.WifiOff
@@ -45,6 +54,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 object TmuxIcons {
     val Server: ImageVector = Icons.Outlined.Dns
     val Plus: ImageVector = Icons.Outlined.Add
+    val Minus: ImageVector = Icons.Outlined.Remove
     val Trash: ImageVector = Icons.Outlined.DeleteOutline
     val ChevronRight: ImageVector = Icons.AutoMirrored.Outlined.KeyboardArrowRight
     val ChevronLeft: ImageVector = Icons.AutoMirrored.Outlined.KeyboardArrowLeft
@@ -71,4 +81,12 @@ object TmuxIcons {
     val ExternalLink: ImageVector = Icons.AutoMirrored.Outlined.OpenInNew
     val Edit: ImageVector = Icons.Outlined.Edit
     val Logs: ImageVector = Icons.AutoMirrored.Outlined.Article
+    val Bell: ImageVector = Icons.Outlined.Notifications
+    val BellOff: ImageVector = Icons.Outlined.NotificationsOff
+    val SplitView: ImageVector = Icons.Outlined.VerticalSplit
+    val History: ImageVector = Icons.Outlined.History
+    val CheckboxChecked: ImageVector = Icons.Outlined.CheckBox
+    val CheckboxUnchecked: ImageVector = Icons.Outlined.CheckBoxOutlineBlank
+    val StarFilled: ImageVector = Icons.Filled.Star
+    val StarOutline: ImageVector = Icons.Outlined.StarBorder
 }

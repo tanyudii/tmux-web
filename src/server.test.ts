@@ -3,16 +3,25 @@ import assert from "node:assert/strict";
 import type { Server } from "node:http";
 import { request as httpRequest } from "node:http";
 import { mkdtemp, writeFile, rm } from "node:fs/promises";
+import { readAccessLog } from "./access-log.ts";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createServer, type ServerDeps } from "./server.ts";
 import { ValidationError } from "./tmux.ts";
 import { ProjectValidationError, type Project } from "./projects.ts";
 import { WorktreeConflictError, DirtyWorktreeError } from "./worktree.ts";
-import { WorktreeNotFoundError, GitStatusError, type GroupedChanges } from "./git-status.ts";
-import { EnvUnavailableError, EnvAlreadyRunningError, EnvNotRunningError, type EnvStatus } from "./session-env.ts";
+import { WorktreeNotFoundError, GitStatusError, NothingStagedError, type GroupedChanges } from "./git-status.ts";
+import {
+  EnvUnavailableError,
+  EnvAlreadyRunningError,
+  EnvNotRunningError,
+  EnvNotStartingError,
+  type EnvStatus,
+} from "./session-env.ts";
 import { EnvConfigError } from "./env-config.ts";
+import { PortCollisionError } from "./docker-compose.ts";
 import { SessionCreationNotFoundError, type SessionCreationStatus } from "./project-sessions.ts";
+import { TemplateValidationError, TemplateNotFoundError, type SessionTemplate } from "./session-templates.ts";
 import {
   InvalidDirectoryPathError,
   DirectoryNotFoundError,
@@ -26,6 +35,14 @@ const SAMPLE_PROJECT: Project = {
   id: "proj1-ab12cd",
   name: "My Project",
   repoPath: "/repo",
+  createdAt: "2026-01-01T00:00:00.000Z",
+};
+
+const SAMPLE_TEMPLATE: SessionTemplate = {
+  id: "tmpl1-ab12cd",
+  projectId: SAMPLE_PROJECT.id,
+  name: "Dev server",
+  startupCommand: "npm run dev",
   createdAt: "2026-01-01T00:00:00.000Z",
 };
 
@@ -49,17 +66,54 @@ function makeDeps(overrides: Partial<ServerDeps> = {}): ServerDeps {
       truncated: false,
     }),
     listProjectSessions: async () => [],
-    startProjectSessionCreation: async (_project: Project, name: string) => ({
+    startProjectSessionCreation: async (_project: Project, name: string, _startupCommand?: string) => ({
       name,
       fullName: `${SAMPLE_PROJECT.id}__${name}`,
     }),
     getProjectSessionCreationStatus: async () => ({ phase: "creating" }),
     killProjectSession: async () => {},
-    getProjectSessionChanges: async () => ({ staged: [], unstaged: [], untracked: [] }),
+    killProjectSessionSplit: async () => {},
+    isProjectSessionBranchMerged: async () => true,
+    getProjectSessionEvents: async () => [],
+    getProjectSessionResourceUsage: async () => ({ available: false, services: [] }),
+    setProjectSessionMeta: async (_project, sessionSlug, label, favorite) => ({
+      projectId: SAMPLE_PROJECT.id,
+      sessionSlug,
+      label,
+      favorite,
+    }),
+    getProjectSessionChanges: async () => ({ staged: [], unstaged: [], untracked: [], conflicted: [], repoState: "clean" }),
     getProjectSessionDiff: async () => ({ diff: "", isUntracked: false, isBinary: false }),
+    stageProjectSessionFile: async () => {},
+    unstageProjectSessionFile: async () => {},
+    discardProjectSessionFile: async () => {},
+    commitProjectSessionChanges: async () => {},
     getProjectSessionEnvStatus: async () => ({ phase: "unavailable" }),
     startProjectSessionEnv: async () => {},
     stopProjectSessionEnv: async () => {},
+    cancelProjectSessionEnv: async () => {},
+    listProjectSessionEnvFiles: async () => [],
+    readProjectSessionEnvFile: async () => "",
+    writeProjectSessionEnvFile: async () => {},
+    getPushPublicKey: () => "test-public-key",
+    subscribePush: async () => {},
+    unsubscribePush: async () => {},
+    notifyBell: async () => {},
+    listProjectTemplates: async () => [SAMPLE_TEMPLATE],
+    createProjectTemplate: async (_project: Project, name: string, startupCommand?: string) => ({
+      ...SAMPLE_TEMPLATE,
+      id: "new-template-id",
+      name,
+      startupCommand,
+    }),
+    updateProjectTemplate: async (_project: Project, templateId: string, name: string, startupCommand?: string) => ({
+      ...SAMPLE_TEMPLATE,
+      id: templateId,
+      name,
+      startupCommand,
+    }),
+    deleteProjectTemplate: async () => {},
+    getAccessLog: async () => [],
     ...overrides,
   };
 }
@@ -274,7 +328,7 @@ test("DELETE /api/projects/:id removes the project when it has no active session
 test("DELETE /api/projects/:id returns 409 when the project has active sessions and force is not set", async () => {
   let called = false;
   const deps = makeDeps({
-    listProjectSessions: async () => [{ name: "main", fullName: "x__main", windows: 1, attached: false }],
+    listProjectSessions: async () => [{ name: "main", fullName: "x__main", windows: 1, attached: false, favorite: false }],
     removeProject: async () => { called = true; },
   });
   await withServer(deps, async (baseUrl) => {
@@ -289,7 +343,7 @@ test("DELETE /api/projects/:id returns 409 when the project has active sessions 
 
 test("DELETE /api/projects/:id?force=true removes the project despite active sessions", async () => {
   const deps = makeDeps({
-    listProjectSessions: async () => [{ name: "main", fullName: "x__main", windows: 1, attached: false }],
+    listProjectSessions: async () => [{ name: "main", fullName: "x__main", windows: 1, attached: false, favorite: false }],
   });
   await withServer(deps, async (baseUrl) => {
     const res = await fetch(`${baseUrl}/api/projects/${SAMPLE_PROJECT.id}?force=true`, {
@@ -314,13 +368,13 @@ test("DELETE /api/projects/:id returns 404 for an unknown project", async () => 
 
 test("GET /api/projects/:id/sessions returns the session list", async () => {
   const deps = makeDeps({
-    listProjectSessions: async () => [{ name: "main", fullName: "proj1-ab12cd__main", windows: 1, attached: false }],
+    listProjectSessions: async () => [{ name: "main", fullName: "proj1-ab12cd__main", windows: 1, attached: false, favorite: false }],
   });
   await withServer(deps, async (baseUrl) => {
     const res = await fetch(`${baseUrl}/api/projects/${SAMPLE_PROJECT.id}/sessions`, { headers: authHeaders() });
     assert.equal(res.status, 200);
     assert.deepEqual(await res.json(), {
-      sessions: [{ name: "main", fullName: "proj1-ab12cd__main", windows: 1, attached: false }],
+      sessions: [{ name: "main", fullName: "proj1-ab12cd__main", windows: 1, attached: false, favorite: false }],
     });
   });
 });
@@ -460,6 +514,152 @@ test("DELETE /api/projects/:id/sessions/:name?force=true passes force through", 
   });
 });
 
+test("DELETE /api/projects/:id/sessions/:name defaults deleteBranch to false", async () => {
+  const calls: boolean[] = [];
+  const deps = makeDeps({
+    killProjectSession: async (_project: Project, _slug: string, options: { deleteBranch?: boolean }) => {
+      calls.push(Boolean(options.deleteBranch));
+    },
+  });
+  await withServer(deps, async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/projects/${SAMPLE_PROJECT.id}/sessions/feature-x`, {
+      method: "DELETE",
+      headers: authHeaders(),
+    });
+    assert.equal(res.status, 204);
+    assert.deepEqual(calls, [false]);
+  });
+});
+
+test("DELETE /api/projects/:id/sessions/:name?deleteBranch=true passes deleteBranch through", async () => {
+  const calls: boolean[] = [];
+  const deps = makeDeps({
+    killProjectSession: async (_project: Project, _slug: string, options: { deleteBranch?: boolean }) => {
+      calls.push(Boolean(options.deleteBranch));
+    },
+  });
+  await withServer(deps, async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/projects/${SAMPLE_PROJECT.id}/sessions/feature-x?deleteBranch=true`, {
+      method: "DELETE",
+      headers: authHeaders(),
+    });
+    assert.equal(res.status, 204);
+    assert.deepEqual(calls, [true]);
+  });
+});
+
+test("GET /api/projects/:id/sessions/:name/branch-merged without a token returns 401", async () => {
+  await withServer(makeDeps(), async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/projects/${SAMPLE_PROJECT.id}/sessions/feature-x/branch-merged`);
+    assert.equal(res.status, 401);
+  });
+});
+
+test("GET /api/projects/:id/sessions/:name/branch-merged returns the merge status", async () => {
+  const deps = makeDeps({ isProjectSessionBranchMerged: async () => false });
+  await withServer(deps, async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/projects/${SAMPLE_PROJECT.id}/sessions/feature-x/branch-merged`, {
+      headers: authHeaders(),
+    });
+    assert.equal(res.status, 200);
+    const body = (await res.json()) as { merged: boolean };
+    assert.equal(body.merged, false);
+  });
+});
+
+test("GET /api/projects/:id/sessions/:name/branch-merged returns 404 for an unknown project", async () => {
+  await withServer(makeDeps(), async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/projects/unknown-id/sessions/feature-x/branch-merged`, {
+      headers: authHeaders(),
+    });
+    assert.equal(res.status, 404);
+  });
+});
+
+test("GET /api/projects/:id/sessions/:name/events without a token returns 401", async () => {
+  await withServer(makeDeps(), async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/projects/${SAMPLE_PROJECT.id}/sessions/feature-x/events`);
+    assert.equal(res.status, 401);
+  });
+});
+
+test("GET /api/projects/:id/sessions/:name/events returns the session's event history", async () => {
+  const deps = makeDeps({
+    getProjectSessionEvents: async () => [
+      {
+        timestamp: "2026-01-01T00:00:00.000Z",
+        projectId: SAMPLE_PROJECT.id,
+        sessionSlug: "feature-x",
+        type: "created",
+      },
+    ],
+  });
+  await withServer(deps, async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/projects/${SAMPLE_PROJECT.id}/sessions/feature-x/events`, {
+      headers: authHeaders(),
+    });
+    assert.equal(res.status, 200);
+    const body = (await res.json()) as { events: unknown[] };
+    assert.equal(body.events.length, 1);
+  });
+});
+
+test("GET /api/projects/:id/sessions/:name/events returns 404 for an unknown project", async () => {
+  await withServer(makeDeps(), async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/projects/unknown-id/sessions/feature-x/events`, {
+      headers: authHeaders(),
+    });
+    assert.equal(res.status, 404);
+  });
+});
+
+test("GET /api/projects/:id/sessions/:name/resource-usage without a token returns 401", async () => {
+  await withServer(makeDeps(), async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/projects/${SAMPLE_PROJECT.id}/sessions/feature-x/resource-usage`);
+    assert.equal(res.status, 401);
+  });
+});
+
+test("GET /api/projects/:id/sessions/:name/resource-usage returns available:false for a session with no env config", async () => {
+  const deps = makeDeps({ getProjectSessionResourceUsage: async () => ({ available: false, services: [] }) });
+  await withServer(deps, async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/projects/${SAMPLE_PROJECT.id}/sessions/feature-x/resource-usage`, {
+      headers: authHeaders(),
+    });
+    assert.equal(res.status, 200);
+    const body = (await res.json()) as { available: boolean; services: unknown[] };
+    assert.equal(body.available, false);
+    assert.deepEqual(body.services, []);
+  });
+});
+
+test("GET /api/projects/:id/sessions/:name/resource-usage returns real docker stats when available", async () => {
+  const deps = makeDeps({
+    getProjectSessionResourceUsage: async () => ({
+      available: true,
+      services: [{ service: "web", cpuPercent: 12.3, memUsageBytes: 100, memLimitBytes: 1000 }],
+    }),
+  });
+  await withServer(deps, async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/projects/${SAMPLE_PROJECT.id}/sessions/feature-x/resource-usage`, {
+      headers: authHeaders(),
+    });
+    assert.equal(res.status, 200);
+    const body = (await res.json()) as { available: boolean; services: unknown[] };
+    assert.equal(body.available, true);
+    assert.equal(body.services.length, 1);
+  });
+});
+
+test("GET /api/projects/:id/sessions/:name/resource-usage returns 404 for an unknown project", async () => {
+  await withServer(makeDeps(), async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/projects/unknown-id/sessions/feature-x/resource-usage`, {
+      headers: authHeaders(),
+    });
+    assert.equal(res.status, 404);
+  });
+});
+
 test("DELETE /api/projects/:id/sessions/:name returns 409 for a DirtyWorktreeError", async () => {
   const deps = makeDeps({
     killProjectSession: async () => {
@@ -493,6 +693,42 @@ test("DELETE /api/projects/:id/sessions/:name propagates an unexpected error as 
 test("DELETE /api/projects/:id/sessions/:name returns 404 for an unknown project", async () => {
   await withServer(makeDeps(), async (baseUrl) => {
     const res = await fetch(`${baseUrl}/api/projects/unknown-id/sessions/feature-x`, {
+      method: "DELETE",
+      headers: authHeaders(),
+    });
+    assert.equal(res.status, 404);
+  });
+});
+
+test("DELETE /api/projects/:id/sessions/:name/split tears down the split pane and returns 204", async () => {
+  const calls: Array<{ projectId: string; slug: string }> = [];
+  const deps = makeDeps({
+    killProjectSessionSplit: async (project, slug) => {
+      calls.push({ projectId: project.id, slug });
+    },
+  });
+  await withServer(deps, async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/projects/${SAMPLE_PROJECT.id}/sessions/feature-x/split`, {
+      method: "DELETE",
+      headers: authHeaders(),
+    });
+    assert.equal(res.status, 204);
+    assert.deepEqual(calls, [{ projectId: SAMPLE_PROJECT.id, slug: "feature-x" }]);
+  });
+});
+
+test("DELETE /api/projects/:id/sessions/:name/split without a token returns 401", async () => {
+  await withServer(makeDeps(), async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/projects/${SAMPLE_PROJECT.id}/sessions/feature-x/split`, {
+      method: "DELETE",
+    });
+    assert.equal(res.status, 401);
+  });
+});
+
+test("DELETE /api/projects/:id/sessions/:name/split returns 404 for an unknown project", async () => {
+  await withServer(makeDeps(), async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/projects/unknown-id/sessions/feature-x/split`, {
       method: "DELETE",
       headers: authHeaders(),
     });
@@ -568,6 +804,8 @@ test("GET /api/projects/:id/sessions/:name/changes returns the grouped changes",
     staged: [{ path: "a.txt", status: "added", staged: true }],
     unstaged: [],
     untracked: [],
+    conflicted: [],
+    repoState: "clean",
   };
   const deps = makeDeps({ getProjectSessionChanges: async () => grouped });
   await withServer(deps, async (baseUrl) => {
@@ -675,7 +913,236 @@ test("GET /api/projects/:id/sessions/:name/diff returns 404 for an unknown proje
   });
 });
 
+test("POST /api/projects/:id/sessions/:name/stage without a token returns 401", async () => {
+  await withServer(makeDeps(), async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/projects/${SAMPLE_PROJECT.id}/sessions/feature-x/stage`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path: "a.txt" }),
+    });
+    assert.equal(res.status, 401);
+  });
+});
+
+test("POST /api/projects/:id/sessions/:name/stage stages the requested file", async () => {
+  const calls: Array<{ slug: string; path: string }> = [];
+  const deps = makeDeps({
+    stageProjectSessionFile: async (_project: Project, slug: string, filePath: string) => {
+      calls.push({ slug, path: filePath });
+    },
+  });
+  await withServer(deps, async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/projects/${SAMPLE_PROJECT.id}/sessions/feature-x/stage`, {
+      method: "POST",
+      headers: { ...authHeaders(), "Content-Type": "application/json" },
+      body: JSON.stringify({ path: "src/index.ts" }),
+    });
+    assert.equal(res.status, 204);
+    assert.deepEqual(calls, [{ slug: "feature-x", path: "src/index.ts" }]);
+  });
+});
+
+test("POST /api/projects/:id/sessions/:name/stage returns 400 when path is missing", async () => {
+  await withServer(makeDeps(), async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/projects/${SAMPLE_PROJECT.id}/sessions/feature-x/stage`, {
+      method: "POST",
+      headers: { ...authHeaders(), "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    assert.equal(res.status, 400);
+  });
+});
+
+test("POST /api/projects/:id/sessions/:name/stage returns 400 for a path-traversal attempt (GitStatusError)", async () => {
+  const deps = makeDeps({
+    stageProjectSessionFile: async () => {
+      throw new GitStatusError("escapes the worktree");
+    },
+  });
+  await withServer(deps, async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/projects/${SAMPLE_PROJECT.id}/sessions/feature-x/stage`, {
+      method: "POST",
+      headers: { ...authHeaders(), "Content-Type": "application/json" },
+      body: JSON.stringify({ path: "../../etc/passwd" }),
+    });
+    assert.equal(res.status, 400);
+  });
+});
+
+test("POST /api/projects/:id/sessions/:name/unstage unstages the requested file", async () => {
+  const calls: Array<{ slug: string; path: string }> = [];
+  const deps = makeDeps({
+    unstageProjectSessionFile: async (_project: Project, slug: string, filePath: string) => {
+      calls.push({ slug, path: filePath });
+    },
+  });
+  await withServer(deps, async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/projects/${SAMPLE_PROJECT.id}/sessions/feature-x/unstage`, {
+      method: "POST",
+      headers: { ...authHeaders(), "Content-Type": "application/json" },
+      body: JSON.stringify({ path: "src/index.ts" }),
+    });
+    assert.equal(res.status, 204);
+    assert.deepEqual(calls, [{ slug: "feature-x", path: "src/index.ts" }]);
+  });
+});
+
+test("POST /api/projects/:id/sessions/:name/discard discards the requested file", async () => {
+  const calls: Array<{ slug: string; path: string; mode: string }> = [];
+  const deps = makeDeps({
+    discardProjectSessionFile: async (_project: Project, slug: string, filePath: string, mode: string) => {
+      calls.push({ slug, path: filePath, mode });
+    },
+  });
+  await withServer(deps, async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/projects/${SAMPLE_PROJECT.id}/sessions/feature-x/discard`, {
+      method: "POST",
+      headers: { ...authHeaders(), "Content-Type": "application/json" },
+      body: JSON.stringify({ path: "src/index.ts", mode: "unstaged" }),
+    });
+    assert.equal(res.status, 204);
+    assert.deepEqual(calls, [{ slug: "feature-x", path: "src/index.ts", mode: "unstaged" }]);
+  });
+});
+
+test("POST /api/projects/:id/sessions/:name/discard returns 400 when mode is invalid", async () => {
+  await withServer(makeDeps(), async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/projects/${SAMPLE_PROJECT.id}/sessions/feature-x/discard`, {
+      method: "POST",
+      headers: { ...authHeaders(), "Content-Type": "application/json" },
+      body: JSON.stringify({ path: "a.txt", mode: "bogus" }),
+    });
+    assert.equal(res.status, 400);
+  });
+});
+
+test("POST /api/projects/:id/sessions/:name/discard returns 404 for an unknown project", async () => {
+  await withServer(makeDeps(), async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/projects/unknown-id/sessions/feature-x/discard`, {
+      method: "POST",
+      headers: { ...authHeaders(), "Content-Type": "application/json" },
+      body: JSON.stringify({ path: "a.txt", mode: "unstaged" }),
+    });
+    assert.equal(res.status, 404);
+  });
+});
+
+test("POST /api/projects/:id/sessions/:name/commit without a token returns 401", async () => {
+  await withServer(makeDeps(), async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/projects/${SAMPLE_PROJECT.id}/sessions/feature-x/commit`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message: "fix: a bug" }),
+    });
+    assert.equal(res.status, 401);
+  });
+});
+
+test("POST /api/projects/:id/sessions/:name/commit commits with the given message", async () => {
+  const calls: Array<{ slug: string; message: string }> = [];
+  const deps = makeDeps({
+    commitProjectSessionChanges: async (_project: Project, slug: string, message: string) => {
+      calls.push({ slug, message });
+    },
+  });
+  await withServer(deps, async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/projects/${SAMPLE_PROJECT.id}/sessions/feature-x/commit`, {
+      method: "POST",
+      headers: { ...authHeaders(), "Content-Type": "application/json" },
+      body: JSON.stringify({ message: "fix: a bug" }),
+    });
+    assert.equal(res.status, 204);
+    assert.deepEqual(calls, [{ slug: "feature-x", message: "fix: a bug" }]);
+  });
+});
+
+test("POST /api/projects/:id/sessions/:name/commit returns 400 when message is missing or blank", async () => {
+  await withServer(makeDeps(), async (baseUrl) => {
+    const missing = await fetch(`${baseUrl}/api/projects/${SAMPLE_PROJECT.id}/sessions/feature-x/commit`, {
+      method: "POST",
+      headers: { ...authHeaders(), "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    assert.equal(missing.status, 400);
+
+    const blank = await fetch(`${baseUrl}/api/projects/${SAMPLE_PROJECT.id}/sessions/feature-x/commit`, {
+      method: "POST",
+      headers: { ...authHeaders(), "Content-Type": "application/json" },
+      body: JSON.stringify({ message: "   " }),
+    });
+    assert.equal(blank.status, 400);
+  });
+});
+
+test("POST /api/projects/:id/sessions/:name/commit returns 409 when nothing is staged", async () => {
+  const deps = makeDeps({
+    commitProjectSessionChanges: async () => {
+      throw new NothingStagedError("No staged changes to commit");
+    },
+  });
+  await withServer(deps, async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/projects/${SAMPLE_PROJECT.id}/sessions/feature-x/commit`, {
+      method: "POST",
+      headers: { ...authHeaders(), "Content-Type": "application/json" },
+      body: JSON.stringify({ message: "fix: a bug" }),
+    });
+    assert.equal(res.status, 409);
+  });
+});
+
+test("POST /api/projects/:id/sessions/:name/commit returns 404 for an unknown project", async () => {
+  await withServer(makeDeps(), async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/projects/unknown-id/sessions/feature-x/commit`, {
+      method: "POST",
+      headers: { ...authHeaders(), "Content-Type": "application/json" },
+      body: JSON.stringify({ message: "fix: a bug" }),
+    });
+    assert.equal(res.status, 404);
+  });
+});
+
 // --- Environment setup ---
+
+test("POST /api/projects/:id/sessions/:name/env/cancel without a token returns 401", async () => {
+  await withServer(makeDeps(), async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/projects/${SAMPLE_PROJECT.id}/sessions/feature-x/env/cancel`, {
+      method: "POST",
+    });
+    assert.equal(res.status, 401);
+  });
+});
+
+test("POST /api/projects/:id/sessions/:name/env/cancel cancels the in-flight setup", async () => {
+  const calls: string[] = [];
+  const deps = makeDeps({
+    cancelProjectSessionEnv: async (_project: Project, slug: string) => {
+      calls.push(slug);
+    },
+  });
+  await withServer(deps, async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/projects/${SAMPLE_PROJECT.id}/sessions/feature-x/env/cancel`, {
+      method: "POST",
+      headers: authHeaders(),
+    });
+    assert.equal(res.status, 204);
+    assert.deepEqual(calls, ["feature-x"]);
+  });
+});
+
+test("POST /api/projects/:id/sessions/:name/env/cancel returns 409 when nothing is starting", async () => {
+  const deps = makeDeps({
+    cancelProjectSessionEnv: async () => {
+      throw new EnvNotStartingError("not currently starting");
+    },
+  });
+  await withServer(deps, async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/projects/${SAMPLE_PROJECT.id}/sessions/feature-x/env/cancel`, {
+      method: "POST",
+      headers: authHeaders(),
+    });
+    assert.equal(res.status, 409);
+  });
+});
 
 test("GET /api/projects/:id/sessions/:name/env without a token returns 401", async () => {
   await withServer(makeDeps(), async (baseUrl) => {
@@ -819,6 +1286,23 @@ test("POST /api/projects/:id/sessions/:name/env returns 409 when already running
   });
 });
 
+test("POST /api/projects/:id/sessions/:name/env returns 409 for a port collision (PortCollisionError)", async () => {
+  const deps = makeDeps({
+    startProjectSessionEnv: async () => {
+      throw new PortCollisionError("Port 3000 is already in use by another running container");
+    },
+  });
+  await withServer(deps, async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/projects/${SAMPLE_PROJECT.id}/sessions/feature-x/env`, {
+      method: "POST",
+      headers: authHeaders(),
+    });
+    assert.equal(res.status, 409);
+    const body = await res.json();
+    assert.match(body.error, /already in use/);
+  });
+});
+
 test("POST /api/projects/:id/sessions/:name/env returns 400 for a malformed env.json (EnvConfigError)", async () => {
   const deps = makeDeps({
     startProjectSessionEnv: async () => {
@@ -954,6 +1438,22 @@ test("serves .wasm static files with the application/wasm content type", async (
   }
 });
 
+// EMB-215: manifest.json needs a manifest-appropriate content type for
+// browsers to accept the `<link rel="manifest">` it's served from.
+test("serves .json static files (manifest.json) with the application/manifest+json content type", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tmux-web-public-"));
+  await writeFile(join(dir, "manifest.json"), JSON.stringify({ name: "tmux-web" }));
+  try {
+    await withServer(makeDeps({ publicDir: dir }), async (baseUrl) => {
+      const res = await fetch(`${baseUrl}/manifest.json`);
+      assert.equal(res.status, 200);
+      assert.equal(res.headers.get("content-type"), "application/manifest+json");
+    });
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 // index.html and composeApp.js keep the same filename across every deploy
 // (unlike the content-hashed .wasm bundles below), so a browser must always
 // revalidate them -- otherwise it can keep serving a stale page/bundle pair
@@ -965,6 +1465,20 @@ test("serves index.html with a no-cache Cache-Control header", async () => {
     await withServer(makeDeps({ publicDir: dir }), async (baseUrl) => {
       const res = await fetch(`${baseUrl}/`);
       assert.equal(res.headers.get("cache-control"), "no-cache");
+    });
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("serves .png static files with the image/png content type", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tmux-web-public-"));
+  await writeFile(join(dir, "icon-192.png"), Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+  try {
+    await withServer(makeDeps({ publicDir: dir }), async (baseUrl) => {
+      const res = await fetch(`${baseUrl}/icon-192.png`);
+      assert.equal(res.status, 200);
+      assert.equal(res.headers.get("content-type"), "image/png");
     });
   } finally {
     await rm(dir, { recursive: true, force: true });
@@ -1001,5 +1515,533 @@ test("unknown routes return 404", async () => {
   await withServer(makeDeps(), async (baseUrl) => {
     const res = await fetch(`${baseUrl}/does-not-exist`, { headers: authHeaders() });
     assert.equal(res.status, 404);
+  });
+});
+
+// --- Rate limiting ---
+
+test("returns 429 with Retry-After once repeated bad-token requests exceed the auth-failure limit", async () => {
+  await withServer(makeDeps(), async (baseUrl) => {
+    let lastRes: Response | undefined;
+    for (let i = 0; i < 11; i++) {
+      lastRes = await fetch(`${baseUrl}/api/projects`, { headers: { Authorization: "Bearer wrong-token" } });
+      if (i < 10) assert.equal(lastRes.status, 401);
+    }
+    assert.equal(lastRes?.status, 429);
+    assert.ok(lastRes?.headers.get("retry-after"));
+  });
+});
+
+test("a successful request is never counted against the auth-failure limit", async () => {
+  await withServer(makeDeps(), async (baseUrl) => {
+    for (let i = 0; i < 20; i++) {
+      const res = await fetch(`${baseUrl}/api/projects`, { headers: authHeaders() });
+      assert.equal(res.status, 200);
+    }
+  });
+});
+
+test("returns 429 with Retry-After once session creation exceeds the expensive-action limit", async () => {
+  const deps = makeDeps({
+    startProjectSessionCreation: async (_project: Project, name: string) => ({
+      name,
+      fullName: `${SAMPLE_PROJECT.id}__${name}`,
+    }),
+  });
+  await withServer(deps, async (baseUrl) => {
+    let lastRes: Response | undefined;
+    for (let i = 0; i < 31; i++) {
+      lastRes = await fetch(`${baseUrl}/api/projects/${SAMPLE_PROJECT.id}/sessions`, {
+        method: "POST",
+        headers: { ...authHeaders(), "Content-Type": "application/json" },
+        body: JSON.stringify({ name: `session-${i}` }),
+      });
+      if (i < 30) assert.equal(lastRes.status, 202);
+    }
+    assert.equal(lastRes?.status, 429);
+    assert.ok(lastRes?.headers.get("retry-after"));
+  });
+});
+
+test("GET requests are never counted against the expensive-action limit (multi-tab polling stays unaffected)", async () => {
+  await withServer(makeDeps(), async (baseUrl) => {
+    for (let i = 0; i < 40; i++) {
+      const res = await fetch(`${baseUrl}/api/projects/${SAMPLE_PROJECT.id}/sessions`, { headers: authHeaders() });
+      assert.equal(res.status, 200);
+    }
+  });
+});
+
+test("GET /api/push/public-key returns the VAPID public key", async () => {
+  const deps = makeDeps({ getPushPublicKey: () => "vapid-public-key-123" });
+  await withServer(deps, async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/push/public-key`, { headers: authHeaders() });
+    assert.equal(res.status, 200);
+    const body = await res.json();
+    assert.deepEqual(body, { publicKey: "vapid-public-key-123" });
+  });
+});
+
+test("GET /api/push/public-key without a token returns 401", async () => {
+  await withServer(makeDeps(), async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/push/public-key`);
+    assert.equal(res.status, 401);
+  });
+});
+
+test("POST /api/push/subscribe stores the subscription and returns 204", async () => {
+  const calls: unknown[] = [];
+  const deps = makeDeps({
+    subscribePush: async (subscription) => {
+      calls.push(subscription);
+    },
+  });
+  await withServer(deps, async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/push/subscribe`, {
+      method: "POST",
+      headers: { ...authHeaders(), "Content-Type": "application/json" },
+      body: JSON.stringify({ endpoint: "https://push.example.com/a", keys: { p256dh: "p", auth: "a" } }),
+    });
+    assert.equal(res.status, 204);
+    assert.deepEqual(calls, [{ endpoint: "https://push.example.com/a", keys: { p256dh: "p", auth: "a" } }]);
+  });
+});
+
+test("POST /api/push/subscribe returns 400 when endpoint or keys are missing", async () => {
+  await withServer(makeDeps(), async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/push/subscribe`, {
+      method: "POST",
+      headers: { ...authHeaders(), "Content-Type": "application/json" },
+      body: JSON.stringify({ endpoint: "https://push.example.com/a" }),
+    });
+    assert.equal(res.status, 400);
+  });
+});
+
+test("POST /api/push/subscribe without a token returns 401", async () => {
+  await withServer(makeDeps(), async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/push/subscribe`, { method: "POST" });
+    assert.equal(res.status, 401);
+  });
+});
+
+test("POST /api/push/unsubscribe removes the subscription and returns 204", async () => {
+  const calls: string[] = [];
+  const deps = makeDeps({
+    unsubscribePush: async (endpoint) => {
+      calls.push(endpoint);
+    },
+  });
+  await withServer(deps, async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/push/unsubscribe`, {
+      method: "POST",
+      headers: { ...authHeaders(), "Content-Type": "application/json" },
+      body: JSON.stringify({ endpoint: "https://push.example.com/a" }),
+    });
+    assert.equal(res.status, 204);
+    assert.deepEqual(calls, ["https://push.example.com/a"]);
+  });
+});
+
+test("POST /api/push/unsubscribe returns 400 when endpoint is missing", async () => {
+  await withServer(makeDeps(), async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/push/unsubscribe`, {
+      method: "POST",
+      headers: { ...authHeaders(), "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    assert.equal(res.status, 400);
+  });
+});
+
+test("POST /internal/bell from a loopback client (no bearer token) triggers notifyBell and returns 204", async () => {
+  const calls: string[] = [];
+  const deps = makeDeps({
+    notifyBell: async (sessionFullName) => {
+      calls.push(sessionFullName);
+    },
+  });
+  await withServer(deps, async (baseUrl) => {
+    // withServer binds to 127.0.0.1 (see its definition above), so this
+    // fetch -- like the real tmux `alert-bell` hook's own curl call -- is
+    // itself a loopback client, exercising the same allow-path without a
+    // bearer token.
+    const res = await fetch(`${baseUrl}/internal/bell?session=proj1-ab12cd__feature-x`, { method: "POST" });
+    assert.equal(res.status, 204);
+    assert.deepEqual(calls, ["proj1-ab12cd__feature-x"]);
+  });
+});
+
+test("POST /internal/bell without a session query param returns 400", async () => {
+  await withServer(makeDeps(), async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/internal/bell`, { method: "POST" });
+    assert.equal(res.status, 400);
+  });
+});
+
+// --- Access audit log (EMB-223) ---
+
+async function withTempAccessLog(fn: (filePath: string) => Promise<void>): Promise<void> {
+  const dir = await mkdtemp(join(tmpdir(), "tmux-web-server-access-log-"));
+  try {
+    await fn(join(dir, "access.log"));
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}
+
+// checkAuthorized's log write is fire-and-forget (never awaited, so a slow
+// disk write can't add latency to the response) -- tests poll briefly
+// rather than assuming it's flushed the instant the HTTP response returns.
+async function waitForAccessLogEntries(filePath: string, count: number) {
+  for (let i = 0; i < 20; i++) {
+    const entries = await readAccessLog(filePath);
+    if (entries.length >= count) return entries;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error(`Timed out waiting for ${count} access log entries at ${filePath}`);
+}
+
+test("a successfully authorized request appends an 'authorized' entry to the access log", async () => {
+  await withTempAccessLog(async (filePath) => {
+    await withServer(makeDeps({ accessLogPath: filePath }), async (baseUrl) => {
+      const res = await fetch(`${baseUrl}/api/projects`, { headers: authHeaders() });
+      assert.equal(res.status, 200);
+
+      const entries = await waitForAccessLogEntries(filePath, 1);
+      assert.equal(entries[0].outcome, "authorized");
+      assert.equal(entries[0].path, "/api/projects");
+      assert.equal(entries[0].method, "GET");
+    });
+  });
+});
+
+test("a request with a bad token appends a 'denied' entry to the access log", async () => {
+  await withTempAccessLog(async (filePath) => {
+    await withServer(makeDeps({ accessLogPath: filePath }), async (baseUrl) => {
+      const res = await fetch(`${baseUrl}/api/projects`, { headers: authHeaders({ Authorization: "Bearer wrong" }) });
+      assert.equal(res.status, 401);
+
+      const entries = await waitForAccessLogEntries(filePath, 1);
+      assert.equal(entries[0].outcome, "denied");
+    });
+  });
+});
+
+test("no access log entry is written when accessLogPath is not configured", async () => {
+  await withTempAccessLog(async (filePath) => {
+    await withServer(makeDeps(), async (baseUrl) => {
+      const res = await fetch(`${baseUrl}/api/projects`, { headers: authHeaders() });
+      assert.equal(res.status, 200);
+      // Give the (nonexistent) fire-and-forget write a moment to have not happened.
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      assert.deepEqual(await readAccessLog(filePath), []);
+    });
+  });
+});
+
+test("GET /api/access-log without a token returns 401", async () => {
+  await withServer(makeDeps(), async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/access-log`);
+    assert.equal(res.status, 401);
+  });
+});
+
+test("GET /api/access-log returns entries from deps.getAccessLog", async () => {
+  const deps = makeDeps({
+    getAccessLog: async () => [
+      { timestamp: "2026-01-01T00:00:00.000Z", ip: "203.0.113.5", method: "GET", path: "/api/projects", outcome: "authorized" },
+    ],
+  });
+  await withServer(deps, async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/access-log`, { headers: authHeaders() });
+    assert.equal(res.status, 200);
+    const body = (await res.json()) as { entries: unknown[] };
+    assert.equal(body.entries.length, 1);
+  });
+});
+
+test("GET /api/projects/:id/templates without a token returns 401", async () => {
+  await withServer(makeDeps(), async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/projects/${SAMPLE_PROJECT.id}/templates`);
+    assert.equal(res.status, 401);
+  });
+});
+
+test("GET /api/projects/:id/templates lists the project's templates", async () => {
+  await withServer(makeDeps(), async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/projects/${SAMPLE_PROJECT.id}/templates`, { headers: authHeaders() });
+    assert.equal(res.status, 200);
+    const body = (await res.json()) as { templates: SessionTemplate[] };
+    assert.deepEqual(body.templates, [SAMPLE_TEMPLATE]);
+  });
+});
+
+test("GET /api/projects/:id/templates returns 404 for an unknown project", async () => {
+  await withServer(makeDeps(), async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/projects/unknown-id/templates`, { headers: authHeaders() });
+    assert.equal(res.status, 404);
+  });
+});
+
+test("POST /api/projects/:id/templates creates a template and returns 201", async () => {
+  const calls: Array<{ name: string; startupCommand: string | undefined }> = [];
+  const deps = makeDeps({
+    createProjectTemplate: async (_project: Project, name: string, startupCommand?: string) => {
+      calls.push({ name, startupCommand });
+      return { ...SAMPLE_TEMPLATE, id: "new-id", name, startupCommand };
+    },
+  });
+  await withServer(deps, async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/projects/${SAMPLE_PROJECT.id}/templates`, {
+      method: "POST",
+      headers: { ...authHeaders(), "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "Dev server", startupCommand: "npm run dev" }),
+    });
+    assert.equal(res.status, 201);
+    const body = (await res.json()) as SessionTemplate;
+    assert.equal(body.id, "new-id");
+    assert.deepEqual(calls, [{ name: "Dev server", startupCommand: "npm run dev" }]);
+  });
+});
+
+test("POST /api/projects/:id/templates returns 400 when name is missing", async () => {
+  await withServer(makeDeps(), async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/projects/${SAMPLE_PROJECT.id}/templates`, {
+      method: "POST",
+      headers: { ...authHeaders(), "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    assert.equal(res.status, 400);
+  });
+});
+
+test("POST /api/projects/:id/templates returns 400 when startupCommand is not a string", async () => {
+  await withServer(makeDeps(), async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/projects/${SAMPLE_PROJECT.id}/templates`, {
+      method: "POST",
+      headers: { ...authHeaders(), "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "Dev server", startupCommand: 42 }),
+    });
+    assert.equal(res.status, 400);
+  });
+});
+
+test("POST /api/projects/:id/templates returns 400 for a TemplateValidationError", async () => {
+  const deps = makeDeps({
+    createProjectTemplate: async () => {
+      throw new TemplateValidationError("bad name");
+    },
+  });
+  await withServer(deps, async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/projects/${SAMPLE_PROJECT.id}/templates`, {
+      method: "POST",
+      headers: { ...authHeaders(), "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "x" }),
+    });
+    assert.equal(res.status, 400);
+  });
+});
+
+test("POST /api/projects/:id/templates returns 404 for an unknown project", async () => {
+  await withServer(makeDeps(), async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/projects/unknown-id/templates`, {
+      method: "POST",
+      headers: { ...authHeaders(), "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "x" }),
+    });
+    assert.equal(res.status, 404);
+  });
+});
+
+test("PUT /api/projects/:id/templates/:templateId updates the template and returns 200", async () => {
+  const calls: Array<{ templateId: string; name: string; startupCommand: string | undefined }> = [];
+  const deps = makeDeps({
+    updateProjectTemplate: async (_project: Project, templateId: string, name: string, startupCommand?: string) => {
+      calls.push({ templateId, name, startupCommand });
+      return { ...SAMPLE_TEMPLATE, id: templateId, name, startupCommand };
+    },
+  });
+  await withServer(deps, async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/projects/${SAMPLE_PROJECT.id}/templates/${SAMPLE_TEMPLATE.id}`, {
+      method: "PUT",
+      headers: { ...authHeaders(), "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "Renamed", startupCommand: "npm test" }),
+    });
+    assert.equal(res.status, 200);
+    assert.deepEqual(calls, [{ templateId: SAMPLE_TEMPLATE.id, name: "Renamed", startupCommand: "npm test" }]);
+  });
+});
+
+test("PUT /api/projects/:id/templates/:templateId returns 404 for a TemplateNotFoundError", async () => {
+  const deps = makeDeps({
+    updateProjectTemplate: async () => {
+      throw new TemplateNotFoundError("not found");
+    },
+  });
+  await withServer(deps, async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/projects/${SAMPLE_PROJECT.id}/templates/missing-id`, {
+      method: "PUT",
+      headers: { ...authHeaders(), "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "Renamed" }),
+    });
+    assert.equal(res.status, 404);
+  });
+});
+
+test("PUT /api/projects/:id/templates/:templateId returns 400 when name is missing", async () => {
+  await withServer(makeDeps(), async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/projects/${SAMPLE_PROJECT.id}/templates/${SAMPLE_TEMPLATE.id}`, {
+      method: "PUT",
+      headers: { ...authHeaders(), "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    assert.equal(res.status, 400);
+  });
+});
+
+test("DELETE /api/projects/:id/templates/:templateId deletes the template and returns 204", async () => {
+  const calls: string[] = [];
+  const deps = makeDeps({
+    deleteProjectTemplate: async (_project: Project, templateId: string) => {
+      calls.push(templateId);
+    },
+  });
+  await withServer(deps, async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/projects/${SAMPLE_PROJECT.id}/templates/${SAMPLE_TEMPLATE.id}`, {
+      method: "DELETE",
+      headers: authHeaders(),
+    });
+    assert.equal(res.status, 204);
+    assert.deepEqual(calls, [SAMPLE_TEMPLATE.id]);
+  });
+});
+
+test("DELETE /api/projects/:id/templates/:templateId returns 404 for an unknown project", async () => {
+  await withServer(makeDeps(), async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/projects/unknown-id/templates/${SAMPLE_TEMPLATE.id}`, {
+      method: "DELETE",
+      headers: authHeaders(),
+    });
+    assert.equal(res.status, 404);
+  });
+});
+
+test("PUT /api/projects/:id/sessions/:slug/meta sets label/favorite and returns 200", async () => {
+  const calls: Array<{ sessionSlug: string; label: string | undefined; favorite: boolean }> = [];
+  const deps = makeDeps({
+    setProjectSessionMeta: async (_project: Project, sessionSlug: string, label: string | undefined, favorite: boolean) => {
+      calls.push({ sessionSlug, label, favorite });
+      return { projectId: SAMPLE_PROJECT.id, sessionSlug, label, favorite };
+    },
+  });
+  await withServer(deps, async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/projects/${SAMPLE_PROJECT.id}/sessions/feature-x/meta`, {
+      method: "PUT",
+      headers: { ...authHeaders(), "Content-Type": "application/json" },
+      body: JSON.stringify({ label: "Important", favorite: true }),
+    });
+    assert.equal(res.status, 200);
+    assert.deepEqual(await res.json(), {
+      projectId: SAMPLE_PROJECT.id,
+      sessionSlug: "feature-x",
+      label: "Important",
+      favorite: true,
+    });
+    assert.deepEqual(calls, [{ sessionSlug: "feature-x", label: "Important", favorite: true }]);
+  });
+});
+
+test("PUT /api/projects/:id/sessions/:slug/meta accepts a clearing request with no label", async () => {
+  const deps = makeDeps({
+    setProjectSessionMeta: async (_project: Project, sessionSlug: string, label: string | undefined, favorite: boolean) => ({
+      projectId: SAMPLE_PROJECT.id,
+      sessionSlug,
+      label,
+      favorite,
+    }),
+  });
+  await withServer(deps, async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/projects/${SAMPLE_PROJECT.id}/sessions/feature-x/meta`, {
+      method: "PUT",
+      headers: { ...authHeaders(), "Content-Type": "application/json" },
+      body: JSON.stringify({ favorite: false }),
+    });
+    assert.equal(res.status, 200);
+    assert.equal((await res.json()).label, undefined);
+  });
+});
+
+test("PUT /api/projects/:id/sessions/:slug/meta returns 400 when favorite is missing", async () => {
+  await withServer(makeDeps(), async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/projects/${SAMPLE_PROJECT.id}/sessions/feature-x/meta`, {
+      method: "PUT",
+      headers: { ...authHeaders(), "Content-Type": "application/json" },
+      body: JSON.stringify({ label: "Important" }),
+    });
+    assert.equal(res.status, 400);
+  });
+});
+
+test("PUT /api/projects/:id/sessions/:slug/meta returns 400 when label is not a string", async () => {
+  await withServer(makeDeps(), async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/projects/${SAMPLE_PROJECT.id}/sessions/feature-x/meta`, {
+      method: "PUT",
+      headers: { ...authHeaders(), "Content-Type": "application/json" },
+      body: JSON.stringify({ label: 123, favorite: false }),
+    });
+    assert.equal(res.status, 400);
+  });
+});
+
+test("PUT /api/projects/:id/sessions/:slug/meta returns 404 for an unknown project", async () => {
+  await withServer(makeDeps(), async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/projects/unknown-id/sessions/feature-x/meta`, {
+      method: "PUT",
+      headers: { ...authHeaders(), "Content-Type": "application/json" },
+      body: JSON.stringify({ favorite: true }),
+    });
+    assert.equal(res.status, 404);
+  });
+});
+
+test("PUT /api/projects/:id/sessions/:slug/meta requires authorization", async () => {
+  await withServer(makeDeps(), async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/projects/${SAMPLE_PROJECT.id}/sessions/feature-x/meta`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ favorite: true }),
+    });
+    assert.equal(res.status, 401);
+  });
+});
+
+test("POST /api/projects/:id/sessions accepts an optional startupCommand and threads it through", async () => {
+  const calls: Array<{ name: string; startupCommand: string | undefined }> = [];
+  const deps = makeDeps({
+    startProjectSessionCreation: async (_project: Project, name: string, startupCommand?: string) => {
+      calls.push({ name, startupCommand });
+      return { name, fullName: `${SAMPLE_PROJECT.id}__${name}` };
+    },
+  });
+  await withServer(deps, async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/projects/${SAMPLE_PROJECT.id}/sessions`, {
+      method: "POST",
+      headers: { ...authHeaders(), "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "feature-x", startupCommand: "npm run dev" }),
+    });
+    assert.equal(res.status, 202);
+    assert.deepEqual(calls, [{ name: "feature-x", startupCommand: "npm run dev" }]);
+  });
+});
+
+test("POST /api/projects/:id/sessions returns 400 when startupCommand is not a string", async () => {
+  await withServer(makeDeps(), async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/projects/${SAMPLE_PROJECT.id}/sessions`, {
+      method: "POST",
+      headers: { ...authHeaders(), "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "feature-x", startupCommand: 42 }),
+    });
+    assert.equal(res.status, 400);
   });
 });

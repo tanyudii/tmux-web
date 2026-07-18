@@ -19,9 +19,17 @@ sealed interface ChangeRow {
 
 private class ChangeSection(val label: String, val mode: DiffMode, val filesOf: (GroupedChanges) -> List<ChangedFile>)
 
+// "Conflicted" deliberately reuses DiffMode.UNSTAGED: an unmerged path's
+// stage/discard actions are the same underlying operations as a regular
+// unstaged file's (git add to mark it resolved, git checkout HEAD to
+// discard it) -- see EMB-208. Row/group keys below are derived from
+// section.label, NOT this mode, precisely so two sections sharing a mode
+// don't collide (LazyColumn's `key = { it.key }` would crash on a
+// duplicate key otherwise).
 private val SECTIONS = listOf(
     ChangeSection("Staged", DiffMode.STAGED) { it.staged },
     ChangeSection("Changes", DiffMode.UNSTAGED) { it.unstaged },
+    ChangeSection("Conflicted", DiffMode.UNSTAGED) { it.conflicted },
     ChangeSection("Untracked", DiffMode.UNTRACKED) { it.untracked },
 )
 
@@ -42,27 +50,29 @@ fun buildChangeRows(changes: GroupedChanges?, collapsedKeys: Set<String>): List<
         val files = section.filesOf(changes)
         if (files.isEmpty()) return@flatMap emptyList()
         val mode = section.mode
-        val groupKey = groupKey(mode)
+        val groupKey = groupKey(section.label)
         val header = ChangeRow.GroupHeader(mode = mode, label = section.label, count = files.size, key = groupKey)
         if (groupKey in collapsedKeys) {
             listOf(header)
         } else {
-            listOf(header) + flattenNodes(buildFileTree(files), mode, depth = 1, pathPrefix = "", collapsedKeys)
+            listOf(header) +
+                flattenNodes(buildFileTree(files), mode, section.label, depth = 1, pathPrefix = "", collapsedKeys)
         }
     }
 }
 
-private fun groupKey(mode: DiffMode): String = "group:${mode.name}"
+private fun groupKey(sectionLabel: String): String = "group:$sectionLabel"
 
 private fun flattenNodes(
     nodes: List<FileTreeNode>,
     mode: DiffMode,
+    sectionLabel: String,
     depth: Int,
     pathPrefix: String,
     collapsedKeys: Set<String>,
 ): List<ChangeRow> = nodes.flatMap { node ->
     val path = if (pathPrefix.isEmpty()) node.name else "$pathPrefix/${node.name}"
-    val key = "${mode.name}:$path"
+    val key = "$sectionLabel:$path"
     val row = ChangeRow.Node(node = node, mode = mode, depth = depth, key = key)
     // Gated on `children.isNotEmpty()` rather than `node.isFolder` (`file == null`):
     // a node can have BOTH a non-null `file` and non-empty `children` when a
@@ -71,7 +81,7 @@ private fun flattenNodes(
     // alongside an addition of "src/x.txt"). Gating on `isFolder` alone silently
     // dropped that node's descendants -- see ChangesTreeTest's collision case.
     if (node.children.isNotEmpty() && key !in collapsedKeys) {
-        listOf(row) + flattenNodes(node.children, mode, depth + 1, path, collapsedKeys)
+        listOf(row) + flattenNodes(node.children, mode, sectionLabel, depth + 1, path, collapsedKeys)
     } else {
         listOf(row)
     }

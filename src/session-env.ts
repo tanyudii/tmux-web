@@ -2,11 +2,13 @@ import type { Project } from "./projects.ts";
 import { buildSessionName } from "./session-naming.ts";
 import { resolveWorktreePath } from "./worktree.ts";
 import type { EnvConfig } from "./env-config.ts";
-import type { ComposeContext, ComposeServiceStatus } from "./docker-compose.ts";
+import type { ComposeContext, ComposeServiceStatus, ComposeResourceUsage } from "./docker-compose.ts";
+import type { SessionEventType } from "./session-events.ts";
 
 export class EnvUnavailableError extends Error {}
 export class EnvAlreadyRunningError extends Error {}
 export class EnvNotRunningError extends Error {}
+export class EnvNotStartingError extends Error {}
 
 export type EnvPhase = "unavailable" | "idle" | "starting" | "running" | "error" | "stopping";
 
@@ -39,15 +41,37 @@ export function createSessionEnvStore(): SessionEnvStore {
   return new Map();
 }
 
+// Separate from SessionEnvStore because TransientState is replaced wholesale
+// on every lifecycle step (see runLifecycle's store.set calls below) --
+// keeping the controller here means cancelSessionEnv can always find it
+// regardless of which step is currently in flight.
+export type SessionEnvControllerStore = Map<string, AbortController>;
+
+export function createSessionEnvControllerStore(): SessionEnvControllerStore {
+  return new Map();
+}
+
 export interface SessionEnvDeps {
   loadEnvConfig: (worktreePath: string) => Promise<EnvConfig | null>;
-  runScript: (scriptPath: string, cwd: string) => Promise<{ stdout: string; stderr: string }>;
-  composeUp: (ctx: ComposeContext) => Promise<void>;
+  runScript: (
+    scriptPath: string,
+    cwd: string,
+    exec?: undefined,
+    signal?: AbortSignal,
+  ) => Promise<{ stdout: string; stderr: string }>;
+  composeUp: (ctx: ComposeContext, exec?: undefined, signal?: AbortSignal) => Promise<void>;
   composeDown: (ctx: ComposeContext) => Promise<void>;
   composePs: (ctx: ComposeContext) => Promise<ComposeServiceStatus[]>;
   composePort: (ctx: ComposeContext, service: string, containerPort: number) => Promise<number | null>;
+  checkPortCollisions: (ctx: ComposeContext) => Promise<void>;
+  // EMB-214: real `docker stats`-backed CPU/mem per service.
+  getComposeResourceUsage: (ctx: ComposeContext) => Promise<ComposeResourceUsage[]>;
   worktreesRoot?: string;
   openHost?: string;
+  // EMB-213: optional, best-effort lifecycle event recording -- see
+  // project-sessions.ts's ProjectSessionsDeps.recordEvent for the same
+  // reasoning (a logging failure must never affect the env operation itself).
+  recordEvent?: (projectId: string, sessionSlug: string, type: SessionEventType, message?: string) => Promise<void>;
 }
 
 function contextFor(fullName: string, worktreePath: string, config: EnvConfig): ComposeContext {
@@ -154,11 +178,61 @@ export async function getSessionEnvStatus(
   return { phase: "running", openLinks: openLinks.length ? openLinks : undefined, services };
 }
 
+// EMB-214: per-session CPU/mem, real `docker stats` output for sessions
+// with a running compose environment; `available: false` (frontend shows
+// "N/A") for sessions that never opted into one at all -- never an error,
+// matching this ticket's own acceptance criterion.
+export interface SessionResourceUsage {
+  available: boolean;
+  services: ComposeResourceUsage[];
+}
+
+interface ResourceUsageCacheEntry {
+  data: SessionResourceUsage;
+  expiresAt: number;
+}
+
+export type ResourceUsageCache = Map<string, ResourceUsageCacheEntry>;
+
+export function createResourceUsageCache(): ResourceUsageCache {
+  return new Map();
+}
+
+// `docker stats` is expensive enough (spawns a real process, blocks briefly
+// on the docker daemon) that naive per-poll-tick fetching would scale badly
+// once a session list is polling several sessions at once -- this caches
+// the last real result per session for a few seconds so bursts of requests
+// (multiple tabs, a sidebar list polling every session) collapse into one
+// real `docker stats` call.
+const RESOURCE_USAGE_CACHE_TTL_MS = 3_000;
+
+export async function getSessionResourceUsage(
+  project: Project,
+  sessionSlug: string,
+  deps: SessionEnvDeps,
+  cache: ResourceUsageCache,
+): Promise<SessionResourceUsage> {
+  const fullName = buildSessionName(project.id, sessionSlug);
+
+  const cached = cache.get(fullName);
+  if (cached && cached.expiresAt > Date.now()) return cached.data;
+
+  const worktreePath = resolveWorktreePath(project.id, sessionSlug, deps.worktreesRoot);
+  const config = await deps.loadEnvConfig(worktreePath);
+  const data: SessionResourceUsage = config
+    ? { available: true, services: await deps.getComposeResourceUsage(contextFor(fullName, worktreePath, config)) }
+    : { available: false, services: [] };
+
+  cache.set(fullName, { data, expiresAt: Date.now() + RESOURCE_USAGE_CACHE_TTL_MS });
+  return data;
+}
+
 export async function startSessionEnv(
   project: Project,
   sessionSlug: string,
   deps: SessionEnvDeps,
   store: SessionEnvStore,
+  controllers: SessionEnvControllerStore,
 ): Promise<void> {
   const { fullName, worktreePath, config } = await requireConfig(project, sessionSlug, deps);
 
@@ -178,38 +252,91 @@ export async function startSessionEnv(
     throw new EnvAlreadyRunningError(`Environment for "${sessionSlug}" is already running`);
   }
 
+  try {
+    await deps.checkPortCollisions(ctx);
+  } catch (error) {
+    store.delete(fullName);
+    throw error;
+  }
+
+  const controller = new AbortController();
+  controllers.set(fullName, controller);
+
+  await deps.recordEvent?.(project.id, sessionSlug, "env_setup_started").catch(() => {});
+
   // Deliberately not awaited: pre-run/compose up/post-run can take minutes
   // (image pulls, builds, migrations). The HTTP layer returns as soon as
   // this function resolves; progress from here on is observed by polling
   // getSessionEnvStatus, which reads the store entry set below.
-  void runLifecycle(fullName, worktreePath, config, ctx, deps, store);
+  void runLifecycle(
+    project.id,
+    sessionSlug,
+    fullName,
+    worktreePath,
+    config,
+    ctx,
+    deps,
+    store,
+    controllers,
+    controller.signal,
+  );
+}
+
+/**
+ * Aborts a setup currently in flight (see [EnvPhase] "starting") -- EMB-209.
+ * The in-flight `runScript`/`composeUp` call's `AbortSignal` propagates
+ * straight to Node's `child_process.execFile` `signal` option, which sends
+ * SIGTERM to the actual `sh`/`docker` child process; `runLifecycle`'s catch
+ * block below recognizes the resulting [ComposeCancelledError]/
+ * [ScriptCancelledError] and leaves the environment in a clearly-labeled
+ * "Cancelled" state rather than a stuck "Setting up…".
+ */
+export function cancelSessionEnv(
+  project: Project,
+  sessionSlug: string,
+  store: SessionEnvStore,
+  controllers: SessionEnvControllerStore,
+): void {
+  const fullName = buildSessionName(project.id, sessionSlug);
+  const transient = store.get(fullName);
+  const controller = controllers.get(fullName);
+  if (!transient || transient.phase !== "starting" || !controller) {
+    throw new EnvNotStartingError(`Environment for "${sessionSlug}" is not currently starting`);
+  }
+  controller.abort();
 }
 
 async function runLifecycle(
+  projectId: string,
+  sessionSlug: string,
   fullName: string,
   worktreePath: string,
   config: EnvConfig,
   ctx: ComposeContext,
   deps: SessionEnvDeps,
   store: SessionEnvStore,
+  controllers: SessionEnvControllerStore,
+  signal: AbortSignal,
 ): Promise<void> {
   try {
     if (config.preRunScript) {
       store.set(fullName, { phase: "starting", message: "Running pre-run script…" });
-      await deps.runScript(config.preRunScript, worktreePath);
+      await deps.runScript(config.preRunScript, worktreePath, undefined, signal);
     }
     store.set(fullName, { phase: "starting", message: "Pulling and starting containers…" });
-    await deps.composeUp(ctx);
+    await deps.composeUp(ctx, undefined, signal);
     if (config.postRunScript) {
       store.set(fullName, { phase: "starting", message: "Running post-run script…" });
-      await deps.runScript(config.postRunScript, worktreePath);
+      await deps.runScript(config.postRunScript, worktreePath, undefined, signal);
     }
     store.delete(fullName);
+    await deps.recordEvent?.(projectId, sessionSlug, "env_setup_finished").catch(() => {});
   } catch (error) {
-    store.set(fullName, {
-      phase: "error",
-      message: error instanceof Error ? error.message : String(error),
-    });
+    const message = signal.aborted ? "Cancelled" : error instanceof Error ? error.message : String(error);
+    store.set(fullName, { phase: "error", message });
+    await deps.recordEvent?.(projectId, sessionSlug, "env_setup_failed", message).catch(() => {});
+  } finally {
+    controllers.delete(fullName);
   }
 }
 
@@ -235,4 +362,5 @@ export async function stopSessionEnv(
   } finally {
     store.delete(fullName);
   }
+  await deps.recordEvent?.(project.id, sessionSlug, "env_stopped").catch(() => {});
 }

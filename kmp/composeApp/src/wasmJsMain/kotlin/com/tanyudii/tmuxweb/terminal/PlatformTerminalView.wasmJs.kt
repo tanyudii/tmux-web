@@ -15,74 +15,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.viewinterop.HtmlElementView
 import com.tanyudii.tmuxweb.data.remote.terminal.ClientMessage
 import com.tanyudii.tmuxweb.domain.accumulateScrollLines
-import com.tanyudii.tmuxweb.domain.copyResultMessage
-import com.tanyudii.tmuxweb.domain.isCopyShortcut
 import kotlin.js.ExperimentalWasmJsInterop
 import kotlin.math.abs
 import kotlinx.browser.document
 import kotlinx.browser.window
 import org.w3c.dom.HTMLDivElement
 import org.w3c.dom.HTMLElement
-import org.w3c.dom.events.Event
-import org.w3c.dom.events.KeyboardEvent
-
-private const val DEFAULT_FONT_SIZE = 14
-private const val MIN_FONT_SIZE = 8
-private const val MAX_FONT_SIZE = 32
-private const val COPY_TOAST_DURATION_MS = 1800
-
-// Pure mapping, split out of PlatformTerminalView to keep that composable's
-// cyclomatic complexity under the project's threshold -- no behavior change.
-private fun nextZoomFontSize(key: String, currentSize: Int): Int? = when (key) {
-    "=", "+" -> (currentSize + 1).coerceAtMost(MAX_FONT_SIZE)
-    "-" -> (currentSize - 1).coerceAtLeast(MIN_FONT_SIZE)
-    "0" -> DEFAULT_FONT_SIZE
-    else -> null
-}
-
-// Cmd+C is the Mac copy shortcut, but xterm's own hidden input textarea can
-// end up being what the browser's native copy command targets, so the
-// selected terminal text doesn't reliably reach the clipboard. Handle it
-// ourselves whenever there's an active selection -- same fix as the pre-KMP
-// public/app.js (commit 73be7a0). Ctrl+C is left alone so it still sends
-// SIGINT to the shell, matching every other terminal. Returns true if the
-// event was claimed as a copy request, so the caller can skip zoom handling.
-private fun handleCopyKeyDown(
-    keyEvent: KeyboardEvent,
-    terminal: XtermTerminal?,
-    onCopyRequested: (XtermTerminal) -> Unit,
-): Boolean {
-    val isCopy = isCopyShortcut(
-        type = keyEvent.type,
-        metaKey = keyEvent.metaKey,
-        shiftKey = keyEvent.shiftKey,
-        key = keyEvent.key,
-    )
-    if (terminal == null || !isCopy || !terminal.hasSelection()) return false
-    keyEvent.preventDefault()
-    onCopyRequested(terminal)
-    return true
-}
-
-// Ctrl/Cmd +/-/0 zoom, same convention as browsers and every desktop
-// terminal emulator. Returns true once the keystroke was recognized as a
-// zoom shortcut (even a no-op one, e.g. already at MAX_FONT_SIZE) so the
-// caller knows not to fall through to any other handling.
-private fun handleZoomKeyDown(
-    keyEvent: KeyboardEvent,
-    terminal: XtermTerminal?,
-    fontSize: Int,
-    onZoomChanged: (term: XtermTerminal, nextSize: Int) -> Unit,
-): Boolean {
-    val isZoomModifier = keyEvent.ctrlKey || keyEvent.metaKey
-    val nextSize = if (isZoomModifier) nextZoomFontSize(keyEvent.key, fontSize) else null
-    if (nextSize == null) return false
-    // preventDefault() stops the browser's own page-zoom from also firing
-    // on the same keystroke.
-    keyEvent.preventDefault()
-    if (nextSize != fontSize) terminal?.let { onZoomChanged(it, nextSize) }
-    return true
-}
 
 // Turns touch drags into tmux copy-mode scroll reports. See attachTouchScroll
 // (XtermJs.kt) for why xterm's own touch handling can't do this, and
@@ -153,16 +91,18 @@ private fun createAndMountTerminal(
     container: HTMLDivElement,
     onInput: (String) -> Unit,
     onBell: () -> Unit,
-    onReady: (created: XtermTerminal, addon: XtermFitAddon) -> Unit,
+    onReady: (created: XtermTerminal, addon: XtermFitAddon, search: XtermSearchAddon) -> Unit,
     onFirstFit: (created: XtermTerminal, addon: XtermFitAddon) -> Unit,
 ): XtermTerminal {
     val created = newTerminal()
     val addon = newFitAddon()
+    val search = newSearchAddon()
     created.loadAddon(addon)
+    created.loadAddon(search)
     created.open(container)
     created.onData { data -> onInput(data.toString()) }
     created.onBell { onBell() }
-    onReady(created, addon)
+    onReady(created, addon, search)
     window.requestAnimationFrame { onFirstFit(created, addon) }
     return created
 }
@@ -177,6 +117,7 @@ private class TerminalRefs(
     val setTerminal: (XtermTerminal) -> Unit,
     val fitAddon: () -> XtermFitAddon?,
     val setFitAddon: (XtermFitAddon) -> Unit,
+    val setSearchAddon: (XtermSearchAddon) -> Unit,
 )
 
 /** The composable's stable callback params. Bundled for the same reason as [TerminalRefs]. */
@@ -204,6 +145,14 @@ private fun updateTerminalContainer(
     // container becomes visible again (e.g. after a Popup/Dialog closes)
     // when hiding it now for an unrelated reason.
     if (!isVisible) hideCopyToast(container)
+    // Same reasoning, plus a sharper risk: an already-focused search
+    // `<input>` is a real, independently-focusable DOM element, so leaving
+    // it up (and possibly still focused) underneath a just-opened Popup/
+    // Dialog risks exactly the focus-trap class of bug already hit once in
+    // this codebase (see the container.parentElement fix below) -- close it
+    // outright rather than relying on `visibility: hidden` to also blur it,
+    // which isn't guaranteed across browsers.
+    if (!isVisible) hideSearchBar(container)
     // HtmlElementView wraps `container` in ITS OWN absolutely-positioned
     // outer <div> for interop placement, and that outer div stays
     // `visibility: visible` no matter what we set on `container` --
@@ -219,9 +168,10 @@ private fun updateTerminalContainer(
         container = container,
         onInput = callbacks.onInput,
         onBell = callbacks.onBell,
-        onReady = { created, addon ->
+        onReady = { created, addon, search ->
             refs.setTerminal(created)
             refs.setFitAddon(addon)
+            refs.setSearchAddon(search)
             callbacks.handleReady(PlatformTerminalHandle(created))
         },
         onFirstFit = { created, addon ->
@@ -247,27 +197,6 @@ private fun updateTerminalContainer(
     }
 }
 
-// The copy feedback toast is a real DOM element appended to `container`,
-// NOT a Compose composable -- Compose Multiplatform Web's canvas content
-// can't paint over this HtmlElementView's native DOM (same CMP-8521
-// limitation documented on PlatformTerminalView.isVisible/the
-// container.parentElement visibility fix above), so a Compose-rendered
-// toast sitting in the same Box as this view would be permanently hidden
-// underneath xterm's real DOM node. Confirmed live via Playwright: a first
-// attempt using a Compose Box+Text overlay never appeared on screen despite
-// the copy itself succeeding.
-private fun performCopy(term: XtermTerminal, container: HTMLDivElement) {
-    val text = term.getSelection().toString()
-    copyTextToClipboard(text) { success ->
-        val durationMs = if (success) COPY_TOAST_DURATION_MS else 0
-        showCopyToast(container, copyResultMessage(success), success, durationMs)
-        // execCommand's scratch textarea (see XtermJs.kt's copyTextToClipboard)
-        // takes focus away from xterm's own hidden input; move it back so
-        // keystrokes keep reaching the shell, win or lose.
-        term.focus()
-    }
-}
-
 // wasmJs actual for the expect in PlatformTerminalView.kt — this is Spike B
 // (xterm.js via HtmlElementView) formalized behind the common API. See
 // docs/adr/0002-web-terminal-embedding.md; verified end-to-end with a real
@@ -290,6 +219,7 @@ actual fun PlatformTerminalView(
 ) {
     var terminal by remember { mutableStateOf<XtermTerminal?>(null) }
     var fitAddon by remember { mutableStateOf<XtermFitAddon?>(null) }
+    var searchAddon by remember { mutableStateOf<XtermSearchAddon?>(null) }
     var lastCols by remember { mutableStateOf(0) }
     var lastRows by remember { mutableStateOf(0) }
     var fontSize by remember { mutableStateOf(DEFAULT_FONT_SIZE) }
@@ -325,19 +255,28 @@ actual fun PlatformTerminalView(
             container.style.width = "100%"
             container.style.height = "100%"
             container.style.position = "relative"
-            container.addEventListener("keydown", { event: Event ->
-                val keyEvent = event as KeyboardEvent
-                val copied = handleCopyKeyDown(keyEvent, terminal) { activeTerminal ->
-                    performCopy(activeTerminal, container)
-                }
-                if (copied) return@addEventListener
-                handleZoomKeyDown(keyEvent, terminal, fontSize) { current, nextSize ->
+            // EMB-219: the search shortcut is registered separately, in the
+            // CAPTURE phase, by attachTerminalKeydownListeners below --
+            // confirmed live that xterm.js's own internal keydown handler
+            // (on its hidden textarea, the actual event *target*) treats
+            // Ctrl+F as the VT control character ^F and stopPropagation()s
+            // it before a bubble-phase listener on `container` would ever
+            // see it (Cmd+F worked fine, since metaKey isn't in xterm's
+            // Ctrl-letter VT keymap). A capture-phase listener on an
+            // ancestor is the only way to intercept ahead of xterm's own
+            // handling.
+            attachTerminalKeydownListeners(
+                container = container,
+                terminal = { terminal },
+                searchAddon = { searchAddon },
+                fontSize = { fontSize },
+                onZoomApplied = { current, nextSize ->
                     fontSize = nextSize
                     setFontSize(current, nextSize)
                     fitAddon?.fit()
                     reportResizeIfChanged(current)
-                }
-            })
+                },
+            )
             attachResizeObserver(container, { terminal }, { fitAddon }, ::reportResizeIfChanged)
             attachScrollHandling(container, { terminal }, { currentOnScroll.value })
             container
@@ -352,6 +291,7 @@ actual fun PlatformTerminalView(
                     setTerminal = { terminal = it },
                     fitAddon = { fitAddon },
                     setFitAddon = { fitAddon = it },
+                    setSearchAddon = { searchAddon = it },
                 ),
                 callbacks = TerminalCallbacks(
                     onInput = onInput,

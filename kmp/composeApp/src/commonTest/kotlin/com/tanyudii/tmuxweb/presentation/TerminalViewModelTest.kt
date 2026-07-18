@@ -38,6 +38,25 @@ class TerminalViewModelTest {
     }
 
     @Test
+    fun `connect defaults to pane 0`() = runTest {
+        val socket = FakeTerminalSocket()
+
+        viewModel(socket).connect("proj__main")
+
+        assertEquals(listOf(0), socket.connectedPanes)
+    }
+
+    @Test
+    fun `connect passes a non-default pane through to the socket -- EMB-217 split viewport`() = runTest {
+        val socket = FakeTerminalSocket()
+
+        viewModel(socket).connect("proj__main", pane = 1)
+
+        assertEquals(listOf("proj__main"), socket.connectedSessions)
+        assertEquals(listOf(1), socket.connectedPanes)
+    }
+
+    @Test
     fun `opened event marks the connection as connected`() = runTest {
         val socket = FakeTerminalSocket()
         val viewModel = viewModel(socket)
@@ -158,6 +177,17 @@ class TerminalViewModelTest {
         viewModel.reconnect()
 
         assertEquals(listOf("proj__main", "proj__main"), socket.connectedSessions)
+    }
+
+    @Test
+    fun `reconnect preserves the originally connected pane -- EMB-217 split viewport`() = runTest {
+        val socket = FakeTerminalSocket()
+        val viewModel = viewModel(socket)
+        viewModel.connect("proj__main", pane = 1)
+
+        viewModel.reconnect()
+
+        assertEquals(listOf(1, 1), socket.connectedPanes)
     }
 
     @Test

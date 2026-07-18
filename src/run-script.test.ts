@@ -14,7 +14,7 @@ test("runScript executes the script through sh with the given cwd", async () => 
   assert.equal(calls.length, 1);
   assert.equal(calls[0].file, "/bin/sh");
   assert.deepEqual(calls[0].args, ["/repo/worktree/.tmux-web-env/pre-run.sh"]);
-  assert.deepEqual(calls[0].options, { cwd: "/repo/worktree" });
+  assert.deepEqual(calls[0].options, { cwd: "/repo/worktree", signal: undefined });
   assert.equal(result.stdout, "pre-run output\n");
 });
 

@@ -16,6 +16,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -27,6 +28,10 @@ import androidx.compose.ui.window.DialogProperties
 import com.tanyudii.tmuxweb.domain.DiffHunk
 import com.tanyudii.tmuxweb.domain.DiffRow
 import com.tanyudii.tmuxweb.domain.DiffRowType
+import com.tanyudii.tmuxweb.domain.SyntaxLanguage
+import com.tanyudii.tmuxweb.domain.TokenKind
+import com.tanyudii.tmuxweb.domain.languageForFileName
+import com.tanyudii.tmuxweb.domain.tokenizeLine
 import com.tanyudii.tmuxweb.presentation.DiffUiState
 import com.tanyudii.tmuxweb.ui.theme.TmuxColors
 import com.tanyudii.tmuxweb.ui.theme.TmuxFonts
@@ -58,6 +63,7 @@ fun TmuxDiffDialog(
     state: DiffUiState,
     onDismiss: () -> Unit,
 ) {
+    val language = remember(fileName) { languageForFileName(fileName) }
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Column(
             modifier = Modifier
@@ -66,7 +72,7 @@ fun TmuxDiffDialog(
                 .background(TmuxColors.bgCard, RoundedCornerShape(TmuxRadius.lg)),
         ) {
             DiffDialogHeader(fileName, statusLabel, statusTone, onDismiss)
-            DiffDialogBody(state, modifier = Modifier.weight(1f))
+            DiffDialogBody(state, language, modifier = Modifier.weight(1f))
         }
     }
 }
@@ -98,7 +104,7 @@ private fun DiffDialogHeader(fileName: String, statusLabel: String, statusTone: 
 }
 
 @Composable
-private fun DiffDialogBody(state: DiffUiState, modifier: Modifier = Modifier) {
+private fun DiffDialogBody(state: DiffUiState, language: SyntaxLanguage, modifier: Modifier = Modifier) {
     Box(modifier = modifier.fillMaxWidth()) {
         when {
             state.isLoading -> CenteredDiffMessage { SpinningIcon(TmuxIcons.Spinner, 20.dp, TmuxColors.textTertiary) }
@@ -128,7 +134,7 @@ private fun DiffDialogBody(state: DiffUiState, modifier: Modifier = Modifier) {
             }
             else -> Column(Modifier.fillMaxSize()) {
                 DiffStatBar(state.parsedDiff.additions, state.parsedDiff.deletions)
-                DiffHunkList(state.parsedDiff.hunks, Modifier.weight(1f))
+                DiffHunkList(state.parsedDiff.hunks, language, Modifier.weight(1f))
             }
         }
     }
@@ -168,7 +174,7 @@ private val HUNK_BAND_MODIFIER = Modifier.fillMaxWidth()
     .padding(horizontal = 16.dp, vertical = 4.dp)
 
 @Composable
-private fun DiffHunkList(hunks: List<DiffHunk>, modifier: Modifier = Modifier) {
+private fun DiffHunkList(hunks: List<DiffHunk>, language: SyntaxLanguage, modifier: Modifier = Modifier) {
     LazyColumn(modifier = modifier.fillMaxWidth()) {
         hunks.forEach { hunk ->
             item {
@@ -180,13 +186,13 @@ private fun DiffHunkList(hunks: List<DiffHunk>, modifier: Modifier = Modifier) {
                     modifier = HUNK_BAND_MODIFIER,
                 )
             }
-            items(hunk.lines) { line -> DiffLineRow(line) }
+            items(hunk.lines) { line -> DiffLineRow(line, language) }
         }
     }
 }
 
 @Composable
-private fun DiffLineRow(line: DiffRow) {
+private fun DiffLineRow(line: DiffRow, language: SyntaxLanguage) {
     val rowBg = when (line.type) {
         DiffRowType.ADD -> TmuxColors.gitAddedBg
         DiffRowType.DEL -> TmuxColors.gitRemovedBg
@@ -195,7 +201,7 @@ private fun DiffLineRow(line: DiffRow) {
     Row(modifier = Modifier.fillMaxWidth().background(rowBg)) {
         DiffGutter(line.oldLineNo)
         DiffGutter(line.newLineNo)
-        DiffLineContent(line, modifier = Modifier.weight(1f))
+        DiffLineContent(line, language, modifier = Modifier.weight(1f))
     }
 }
 
@@ -212,7 +218,7 @@ private fun DiffGutter(lineNo: Int?) {
 }
 
 @Composable
-private fun DiffLineContent(line: DiffRow, modifier: Modifier = Modifier) {
+private fun DiffLineContent(line: DiffRow, language: SyntaxLanguage, modifier: Modifier = Modifier) {
     if (line.type == DiffRowType.META) {
         Text(
             line.content,
@@ -242,20 +248,34 @@ private fun DiffLineContent(line: DiffRow, modifier: Modifier = Modifier) {
             fontSize = TmuxTextSize.xs,
             modifier = Modifier.width(MARKER_WIDTH_DP.dp),
         )
-        DiffLineText(line)
+        DiffLineText(line, language)
     }
 }
 
+/**
+ * Renders one line's content. A modified line with word-level diff
+ * [DiffRow.segments] keeps that highlighting as-is (the changed/unchanged
+ * background is more useful there than per-token syntax color, and
+ * combining both correctly -- syntax tokens can straddle a segment
+ * boundary -- isn't worth the complexity); syntax highlighting via
+ * [tokenizeLine] only applies to lines without segments (context lines,
+ * and add/del lines with no word-level pairing) -- see EMB-206.
+ */
 @Composable
-private fun DiffLineText(line: DiffRow) {
+private fun DiffLineText(line: DiffRow, language: SyntaxLanguage) {
     val segments = line.segments
     if (segments == null) {
-        Text(
-            line.content.ifEmpty { " " },
-            color = TmuxColors.textSecondary,
-            fontFamily = TmuxFonts.mono,
-            fontSize = TmuxTextSize.xs,
-        )
+        val tokens = remember(line.content, language) { tokenizeLine(line.content, language) }
+        Row {
+            tokens.forEach { token ->
+                Text(
+                    token.text.ifEmpty { " " },
+                    color = tokenColor(token.kind),
+                    fontFamily = TmuxFonts.mono,
+                    fontSize = TmuxTextSize.xs,
+                )
+            }
+        }
         return
     }
 
@@ -274,4 +294,12 @@ private fun DiffLineText(line: DiffRow) {
             )
         }
     }
+}
+
+private fun tokenColor(kind: TokenKind): Color = when (kind) {
+    TokenKind.KEYWORD -> TmuxColors.violet500
+    TokenKind.STRING -> TmuxColors.amber500
+    TokenKind.COMMENT -> TmuxColors.textTertiary
+    TokenKind.NUMBER -> TmuxColors.blue500
+    TokenKind.PLAIN -> TmuxColors.textSecondary
 }

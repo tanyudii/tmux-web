@@ -122,14 +122,24 @@ accordingly:
    ```bash
    tmuxweb generate
    ```
-4. **Audit it yourself.** This is a young, low-adoption project (it's
+4. **The access log records per-token activity, not per-person identity.**
+   Every bearer-token-authenticated API/WS request is appended to
+   `<data dir>/access.log` (timestamp, IP, method, path, and whether the
+   token check passed) — viewable read-only from the Web UI's sidebar
+   ("Access log"). Because this tool has one shared token rather than
+   per-user accounts, this log tells you *what happened when from which
+   IP*, not *who* did it in any personal sense — if you share the token
+   with multiple people/devices, they're indistinguishable in this log.
+   The file rotates automatically (5 MiB per generation, 5 generations
+   kept) so it never grows unbounded.
+5. **Audit it yourself.** This is a young, low-adoption project (it's
    yours). Before trusting it with real access, read at minimum:
    `src/auth.ts` (token check), `src/server.ts` (route handling and error
    mapping), `src/worktree.ts` and `src/git-status.ts` (every `git`
    invocation this tool makes, including the diff-endpoint's path-traversal
    guard), and `src/main.ts` (how they're wired together with the WebSocket
    upgrade).
-5. **The per-session environment feature extends this trust to Docker.**
+6. **The per-session environment feature extends this trust to Docker.**
    `docker compose up` runs *whatever* `docker-compose.yml` (plus
    `pre-run.sh`/`post-run.sh`) is checked into the worktree at the time —
    by design, so the environment reflects the branch you're actually
@@ -503,8 +513,6 @@ docs/testing/
 - No real database — one JSON file for the project registry, tmux/git
   themselves are the source of truth for everything else.
 - No user accounts — one shared token, one server.
-- No auto-reconnect on the frontend — closing/reopening a session tab is
-  just clicking it again in the sidebar (tmux already kept it alive).
 - No TLS termination built in — terminate TLS at your VPN/reverse proxy,
   not here. Note that plain HTTP on a non-`localhost` host (the
   WireGuard/Tailscale setup above) is not a browser "secure context", so

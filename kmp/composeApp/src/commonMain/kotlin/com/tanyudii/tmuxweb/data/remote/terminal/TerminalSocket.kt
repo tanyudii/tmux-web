@@ -18,8 +18,15 @@ sealed class TerminalEvent {
  * repository-interface pattern as Phase 2's [com.tanyudii.tmuxweb.domain.repository].
  */
 interface TerminalSocket {
-    /** Opens the socket for one session; the returned flow completes when the socket closes. */
-    fun connect(sessionFullName: String): Flow<TerminalEvent>
+    /**
+     * Opens the socket for one session; the returned flow completes when the
+     * socket closes. [pane] 0 (default) attaches to the primary session;
+     * pane 1 attaches to the EMB-217 split viewport's linked tmux session
+     * instead (see server.ts's /ws handler + session-naming.ts's
+     * splitPaneSessionName) -- a fully independent client with its own
+     * current-window, sharing the same underlying windows/panes as pane 0.
+     */
+    fun connect(sessionFullName: String, pane: Int = 0): Flow<TerminalEvent>
 
     suspend fun send(message: ClientMessage)
 

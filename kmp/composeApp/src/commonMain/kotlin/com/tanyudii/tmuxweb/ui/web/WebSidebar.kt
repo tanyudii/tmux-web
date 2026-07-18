@@ -75,6 +75,7 @@ fun WebSidebar(
     onDeleteProject: (Project) -> Unit,
     onDeleteSession: (String, ProjectSession) -> Unit,
     onOpenSettings: () -> Unit,
+    onOpenAccessLog: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val width = if (state.sidebarCollapsed) TmuxSpacing.webSidebarCollapsedWidth else TmuxSpacing.webSidebarWidth
@@ -134,6 +135,7 @@ fun WebSidebar(
             serverHost = serverHost,
             onToggleCollapsed = onToggleCollapsed,
             onOpenSettings = onOpenSettings,
+            onOpenAccessLog = onOpenAccessLog,
         )
     }
 }
@@ -325,7 +327,17 @@ private fun SidebarRow(
                 modifier = Modifier.size(14.dp).clickable(onClick = onDelete),
             )
         } else {
-            Text(subtitle, color = TmuxColors.textTertiary, fontFamily = TmuxFonts.mono, fontSize = TmuxTextSize.xs)
+            // maxLines/overflow so a longer subtitle (e.g. a long hostname)
+            // ellipsizes gracefully instead of being hard-clipped by the
+            // row's own bounds with no visual indication it was cut off.
+            Text(
+                subtitle,
+                color = TmuxColors.textTertiary,
+                fontFamily = TmuxFonts.mono,
+                fontSize = TmuxTextSize.xs,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
         }
     }
 }
@@ -336,6 +348,7 @@ private fun SidebarFooter(
     serverHost: String,
     onToggleCollapsed: () -> Unit,
     onOpenSettings: () -> Unit,
+    onOpenAccessLog: () -> Unit,
 ) {
     Column(modifier = Modifier.fillMaxWidth().padding(TmuxSpacing.space3)) {
         if (!collapsed) {
@@ -345,6 +358,18 @@ private fun SidebarFooter(
                 subtitle = serverHost,
                 active = false,
                 onClick = onOpenSettings,
+                onDelete = {},
+            )
+            SidebarRow(
+                icon = TmuxIcons.History,
+                label = "Access log",
+                // Kept short so it doesn't get clipped inside the 260dp
+                // sidebar row (see SidebarRow's subtitle Text) -- also
+                // deliberately says "by IP", not "who": the bearer token is
+                // shared, not per-user, so this can't identify a person.
+                subtitle = "By IP, not by user",
+                active = false,
+                onClick = onOpenAccessLog,
                 onDelete = {},
             )
         }

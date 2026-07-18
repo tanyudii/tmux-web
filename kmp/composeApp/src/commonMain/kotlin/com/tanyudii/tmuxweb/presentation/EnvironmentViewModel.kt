@@ -60,6 +60,16 @@ class EnvironmentViewModel(
         }
     }
 
+    /** Cancels an in-flight setup() -- see EMB-209. No isBusy gate: unlike setup()/stop(), this doesn't
+     *  start a new mutation, it just asks the server to abort the one already running. */
+    fun cancel() {
+        scope.launch {
+            runSuspendCatching { repository.cancelEnv(projectId, sessionName) }
+                .onSuccess { refresh() }
+                .onFailure { error -> _state.update { it.copy(errorMessage = error.toUiMessage()) } }
+        }
+    }
+
     fun stop() {
         _state.update { it.copy(isShowingStopConfirm = false, isBusy = true) }
         scope.launch {

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { buildSessionName, parseSessionName, belongsToProject } from "./session-naming.ts";
+import { buildSessionName, parseSessionName, belongsToProject, splitPaneSessionName } from "./session-naming.ts";
 
 test("buildSessionName joins projectId and sessionSlug with the separator", () => {
   assert.equal(buildSessionName("proj1", "feature-x"), "proj1__feature-x");
@@ -57,4 +57,21 @@ test("belongsToProject matches only the exact projectId, not a string prefix", (
   assert.equal(belongsToProject("proj1__feature-x", "proj1"), true);
   assert.equal(belongsToProject("proj1__feature-x", "proj2"), false);
   assert.equal(belongsToProject("proj10__feature-x", "proj1"), false);
+});
+
+test("splitPaneSessionName is deterministic for the same fullName", () => {
+  assert.equal(splitPaneSessionName("proj1__feature-x"), splitPaneSessionName("proj1__feature-x"));
+});
+
+test("splitPaneSessionName differs for different fullNames", () => {
+  assert.notEqual(splitPaneSessionName("proj1__feature-x"), splitPaneSessionName("proj1__feature-y"));
+});
+
+test("splitPaneSessionName always fits tmux's 64-char session-name cap regardless of fullName's length", () => {
+  const longName = `${"p".repeat(40)}__${"s".repeat(21)}`; // exactly 64 chars, buildSessionName's own max
+  assert.ok(splitPaneSessionName(longName).length <= 64);
+});
+
+test("splitPaneSessionName produces a name matching isValidSessionName's charset", () => {
+  assert.match(splitPaneSessionName("proj1__feature-x"), /^[A-Za-z0-9_][A-Za-z0-9_-]{0,63}$/);
 });

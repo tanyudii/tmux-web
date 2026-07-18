@@ -20,7 +20,16 @@ data class ChangedFile(
     val oldPath: String? = null,
     val status: FileStatus,
     val staged: Boolean,
+    val conflicted: Boolean = false,
 )
+
+/** Mirrors `RepoState` in src/git-status.ts. */
+@Serializable
+enum class RepoState {
+    @SerialName("clean") CLEAN,
+    @SerialName("merging") MERGING,
+    @SerialName("rebasing") REBASING,
+}
 
 /** Mirrors `GroupedChanges` in src/git-status.ts. */
 @Serializable
@@ -28,6 +37,8 @@ data class GroupedChanges(
     val staged: List<ChangedFile>,
     val unstaged: List<ChangedFile>,
     val untracked: List<ChangedFile>,
+    val conflicted: List<ChangedFile> = emptyList(),
+    val repoState: RepoState = RepoState.CLEAN,
 )
 
 /** Mirrors `DiffMode` in src/git-status.ts. */

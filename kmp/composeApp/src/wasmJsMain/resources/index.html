@@ -11,6 +11,12 @@
          unfilled strip there -- see the safe-area-inset padding below. -->
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
     <title>tmux-web</title>
+    <!-- EMB-215: PWA manifest (name/icons/standalone display) + theme-color,
+         so Chrome/Android offers a valid "Install app" prompt. -->
+    <link rel="manifest" href="/manifest.json">
+    <meta name="theme-color" content="#10141c">
+    <link rel="icon" href="/icons/icon-192.png">
+    <link rel="apple-touch-icon" href="/icons/icon-192.png">
     <link rel="stylesheet" href="vendor/xterm.css">
     <style>
         html, body {
@@ -143,6 +149,10 @@
          globalThis with no npm/webpack module wiring. See Spike B (docs/adr/0002-*). -->
     <script src="vendor/xterm.js"></script>
     <script src="vendor/addon-fit.js"></script>
+    <!-- EMB-219: @xterm/addon-search@0.16.0, vendored the same way as
+         addon-fit.js above (see that file's comment) -- no npm/webpack
+         wiring, just a UMD global loaded as a plain script. -->
+    <script src="vendor/addon-search.js"></script>
     <script>
       // Kotlin/Wasm's JS interop generates a runtime `instanceof <ExternalClassName>`
       // / `() => <ExternalClassName>` check for every `external class` (used for
@@ -156,7 +166,26 @@
       // rendered xterm rows).
       window.XtermTerminal = Terminal;
       window.XtermFitAddon = FitAddon.FitAddon;
+      window.XtermSearchAddon = SearchAddon.SearchAddon;
     </script>
     <script src="composeApp.js"></script>
+    <script>
+      // Registered unconditionally (not just when the user opts into push
+      // notifications via PushNotificationToggle.kt/BrowserPush.wasmJs.kt's
+      // subscribeToPushJs) -- EMB-215's app-shell caching and offline
+      // fallback (see sw.js) benefit every visitor, not only those who
+      // enable push. register() is idempotent for the same URL/scope, so
+      // this and that later call never fight over a duplicate registration.
+      if ("serviceWorker" in navigator) {
+        window.addEventListener("load", function () {
+          navigator.serviceWorker.register("/sw.js").catch(function () {
+            // Best-effort: an insecure origin (see README's WireGuard/
+            // Tailscale deployment note) has no serviceWorker API at all on
+            // some browsers, and a failed registration must not block the
+            // app itself from loading.
+          });
+        });
+      }
+    </script>
 </body>
 </html>

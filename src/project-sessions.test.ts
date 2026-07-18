@@ -7,16 +7,24 @@ import {
   getSessionCreationStatus,
   createSessionCreationStore,
   killProjectSession,
+  killProjectSessionSplit,
+  isProjectSessionBranchMerged,
   getProjectSessionChanges,
   getProjectSessionDiff,
+  stageProjectSessionFile,
+  unstageProjectSessionFile,
+  discardProjectSessionFile,
+  commitProjectSessionChanges,
   SessionCreationInProgressError,
   SessionCreationNotFoundError,
   type ProjectSessionsDeps,
   type SessionCreationStatus,
 } from "./project-sessions.ts";
 import type { Project } from "./projects.ts";
+import type { GroupedChanges } from "./git-status.ts";
 import { ValidationError } from "./tmux.ts";
 import { WorktreeConflictError } from "./worktree.ts";
+import { splitPaneSessionName } from "./session-naming.ts";
 
 const PROJECT: Project = {
   id: "proj1-ab12cd",
@@ -31,10 +39,20 @@ function makeDeps(overrides: Partial<ProjectSessionsDeps> = {}): ProjectSessions
     listWindows: async () => [],
     createSession: async () => {},
     killSession: async () => {},
+    sendKeys: async () => {},
     addWorktree: async () => {},
     removeWorktree: async () => {},
-    getChangedFiles: async () => ({ staged: [], unstaged: [], untracked: [] }),
+    isBranchMerged: async () => true,
+    deleteBranch: async () => {},
+    getChangedFiles: async () => ({ staged: [], unstaged: [], untracked: [], conflicted: [], repoState: "clean" }),
     getFileDiff: async () => ({ diff: "", isUntracked: false, isBinary: false }),
+    stageFile: async () => {},
+    unstageFile: async () => {},
+    discardFile: async () => {},
+    commitStaged: async () => {},
+    listEnvFiles: async () => [],
+    readEnvFile: async () => "",
+    writeEnvFile: async () => {},
     worktreesRoot: "/data/worktrees",
     ...overrides,
   };
@@ -58,8 +76,24 @@ test("listProjectSessions returns only sessions belonging to the project, with t
   const result = await listProjectSessions(PROJECT, deps);
 
   assert.deepEqual(result, [
-    { name: "feature-x", fullName: "proj1-ab12cd__feature-x", windows: 2, windowNames: [], attached: true },
-    { name: "bugfix", fullName: "proj1-ab12cd__bugfix", windows: 1, windowNames: [], attached: false },
+    {
+      name: "feature-x",
+      fullName: "proj1-ab12cd__feature-x",
+      windows: 2,
+      windowNames: [],
+      attached: true,
+      label: undefined,
+      favorite: false,
+    },
+    {
+      name: "bugfix",
+      fullName: "proj1-ab12cd__bugfix",
+      windows: 1,
+      windowNames: [],
+      attached: false,
+      label: undefined,
+      favorite: false,
+    },
   ]);
 });
 
@@ -83,6 +117,37 @@ test("listProjectSessions fills in each session's real per-window tmux names, or
   const result = await listProjectSessions(PROJECT, deps);
 
   assert.deepEqual(result[0].windowNames, ["editor", "server"]);
+});
+
+test("listProjectSessions attaches label/favorite from listSessionMeta, looked up by session slug", async () => {
+  const deps = makeDeps({
+    listSessions: async () => [
+      { name: "proj1-ab12cd__feature-x", windows: 1, attached: true },
+      { name: "proj1-ab12cd__bugfix", windows: 1, attached: false },
+    ],
+    listSessionMeta: async (projectId) => {
+      assert.equal(projectId, PROJECT.id);
+      return [{ projectId, sessionSlug: "feature-x", label: "Important", favorite: true }];
+    },
+  });
+
+  const result = await listProjectSessions(PROJECT, deps);
+
+  assert.equal(result[0].label, "Important");
+  assert.equal(result[0].favorite, true);
+  assert.equal(result[1].label, undefined);
+  assert.equal(result[1].favorite, false);
+});
+
+test("listProjectSessions defaults label/favorite when listSessionMeta isn't wired up", async () => {
+  const deps = makeDeps({
+    listSessions: async () => [{ name: "proj1-ab12cd__feature-x", windows: 1, attached: true }],
+  });
+
+  const result = await listProjectSessions(PROJECT, deps);
+
+  assert.equal(result[0].label, undefined);
+  assert.equal(result[0].favorite, false);
 });
 
 test("listProjectSessions omits windowNames for a session whose window list can't be fetched", async () => {
@@ -119,6 +184,31 @@ test("createProjectSession slugifies the name, creates the worktree, then the tm
   ]);
 });
 
+test("createProjectSession records a 'created' event after the session is created", async () => {
+  const calls: Array<[string, string, string]> = [];
+  const deps = makeDeps({
+    recordEvent: async (projectId, sessionSlug, type) => {
+      calls.push([projectId, sessionSlug, type]);
+    },
+  });
+
+  await createProjectSession(PROJECT, "feature-x", deps);
+
+  assert.deepEqual(calls, [["proj1-ab12cd", "feature-x", "created"]]);
+});
+
+test("createProjectSession swallows a recordEvent failure -- session creation still succeeds", async () => {
+  const deps = makeDeps({
+    recordEvent: async () => {
+      throw new Error("disk full");
+    },
+  });
+
+  const result = await createProjectSession(PROJECT, "feature-x", deps);
+
+  assert.equal(result.fullName, "proj1-ab12cd__feature-x");
+});
+
 test("createProjectSession throws ValidationError when the name has nothing sluggable", async () => {
   await assert.rejects(() => createProjectSession(PROJECT, "!!!", makeDeps()), ValidationError);
 });
@@ -136,6 +226,47 @@ test("createProjectSession rolls back the worktree if creating the tmux session 
 
   await assert.rejects(() => createProjectSession(PROJECT, "feature-x", deps), /tmux exploded/);
   assert.deepEqual(removeCalls, [{ path: "/data/worktrees/proj1-ab12cd/feature-x", force: true }]);
+});
+
+test("createProjectSession sends the startup command as keystrokes to the new session after it's created", async () => {
+  const calls: string[] = [];
+  const deps = makeDeps({
+    createSession: async (name) => {
+      calls.push(`createSession:${name}`);
+    },
+    sendKeys: async (name, text) => {
+      calls.push(`sendKeys:${name}:${text}`);
+    },
+  });
+
+  await createProjectSession(PROJECT, "feature-x", deps, undefined, "npm run dev");
+
+  assert.deepEqual(calls, ["createSession:proj1-ab12cd__feature-x", "sendKeys:proj1-ab12cd__feature-x:npm run dev"]);
+});
+
+test("createProjectSession never calls sendKeys when no startup command is given", async () => {
+  let called = false;
+  const deps = makeDeps({
+    sendKeys: async () => {
+      called = true;
+    },
+  });
+
+  await createProjectSession(PROJECT, "feature-x", deps);
+
+  assert.equal(called, false);
+});
+
+test("createProjectSession swallows a sendKeys failure -- session creation still succeeds", async () => {
+  const deps = makeDeps({
+    sendKeys: async () => {
+      throw new Error("tmux send-keys exploded");
+    },
+  });
+
+  const result = await createProjectSession(PROJECT, "feature-x", deps, undefined, "npm run dev");
+
+  assert.equal(result.fullName, "proj1-ab12cd__feature-x");
 });
 
 test("createProjectSession propagates WorktreeConflictError from addWorktree", async () => {
@@ -161,7 +292,11 @@ test("killProjectSession kills the tmux session then removes the worktree", asyn
 
   await killProjectSession(PROJECT, "feature-x", deps);
 
+  // The split pane's linked session (see splitPaneSessionName) is killed
+  // first, best-effort, before the primary session -- see killProjectSession's
+  // own doc comment.
   assert.deepEqual(calls, [
+    `kill:${splitPaneSessionName("proj1-ab12cd__feature-x")}`,
     "kill:proj1-ab12cd__feature-x",
     "remove:/repo:/data/worktrees/proj1-ab12cd/feature-x:false",
   ]);
@@ -177,6 +312,51 @@ test("killProjectSession passes the force option through to removeWorktree", asy
   await killProjectSession(PROJECT, "feature-x", deps, { force: true });
 
   assert.deepEqual(calls, [true]);
+});
+
+test("killProjectSession records a 'deleted' event after the worktree is removed", async () => {
+  const calls: string[] = [];
+  const deps = makeDeps({
+    removeWorktree: async () => {
+      calls.push("removeWorktree");
+    },
+    recordEvent: async (_projectId, _sessionSlug, type) => {
+      calls.push(`recordEvent:${type}`);
+    },
+  });
+
+  await killProjectSession(PROJECT, "feature-x", deps);
+
+  assert.deepEqual(calls, ["removeWorktree", "recordEvent:deleted"]);
+});
+
+test("killProjectSession does not delete the branch by default", async () => {
+  let called = false;
+  const deps = makeDeps({
+    deleteBranch: async () => {
+      called = true;
+    },
+  });
+
+  await killProjectSession(PROJECT, "feature-x", deps);
+
+  assert.equal(called, false);
+});
+
+test("killProjectSession force-deletes the branch when deleteBranch is true, after the worktree is removed", async () => {
+  const calls: string[] = [];
+  const deps = makeDeps({
+    removeWorktree: async () => {
+      calls.push("removeWorktree");
+    },
+    deleteBranch: async (repoPath, branchName) => {
+      calls.push(`deleteBranch:${repoPath}:${branchName}`);
+    },
+  });
+
+  await killProjectSession(PROJECT, "feature-x", deps, { deleteBranch: true });
+
+  assert.deepEqual(calls, ["removeWorktree", "deleteBranch:/repo:feature-x"]);
 });
 
 test("killProjectSession tolerates the tmux session already being gone", async () => {
@@ -244,7 +424,9 @@ test("killProjectSession tears down the session's docker-compose environment bef
 
   await killProjectSession(PROJECT, "feature-x", deps);
 
-  assert.deepEqual(calls, ["stopEnv:proj1-ab12cd:feature-x", "kill", "remove"]);
+  // Two "kill" entries: the split pane's linked session (best-effort) first,
+  // then stopEnv, then the primary session.
+  assert.deepEqual(calls, ["kill", "stopEnv:proj1-ab12cd:feature-x", "kill", "remove"]);
 });
 
 test("killProjectSession tolerates stopSessionEnv failing (best-effort teardown)", async () => {
@@ -263,9 +445,47 @@ test("killProjectSession tolerates stopSessionEnv failing (best-effort teardown)
   assert.deepEqual(removeCalls, ["/data/worktrees/proj1-ab12cd/feature-x"]);
 });
 
+test("isProjectSessionBranchMerged delegates to deps.isBranchMerged with repoPath and the session slug as branch name", async () => {
+  const calls: Array<[string, string]> = [];
+  const deps = makeDeps({
+    isBranchMerged: async (repoPath, branchName) => {
+      calls.push([repoPath, branchName]);
+      return false;
+    },
+  });
+
+  const merged = await isProjectSessionBranchMerged(PROJECT, "feature-x", deps);
+
+  assert.equal(merged, false);
+  assert.deepEqual(calls, [["/repo", "feature-x"]]);
+});
+
+test("killProjectSessionSplit kills only the split pane's linked session", async () => {
+  const calls: string[] = [];
+  const deps = makeDeps({
+    killSession: async (name) => {
+      calls.push(name);
+    },
+  });
+
+  await killProjectSessionSplit(PROJECT, "feature-x", deps);
+
+  assert.deepEqual(calls, [splitPaneSessionName("proj1-ab12cd__feature-x")]);
+});
+
+test("killProjectSessionSplit tolerates the split never having been opened", async () => {
+  const deps = makeDeps({
+    killSession: async () => {
+      throw new Error("can't find session");
+    },
+  });
+
+  await killProjectSessionSplit(PROJECT, "feature-x", deps);
+});
+
 test("getProjectSessionChanges resolves the worktree path and delegates to getChangedFiles", async () => {
   const calls: string[] = [];
-  const grouped = { staged: [], unstaged: [], untracked: [] };
+  const grouped: GroupedChanges = { staged: [], unstaged: [], untracked: [], conflicted: [], repoState: "clean" };
   const deps = makeDeps({
     getChangedFiles: async (worktreePath: string) => {
       calls.push(worktreePath);
@@ -294,6 +514,66 @@ test("getProjectSessionDiff resolves the worktree path and delegates to getFileD
     { worktreePath: "/data/worktrees/proj1-ab12cd/feature-x", filePath: "src/index.ts", mode: "staged" },
   ]);
   assert.equal(result.diff, "diff text");
+});
+
+test("stageProjectSessionFile resolves the worktree path and delegates to stageFile", async () => {
+  const calls: Array<{ worktreePath: string; filePath: string }> = [];
+  const deps = makeDeps({
+    stageFile: async (worktreePath: string, filePath: string) => {
+      calls.push({ worktreePath, filePath });
+    },
+  });
+
+  await stageProjectSessionFile(PROJECT, "feature-x", "src/index.ts", deps);
+
+  assert.deepEqual(calls, [
+    { worktreePath: "/data/worktrees/proj1-ab12cd/feature-x", filePath: "src/index.ts" },
+  ]);
+});
+
+test("unstageProjectSessionFile resolves the worktree path and delegates to unstageFile", async () => {
+  const calls: Array<{ worktreePath: string; filePath: string }> = [];
+  const deps = makeDeps({
+    unstageFile: async (worktreePath: string, filePath: string) => {
+      calls.push({ worktreePath, filePath });
+    },
+  });
+
+  await unstageProjectSessionFile(PROJECT, "feature-x", "src/index.ts", deps);
+
+  assert.deepEqual(calls, [
+    { worktreePath: "/data/worktrees/proj1-ab12cd/feature-x", filePath: "src/index.ts" },
+  ]);
+});
+
+test("discardProjectSessionFile resolves the worktree path and delegates to discardFile", async () => {
+  const calls: Array<{ worktreePath: string; filePath: string; mode: string }> = [];
+  const deps = makeDeps({
+    discardFile: async (worktreePath: string, filePath: string, mode: "staged" | "unstaged" | "untracked") => {
+      calls.push({ worktreePath, filePath, mode });
+    },
+  });
+
+  await discardProjectSessionFile(PROJECT, "feature-x", "src/index.ts", "unstaged", deps);
+
+  assert.deepEqual(calls, [
+    { worktreePath: "/data/worktrees/proj1-ab12cd/feature-x", filePath: "src/index.ts", mode: "unstaged" },
+  ]);
+});
+
+test("commitProjectSessionChanges resolves the worktree path and delegates to commitStaged", async () => {
+  const calls: Array<{ worktreePath: string; message: string }> = [];
+  const deps = makeDeps({
+    commitStaged: async (worktreePath: string, message: string) => {
+      calls.push({ worktreePath, message });
+    },
+  });
+
+  await commitProjectSessionChanges(PROJECT, "feature-x", "fix: a bug", deps);
+
+  assert.deepEqual(calls, [
+    { worktreePath: "/data/worktrees/proj1-ab12cd/feature-x", message: "fix: a bug" },
+  ]);
 });
 
 test("startProjectSessionCreation returns {name, fullName} immediately without waiting for the background work", async () => {
@@ -350,7 +630,7 @@ test("startProjectSessionCreation reports {phase: 'ready', session} once the bac
 
   assert.deepEqual(store.get("proj1-ab12cd__feature-x"), {
     phase: "ready",
-    session: { name: "feature-x", fullName: "proj1-ab12cd__feature-x", windows: 1, attached: false },
+    session: { name: "feature-x", fullName: "proj1-ab12cd__feature-x", windows: 1, attached: false, favorite: false },
   });
 });
 

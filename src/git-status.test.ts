@@ -2,15 +2,21 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFile as execFileCb, execFileSync } from "node:child_process";
 import { promisify } from "node:util";
-import { mkdtemp, writeFile, rm, mkdir } from "node:fs/promises";
+import { mkdtemp, writeFile, readFile, rm, mkdir, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   parseStatusPorcelain,
   getChangedFiles,
   getFileDiff,
+  stageFile,
+  unstageFile,
+  discardFile,
+  commitStaged,
+  getRepoState,
   WorktreeNotFoundError,
   GitStatusError,
+  NothingStagedError,
 } from "./git-status.ts";
 
 const execFileAsync = promisify(execFileCb);
@@ -66,11 +72,18 @@ test("parseStatusPorcelain stays aligned for entries after a rename", () => {
   ]);
 });
 
-test("parseStatusPorcelain falls back to 'modified' for unmerged/conflict codes", () => {
+test("parseStatusPorcelain marks an unmerged path as a single conflicted entry, not both staged and unstaged", () => {
   assert.deepEqual(parseStatusPorcelain("UU conflict.txt\0"), [
-    { path: "conflict.txt", status: "modified", staged: true, oldPath: undefined },
-    { path: "conflict.txt", status: "modified", staged: false, oldPath: undefined },
+    { path: "conflict.txt", status: "modified", staged: false, oldPath: undefined, conflicted: true },
   ]);
+});
+
+test("parseStatusPorcelain recognizes every unmerged XY combination", () => {
+  for (const xy of ["DD", "AU", "UD", "UA", "DU", "AA", "UU"]) {
+    const result = parseStatusPorcelain(`${xy} x.txt\0`);
+    assert.equal(result.length, 1, `expected exactly one entry for ${xy}`);
+    assert.equal(result[0].conflicted, true, `expected ${xy} to be marked conflicted`);
+  }
 });
 
 test("parseStatusPorcelain handles paths containing spaces (unquoted under -z)", () => {
@@ -83,15 +96,23 @@ test("parseStatusPorcelain handles paths containing spaces (unquoted under -z)",
 
 const fakeDirStat = async () => ({ isDirectory: () => true });
 
-test("getChangedFiles groups parsed entries into staged/unstaged/untracked", async () => {
+// Reports isDirectory():true only for the worktree root itself ("/repo"),
+// so assertWorktreeExists passes, but resolving ".git" (and anything under
+// it) falls through to the real filesystem, which fails harmlessly for a
+// path that doesn't really exist -- getRepoState degrades to "clean".
+const fakeStatWorktreeRootOnly = async (path: string) => ({ isDirectory: () => path === "/repo" });
+
+test("getChangedFiles groups parsed entries into staged/unstaged/untracked/conflicted", async () => {
   const fakeExec = async () => ({
-    stdout: "A  staged.txt\0 M unstaged.txt\0?? untracked.txt\0",
+    stdout: "A  staged.txt\0 M unstaged.txt\0?? untracked.txt\0UU conflict.txt\0",
   });
-  const result = await getChangedFiles("/repo", fakeExec, fakeDirStat);
+  const result = await getChangedFiles("/repo", fakeExec, fakeStatWorktreeRootOnly);
   assert.deepEqual(result, {
     staged: [{ path: "staged.txt", status: "added", staged: true, oldPath: undefined }],
     unstaged: [{ path: "unstaged.txt", status: "modified", staged: false, oldPath: undefined }],
     untracked: [{ path: "untracked.txt", status: "untracked", staged: false, oldPath: undefined }],
+    conflicted: [{ path: "conflict.txt", status: "modified", staged: false, oldPath: undefined, conflicted: true }],
+    repoState: "clean",
   });
 });
 
@@ -130,6 +151,120 @@ test("getFileDiff detects a binary diff and omits the raw (garbled) output", asy
   const fakeExec = async () => ({ stdout: "Binary files a/x.png and b/x.png differ\n" });
   const result = await getFileDiff("/repo", "x.png", "unstaged", fakeExec);
   assert.deepEqual(result, { diff: "", isUntracked: false, isBinary: true });
+});
+
+// --- stageFile / unstageFile / discardFile (fake exec) ---
+
+test("stageFile runs git add scoped to the worktree", async () => {
+  const calls: string[][] = [];
+  const fakeExec = async (_file: string, args: string[]) => {
+    calls.push(args);
+    return { stdout: "" };
+  };
+  await stageFile("/repo", "src/index.ts", fakeExec);
+  assert.deepEqual(calls, [["-C", "/repo", "add", "--", "src/index.ts"]]);
+});
+
+test("stageFile rejects a path that escapes the worktree", async () => {
+  await assert.rejects(() => stageFile("/repo", "../../etc/passwd"), GitStatusError);
+});
+
+test("unstageFile runs git restore --staged scoped to the worktree", async () => {
+  const calls: string[][] = [];
+  const fakeExec = async (_file: string, args: string[]) => {
+    calls.push(args);
+    return { stdout: "" };
+  };
+  await unstageFile("/repo", "src/index.ts", fakeExec);
+  assert.deepEqual(calls, [["-C", "/repo", "restore", "--staged", "--", "src/index.ts"]]);
+});
+
+test("unstageFile rejects a path that escapes the worktree", async () => {
+  await assert.rejects(() => unstageFile("/repo", "../../etc/passwd"), GitStatusError);
+});
+
+test("discardFile runs git checkout HEAD for a staged/unstaged file", async () => {
+  const calls: string[][] = [];
+  const fakeExec = async (_file: string, args: string[]) => {
+    calls.push(args);
+    return { stdout: "" };
+  };
+  await discardFile("/repo", "src/index.ts", "unstaged", fakeExec);
+  assert.deepEqual(calls, [["-C", "/repo", "checkout", "HEAD", "--", "src/index.ts"]]);
+});
+
+test("discardFile falls back to reset + delete when the path doesn't exist in HEAD", async () => {
+  await withTempDir(async (dir) => {
+    await writeFile(join(dir, "new.txt"), "brand new\n");
+    const calls: string[][] = [];
+    const fakeExec = async (_file: string, args: string[]) => {
+      calls.push(args);
+      if (args[2] === "checkout") {
+        throw new Error("error: pathspec 'new.txt' did not match any file(s) known to git");
+      }
+      return { stdout: "" };
+    };
+    await discardFile(dir, "new.txt", "staged", fakeExec);
+    assert.deepEqual(calls, [
+      ["-C", dir, "checkout", "HEAD", "--", "new.txt"],
+      ["-C", dir, "reset", "--", "new.txt"],
+    ]);
+    await assert.rejects(() => stat(join(dir, "new.txt")));
+  });
+});
+
+test("discardFile rethrows unrelated git errors instead of swallowing them", async () => {
+  const fakeExec = async () => {
+    throw new Error("fatal: not a git repository");
+  };
+  await assert.rejects(() => discardFile("/repo", "x.txt", "unstaged", fakeExec), /not a git repository/);
+});
+
+test("discardFile deletes the file directly for untracked mode", async () => {
+  await withTempDir(async (dir) => {
+    await writeFile(join(dir, "scratch.txt"), "not added\n");
+    await discardFile(dir, "scratch.txt", "untracked", async () => {
+      throw new Error("exec must not be called for untracked discards");
+    });
+    await assert.rejects(() => stat(join(dir, "scratch.txt")));
+  });
+});
+
+test("discardFile rejects a path that escapes the worktree", async () => {
+  await assert.rejects(() => discardFile("/repo", "../../etc/passwd", "unstaged"), GitStatusError);
+});
+
+// --- commitStaged (fake exec) ---
+
+test("commitStaged runs git commit -m with the trimmed message", async () => {
+  const calls: string[][] = [];
+  const fakeExec = async (_file: string, args: string[]) => {
+    calls.push(args);
+    return { stdout: "" };
+  };
+  await commitStaged("/repo", "  fix: a bug  ", fakeExec);
+  assert.deepEqual(calls, [["-C", "/repo", "commit", "-m", "fix: a bug"]]);
+});
+
+test("commitStaged rejects an empty/whitespace-only message without calling exec", async () => {
+  await assert.rejects(
+    () => commitStaged("/repo", "   ", async () => { throw new Error("exec must not be called"); }),
+    GitStatusError,
+  );
+});
+
+test("commitStaged throws NothingStagedError when git reports nothing to commit", async () => {
+  const fakeExec = async () => {
+    throw new Error("nothing to commit, working tree clean");
+  };
+  await assert.rejects(() => commitStaged("/repo", "msg", fakeExec), NothingStagedError);
+});
+
+test("commitStaged rethrows unrelated git errors", async () => {
+  const fakeExec = async () => {
+    throw new Error("fatal: not a git repository");
+  };
+  await assert.rejects(() => commitStaged("/repo", "msg", fakeExec), /not a git repository/);
 });
 
 // --- getFileDiff (untracked, real fs) ---
@@ -226,6 +361,124 @@ test(
 
       const binaryDiff = await getFileDiff(dir, "image.bin", "untracked");
       assert.equal(binaryDiff.isBinary, true);
+    });
+  },
+);
+
+test(
+  "real git integration: stage, unstage, and discard round-trip correctly",
+  { skip: !isGitAvailable() },
+  async () => {
+    await withTempDir(async (dir) => {
+      await execFileAsync("git", ["init", "--quiet", dir]);
+      await execFileAsync("git", ["-C", dir, "config", "user.email", "test@example.com"]);
+      await execFileAsync("git", ["-C", dir, "config", "user.name", "Test"]);
+      await writeFile(join(dir, "tracked.txt"), "original\n");
+      await execFileAsync("git", ["-C", dir, "add", "tracked.txt"]);
+      await execFileAsync("git", ["-C", dir, "commit", "--quiet", "-m", "initial"]);
+
+      // stageFile: an untracked file becomes staged
+      await writeFile(join(dir, "new.txt"), "brand new\n");
+      await stageFile(dir, "new.txt");
+      let changes = await getChangedFiles(dir);
+      assert.deepEqual(changes.staged.map((f) => f.path), ["new.txt"]);
+
+      // unstageFile: back to untracked
+      await unstageFile(dir, "new.txt");
+      changes = await getChangedFiles(dir);
+      assert.deepEqual(changes.staged, []);
+      assert.deepEqual(changes.untracked.map((f) => f.path), ["new.txt"]);
+
+      // discardFile (staged, not in HEAD): fully removed
+      await stageFile(dir, "new.txt");
+      await discardFile(dir, "new.txt", "staged");
+      changes = await getChangedFiles(dir);
+      assert.deepEqual(changes.staged, []);
+      assert.deepEqual(changes.untracked, []);
+      await assert.rejects(() => stat(join(dir, "new.txt")));
+
+      // discardFile (unstaged, tracked): working tree change reverted
+      await writeFile(join(dir, "tracked.txt"), "changed\n");
+      await discardFile(dir, "tracked.txt", "unstaged");
+      changes = await getChangedFiles(dir);
+      assert.deepEqual(changes.unstaged, []);
+      const content = await readFile(join(dir, "tracked.txt"), "utf-8");
+      assert.equal(content, "original\n");
+
+      // discardFile (untracked): file deleted directly
+      await writeFile(join(dir, "scratch.txt"), "temp\n");
+      await discardFile(dir, "scratch.txt", "untracked");
+      await assert.rejects(() => stat(join(dir, "scratch.txt")));
+    });
+  },
+);
+
+test(
+  "real git integration: commitStaged commits staged changes and rejects when nothing is staged",
+  { skip: !isGitAvailable() },
+  async () => {
+    await withTempDir(async (dir) => {
+      await execFileAsync("git", ["init", "--quiet", dir]);
+      await execFileAsync("git", ["-C", dir, "config", "user.email", "test@example.com"]);
+      await execFileAsync("git", ["-C", dir, "config", "user.name", "Test"]);
+      await writeFile(join(dir, "tracked.txt"), "original\n");
+      await execFileAsync("git", ["-C", dir, "add", "tracked.txt"]);
+      await execFileAsync("git", ["-C", dir, "commit", "--quiet", "-m", "initial"]);
+
+      await assert.rejects(() => commitStaged(dir, "should fail"), NothingStagedError);
+
+      await writeFile(join(dir, "tracked.txt"), "changed\n");
+      await execFileAsync("git", ["-C", dir, "add", "tracked.txt"]);
+      await commitStaged(dir, "update tracked.txt");
+
+      const { stdout } = await execFileAsync("git", ["-C", dir, "log", "-1", "--format=%s"]);
+      assert.equal(stdout.trim(), "update tracked.txt");
+      const changes = await getChangedFiles(dir);
+      assert.deepEqual(changes.staged, []);
+      assert.deepEqual(changes.unstaged, []);
+    });
+  },
+);
+
+test("getRepoState returns 'clean' for a plain directory with no .git", async () => {
+  await withTempDir(async (dir) => {
+    assert.equal(await getRepoState(dir), "clean");
+  });
+});
+
+test(
+  "real git integration: getRepoState and getChangedFiles's conflicted bucket detect a real merge conflict",
+  { skip: !isGitAvailable() },
+  async () => {
+    await withTempDir(async (dir) => {
+      await execFileAsync("git", ["init", "--quiet", "-b", "main", dir]);
+      await execFileAsync("git", ["-C", dir, "config", "user.email", "test@example.com"]);
+      await execFileAsync("git", ["-C", dir, "config", "user.name", "Test"]);
+      await writeFile(join(dir, "shared.txt"), "base\n");
+      await execFileAsync("git", ["-C", dir, "add", "shared.txt"]);
+      await execFileAsync("git", ["-C", dir, "commit", "--quiet", "-m", "base"]);
+
+      await execFileAsync("git", ["-C", dir, "checkout", "--quiet", "-b", "feature"]);
+      await writeFile(join(dir, "shared.txt"), "feature change\n");
+      await execFileAsync("git", ["-C", dir, "commit", "--quiet", "-am", "feature change"]);
+
+      await execFileAsync("git", ["-C", dir, "checkout", "--quiet", "main"]);
+      await writeFile(join(dir, "shared.txt"), "main change\n");
+      await execFileAsync("git", ["-C", dir, "commit", "--quiet", "-am", "main change"]);
+
+      // Merge feature into main -- guaranteed to conflict on shared.txt.
+      await assert.rejects(() => execFileAsync("git", ["-C", dir, "merge", "feature"]));
+
+      assert.equal(await getRepoState(dir), "merging");
+
+      const changes = await getChangedFiles(dir);
+      assert.deepEqual(changes.conflicted.map((f) => f.path), ["shared.txt"]);
+      assert.equal(changes.conflicted[0].conflicted, true);
+      assert.deepEqual(changes.staged, []);
+      assert.deepEqual(changes.unstaged, []);
+
+      await execFileAsync("git", ["-C", dir, "merge", "--abort"]);
+      assert.equal(await getRepoState(dir), "clean");
     });
   },
 );

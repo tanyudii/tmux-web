@@ -11,6 +11,9 @@ import {
   getPaneMode,
   scrollPane,
   cancelCopyMode,
+  setBellHook,
+  ensureLinkedSession,
+  sendKeysToSession,
   ValidationError,
 } from "./tmux.ts";
 
@@ -335,5 +338,99 @@ test("cancelCopyMode is a no-op when the pane is not in copy-mode", async () => 
 
   assert.deepEqual(calls, [
     { file: "tmux", args: ["display-message", "-p", "-t", "main", "#{pane_in_mode}"] },
+  ]);
+});
+
+test("setBellHook rejects invalid session names without calling exec", async () => {
+  let called = false;
+  const fakeExec = async () => {
+    called = true;
+    return { stdout: "" };
+  };
+
+  await assert.rejects(() => setBellHook("../etc", 5309, fakeExec), ValidationError);
+  assert.equal(called, false);
+});
+
+test("setBellHook sets the alert-bell hook (not 'bell' -- that hook name doesn't exist in tmux) to curl the internal endpoint", async () => {
+  const calls: Array<{ file: string; args: string[] }> = [];
+  const fakeExec = async (file: string, args: string[]) => {
+    calls.push({ file, args });
+    return { stdout: "" };
+  };
+
+  await setBellHook("proj1-ab12cd__feature-x", 5309, fakeExec);
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].file, "tmux");
+  assert.deepEqual(calls[0].args.slice(0, 3), ["set-hook", "-t", "proj1-ab12cd__feature-x"]);
+  assert.equal(calls[0].args[3], "alert-bell");
+  const runShellCommand = calls[0].args[4];
+  assert.match(runShellCommand, /^run-shell -b '/);
+  assert.match(runShellCommand, /curl -fsS -m 3 -X POST "http:\/\/127\.0\.0\.1:5309\/internal\/bell\?session=proj1-ab12cd__feature-x"/);
+});
+
+test("sendKeysToSession rejects invalid session names without calling exec", async () => {
+  let called = false;
+  const fakeExec = async () => {
+    called = true;
+    return { stdout: "" };
+  };
+
+  await assert.rejects(() => sendKeysToSession("../etc", "npm run dev", fakeExec), ValidationError);
+  assert.equal(called, false);
+});
+
+test("sendKeysToSession sends the text followed by Enter as a single argv element (no shell)", async () => {
+  const calls: Array<{ file: string; args: string[] }> = [];
+  const fakeExec = async (file: string, args: string[]) => {
+    calls.push({ file, args });
+    return { stdout: "" };
+  };
+
+  await sendKeysToSession("main", "npm run dev && echo done", fakeExec);
+
+  assert.deepEqual(calls, [
+    { file: "tmux", args: ["send-keys", "-t", "main", "npm run dev && echo done", "Enter"] },
+  ]);
+});
+
+test("ensureLinkedSession rejects invalid names without calling exec", async () => {
+  let called = false;
+  const fakeExec = async () => {
+    called = true;
+    return { stdout: "" };
+  };
+
+  await assert.rejects(() => ensureLinkedSession("../etc", "main", fakeExec), ValidationError);
+  await assert.rejects(() => ensureLinkedSession("split1", "../etc", fakeExec), ValidationError);
+  assert.equal(called, false);
+});
+
+test("ensureLinkedSession does nothing when the session already exists", async () => {
+  const calls: Array<{ file: string; args: string[] }> = [];
+  const fakeExec = async (file: string, args: string[]) => {
+    calls.push({ file, args });
+    return { stdout: "" };
+  };
+
+  await ensureLinkedSession("split1", "main", fakeExec);
+
+  assert.deepEqual(calls, [{ file: "tmux", args: ["has-session", "-t", "split1"] }]);
+});
+
+test("ensureLinkedSession creates a linked session onto the source when it doesn't exist yet", async () => {
+  const calls: Array<{ file: string; args: string[] }> = [];
+  const fakeExec = async (file: string, args: string[]) => {
+    calls.push({ file, args });
+    if (args[0] === "has-session") throw new Error("can't find session split1");
+    return { stdout: "" };
+  };
+
+  await ensureLinkedSession("split1", "main", fakeExec);
+
+  assert.deepEqual(calls, [
+    { file: "tmux", args: ["has-session", "-t", "split1"] },
+    { file: "tmux", args: ["new-session", "-d", "-t", "main", "-s", "split1"] },
   ]);
 });

@@ -1,5 +1,7 @@
 package com.tanyudii.tmuxweb.presentation
 
+import com.tanyudii.tmuxweb.domain.model.ChangedFile
+import com.tanyudii.tmuxweb.domain.model.DiffMode
 import com.tanyudii.tmuxweb.domain.model.GroupedChanges
 import com.tanyudii.tmuxweb.domain.repository.ChangesRepository
 import kotlinx.coroutines.CoroutineScope
@@ -18,7 +20,33 @@ import kotlinx.coroutines.launch
 data class ChangesUiState(
     val changes: GroupedChanges? = null,
     val errorMessage: String? = null,
+    // Set by requestDiscard() while a destructive discard awaits the
+    // TmuxConfirmDialog in ChangesRail's host -- see EMB-204. Stage/unstage
+    // are non-destructive (reversible with the counterpart action) so they
+    // fire immediately without this confirmation step.
+    val pendingDiscard: PendingDiscard? = null,
+    // EMB-205: commit message draft lives here (not local Compose state) so
+    // it survives ChangesRail recomposition and clears itself on success.
+    val commitMessage: String = "",
+    val isCommitting: Boolean = false,
 )
+
+data class PendingDiscard(val file: ChangedFile, val mode: DiffMode)
+
+/**
+ * Shared wording for the discard confirmation dialog -- pulled out of
+ * `WebShellScreen.kt` (its only prior home) so `ui/terminal`'s mobile
+ * Changes screen (EMB-225) shows the exact same message instead of a
+ * copy that could drift.
+ */
+fun discardConfirmMessage(pending: PendingDiscard): String {
+    val fileName = pending.file.path.substringAfterLast('/')
+    return if (pending.mode == DiffMode.UNTRACKED) {
+        "“$fileName” will be deleted. This can't be undone."
+    } else {
+        "Uncommitted changes to “$fileName” will be reverted. This can't be undone."
+    }
+}
 
 class ChangesViewModel(
     private val projectId: String,
@@ -45,6 +73,69 @@ class ChangesViewModel(
 
     fun dismissError() {
         _state.update { it.copy(errorMessage = null) }
+    }
+
+    fun stage(file: ChangedFile) {
+        scope.launch {
+            runSuspendCatching { repository.stage(projectId, sessionName, file.path) }
+                .onSuccess { load() }
+                .onFailure { error -> _state.update { it.copy(errorMessage = error.toUiMessage()) } }
+        }
+    }
+
+    fun unstage(file: ChangedFile) {
+        scope.launch {
+            runSuspendCatching { repository.unstage(projectId, sessionName, file.path) }
+                .onSuccess { load() }
+                .onFailure { error -> _state.update { it.copy(errorMessage = error.toUiMessage()) } }
+        }
+    }
+
+    /** Discard is destructive and irreversible, so it waits for confirmDiscard() rather than firing immediately. */
+    fun requestDiscard(file: ChangedFile, mode: DiffMode) {
+        _state.update { it.copy(pendingDiscard = PendingDiscard(file, mode)) }
+    }
+
+    fun cancelDiscard() {
+        _state.update { it.copy(pendingDiscard = null) }
+    }
+
+    fun confirmDiscard() {
+        val pending = _state.value.pendingDiscard ?: return
+        scope.launch {
+            runSuspendCatching { repository.discard(projectId, sessionName, pending.file.path, pending.mode) }
+                .onSuccess {
+                    _state.update { it.copy(pendingDiscard = null) }
+                    load()
+                }
+                .onFailure { error ->
+                    _state.update { it.copy(pendingDiscard = null, errorMessage = error.toUiMessage()) }
+                }
+        }
+    }
+
+    fun updateCommitMessage(message: String) {
+        _state.update { it.copy(commitMessage = message) }
+    }
+
+    /**
+     * No-op if a commit is already in flight or the message is blank --
+     * callers gate the button on canCommit anyway.
+     */
+    fun commit() {
+        val message = _state.value.commitMessage.trim()
+        if (message.isEmpty() || _state.value.isCommitting) return
+        _state.update { it.copy(isCommitting = true) }
+        scope.launch {
+            runSuspendCatching { repository.commit(projectId, sessionName, message) }
+                .onSuccess {
+                    _state.update { it.copy(isCommitting = false, commitMessage = "") }
+                    load()
+                }
+                .onFailure { error ->
+                    _state.update { it.copy(isCommitting = false, errorMessage = error.toUiMessage()) }
+                }
+        }
     }
 
     private suspend fun load() {

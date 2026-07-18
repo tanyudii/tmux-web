@@ -125,6 +125,44 @@ export async function addWorktree(
   }
 }
 
+// EMB-207: whether `branchName` is fully merged into origin's default
+// branch -- i.e. every commit on it already exists there, so deleting it
+// loses no work. Uses `git merge-base --is-ancestor`, which exits 0 when
+// true and 1 (not an error) when false; any other exit code (invalid
+// branch, no such ref, ...) is a real error and propagates as WorktreeError.
+export async function isBranchMerged(
+  repoPath: string,
+  branchName: string,
+  exec: ExecFn = defaultExec,
+): Promise<boolean> {
+  const baseBranch = await resolveOriginDefaultBranch(repoPath, exec);
+  try {
+    await exec("git", ["-C", repoPath, "merge-base", "--is-ancestor", branchName, `origin/${baseBranch}`]);
+    return true;
+  } catch (error) {
+    const exitCode = (error as { code?: number })?.code;
+    if (exitCode === 1) return false;
+    throw new WorktreeError(messageOf(error));
+  }
+}
+
+// EMB-207: force-deletes a local branch (`git branch -D`) -- callers are
+// responsible for deciding whether that's safe (see isBranchMerged above)
+// or whether the caller has already gotten explicit user confirmation for
+// an unmerged branch; this function itself applies no safety check of its
+// own; it does exactly what's asked.
+export async function deleteBranch(
+  repoPath: string,
+  branchName: string,
+  exec: ExecFn = defaultExec,
+): Promise<void> {
+  try {
+    await exec("git", ["-C", repoPath, "branch", "-D", branchName]);
+  } catch (error) {
+    throw new WorktreeError(messageOf(error));
+  }
+}
+
 export interface RemoveWorktreeOptions {
   force?: boolean;
 }
