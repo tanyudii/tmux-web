@@ -126,7 +126,10 @@ internal fun ChangesRail(
     }
 }
 
-/** Commit-message input + commit button (EMB-205) -- disabled while nothing is staged or a commit is already in flight. */
+/**
+ * Commit-message input + commit button (EMB-205) -- disabled while nothing
+ * is staged or a commit is already in flight.
+ */
 @Composable
 private fun CommitFooter(
     message: String,
@@ -318,7 +321,12 @@ private fun ChangeNodeRow(
 @Composable
 private fun TmuxIconButton(icon: ImageVector, contentDescription: String, onClick: () -> Unit) {
     IconButton(onClick = onClick, modifier = Modifier.size(22.dp)) {
-        Icon(icon, contentDescription = contentDescription, tint = TmuxColors.textTertiary, modifier = Modifier.size(13.dp))
+        Icon(
+            icon,
+            contentDescription = contentDescription,
+            tint = TmuxColors.textTertiary,
+            modifier = Modifier.size(13.dp),
+        )
     }
 }
 

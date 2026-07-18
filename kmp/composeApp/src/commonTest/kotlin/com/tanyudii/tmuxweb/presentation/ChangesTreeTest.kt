@@ -28,7 +28,9 @@ class ChangesTreeTest {
         staged.map(::file),
         unstaged.map(::file),
         untracked.map(::file),
-        conflicted.map { ChangedFile(path = it, oldPath = null, status = FileStatus.MODIFIED, staged = false, conflicted = true) },
+        conflicted.map {
+            ChangedFile(path = it, oldPath = null, status = FileStatus.MODIFIED, staged = false, conflicted = true)
+        },
     )
 
     @Test

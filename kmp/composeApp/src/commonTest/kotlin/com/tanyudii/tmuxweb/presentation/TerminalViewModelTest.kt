@@ -47,7 +47,7 @@ class TerminalViewModelTest {
     }
 
     @Test
-    fun `connect passes a non-default pane through to the socket (EMB-217 split viewport)`() = runTest {
+    fun `connect passes a non-default pane through to the socket -- EMB-217 split viewport`() = runTest {
         val socket = FakeTerminalSocket()
 
         viewModel(socket).connect("proj__main", pane = 1)
@@ -180,7 +180,7 @@ class TerminalViewModelTest {
     }
 
     @Test
-    fun `reconnect preserves the originally connected pane (EMB-217 split viewport)`() = runTest {
+    fun `reconnect preserves the originally connected pane -- EMB-217 split viewport`() = runTest {
         val socket = FakeTerminalSocket()
         val viewModel = viewModel(socket)
         viewModel.connect("proj__main", pane = 1)

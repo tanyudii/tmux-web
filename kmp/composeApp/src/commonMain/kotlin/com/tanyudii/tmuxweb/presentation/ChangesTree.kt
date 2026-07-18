@@ -55,7 +55,8 @@ fun buildChangeRows(changes: GroupedChanges?, collapsedKeys: Set<String>): List<
         if (groupKey in collapsedKeys) {
             listOf(header)
         } else {
-            listOf(header) + flattenNodes(buildFileTree(files), mode, section.label, depth = 1, pathPrefix = "", collapsedKeys)
+            listOf(header) +
+                flattenNodes(buildFileTree(files), mode, section.label, depth = 1, pathPrefix = "", collapsedKeys)
         }
     }
 }

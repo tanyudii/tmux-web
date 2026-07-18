@@ -43,7 +43,13 @@ private const val DIALOG_HEIGHT_FRACTION = 0.8f
  * change to take effect, same as editing these files by hand always did.
  */
 @Composable
-fun TmuxEnvFileEditorDialog(state: EnvFileEditorUiState, onDismiss: () -> Unit, onSelectFile: (String) -> Unit, onDraftChange: (String) -> Unit, onSave: () -> Unit) {
+fun TmuxEnvFileEditorDialog(
+    state: EnvFileEditorUiState,
+    onDismiss: () -> Unit,
+    onSelectFile: (String) -> Unit,
+    onDraftChange: (String) -> Unit,
+    onSave: () -> Unit,
+) {
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Column(
             modifier = Modifier
@@ -76,7 +82,12 @@ private fun EditorHeader(onDismiss: () -> Unit) {
         horizontalArrangement = Arrangement.spacedBy(10.dp),
         modifier = Modifier.fillMaxWidth().height(52.dp).padding(horizontal = 16.dp),
     ) {
-        TmuxIconButton(icon = TmuxIcons.Close, contentDescription = "Close editor", onClick = onDismiss, size = TmuxIconButtonSize.SM)
+        TmuxIconButton(
+            icon = TmuxIcons.Close,
+            contentDescription = "Close editor",
+            onClick = onDismiss,
+            size = TmuxIconButtonSize.SM,
+        )
         Text(
             ".tmux-web-env",
             color = TmuxColors.textPrimary,

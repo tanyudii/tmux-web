@@ -108,7 +108,9 @@ class ChangesViewModel(
                     _state.update { it.copy(pendingDiscard = null) }
                     load()
                 }
-                .onFailure { error -> _state.update { it.copy(pendingDiscard = null, errorMessage = error.toUiMessage()) } }
+                .onFailure { error ->
+                    _state.update { it.copy(pendingDiscard = null, errorMessage = error.toUiMessage()) }
+                }
         }
     }
 
@@ -116,7 +118,10 @@ class ChangesViewModel(
         _state.update { it.copy(commitMessage = message) }
     }
 
-    /** No-op if a commit is already in flight or the message is blank -- callers gate the button on canCommit anyway. */
+    /**
+     * No-op if a commit is already in flight or the message is blank --
+     * callers gate the button on canCommit anyway.
+     */
     fun commit() {
         val message = _state.value.commitMessage.trim()
         if (message.isEmpty() || _state.value.isCommitting) return
@@ -127,7 +132,9 @@ class ChangesViewModel(
                     _state.update { it.copy(isCommitting = false, commitMessage = "") }
                     load()
                 }
-                .onFailure { error -> _state.update { it.copy(isCommitting = false, errorMessage = error.toUiMessage()) } }
+                .onFailure { error ->
+                    _state.update { it.copy(isCommitting = false, errorMessage = error.toUiMessage()) }
+                }
         }
     }
 

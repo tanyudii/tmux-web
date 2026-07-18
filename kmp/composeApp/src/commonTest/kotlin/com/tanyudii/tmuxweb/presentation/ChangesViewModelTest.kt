@@ -114,7 +114,8 @@ class ChangesViewModelTest {
         assertNull(viewModel.state.value.errorMessage)
     }
 
-    private fun file(path: String) = ChangedFile(path = path, oldPath = null, status = FileStatus.MODIFIED, staged = false)
+    private fun file(path: String) =
+        ChangedFile(path = path, oldPath = null, status = FileStatus.MODIFIED, staged = false)
 
     @Test
     fun `stage calls the repository and reloads changes`() = runTest {
@@ -182,7 +183,7 @@ class ChangesViewModelTest {
     }
 
     @Test
-    fun `confirmDiscard calls the repository, clears pendingDiscard, and reloads`() = runTest {
+    fun `confirmDiscard calls the repository then clears pendingDiscard and reloads`() = runTest {
         val repository = FakeChangesRepository()
         repository.changesQueue.add(Result.success(changes("a.txt")))
         val viewModel = viewModel(repository)
@@ -237,7 +238,7 @@ class ChangesViewModelTest {
     }
 
     @Test
-    fun `commit calls the repository, clears the message, and reloads`() = runTest {
+    fun `commit calls the repository then clears the message and reloads`() = runTest {
         val repository = FakeChangesRepository()
         repository.changesQueue.add(Result.success(changes()))
         val viewModel = viewModel(repository)

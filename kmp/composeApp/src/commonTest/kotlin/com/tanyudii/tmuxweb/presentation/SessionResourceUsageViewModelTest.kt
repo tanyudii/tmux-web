@@ -73,7 +73,7 @@ class SessionResourceUsageViewModelTest {
     }
 
     @Test
-    fun `a transient poll failure is swallowed, leaving the last good reading on screen`() = runTest {
+    fun `a transient poll failure is swallowed leaving the last good reading on screen`() = runTest {
         val repository = FakeSessionResourceUsageRepository(running)
         val viewModel = viewModel(repository)
         runCurrent()
