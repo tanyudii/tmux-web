@@ -347,4 +347,32 @@ class SessionListViewModelTest {
         viewModel.setBranchQuery("bugfix")
         assertEquals(listOf(idle), viewModel.state.value.filteredSessions)
     }
+
+    @Test
+    fun `setSessionMeta updates the matching session's label and favorite on success`() = runTest {
+        val repository = FakeSessionsRepository(listOf(session("a"), session("b")))
+        val viewModel = immediateViewModel(repository)
+
+        viewModel.setSessionMeta(session("a"), "Important", true)
+
+        val updated = viewModel.state.value.sessions.first { it.name == "a" }
+        assertEquals("Important", updated.label)
+        assertTrue(updated.favorite)
+        // Untouched session stays exactly as it was.
+        assertEquals(session("b"), viewModel.state.value.sessions.first { it.name == "b" })
+        assertEquals(listOf(Triple("a", "Important" as String?, true)), repository.setSessionMetaCalls)
+    }
+
+    @Test
+    fun `setSessionMeta surfaces a failure as an error message without changing local state`() = runTest {
+        val repository = FakeSessionsRepository(listOf(session("a"))).apply {
+            setSessionMetaError = RuntimeException("network down")
+        }
+        val viewModel = immediateViewModel(repository)
+
+        viewModel.setSessionMeta(session("a"), "Important", true)
+
+        assertEquals("network down", viewModel.state.value.errorMessage)
+        assertEquals(session("a"), viewModel.state.value.sessions.first())
+    }
 }

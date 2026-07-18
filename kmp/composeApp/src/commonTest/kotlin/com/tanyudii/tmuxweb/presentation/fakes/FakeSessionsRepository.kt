@@ -18,6 +18,8 @@ class FakeSessionsRepository(initialSessions: List<ProjectSession> = emptyList()
     val closeSplitPaneCalls = mutableListOf<Pair<String, String>>()
     var branchMerged = true
     val deleteSessionCalls = mutableListOf<Triple<String, Boolean, Boolean>>()
+    var setSessionMetaError: Throwable? = null
+    val setSessionMetaCalls = mutableListOf<Triple<String, String?, Boolean>>()
 
     /** Queue of statuses `sessionCreationStatus` returns in order, one per poll tick. */
     val creationStatusQueue = ArrayDeque<Result<SessionCreationStatus>>()
@@ -56,4 +58,11 @@ class FakeSessionsRepository(initialSessions: List<ProjectSession> = emptyList()
     }
 
     override suspend fun isBranchMerged(projectId: String, sessionName: String): Boolean = branchMerged
+
+    override suspend fun setSessionMeta(projectId: String, sessionName: String, label: String?, favorite: Boolean) {
+        setSessionMetaCalls.add(Triple(sessionName, label, favorite))
+        setSessionMetaError?.let { throw it }
+        val index = sessions.indexOfFirst { it.name == sessionName }
+        if (index != -1) sessions[index] = sessions[index].copy(label = label, favorite = favorite)
+    }
 }

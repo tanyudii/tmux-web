@@ -13,6 +13,7 @@ import androidx.compose.material.icons.outlined.Autorenew
 import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.CheckBox
 import androidx.compose.material.icons.outlined.CheckBoxOutlineBlank
+import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.outlined.Circle
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.DeleteOutline
@@ -29,6 +30,7 @@ import androidx.compose.material.icons.outlined.PlayArrow
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Remove
 import androidx.compose.material.icons.outlined.Settings
+import androidx.compose.material.icons.outlined.StarBorder
 import androidx.compose.material.icons.outlined.Stop
 import androidx.compose.material.icons.outlined.Terminal
 import androidx.compose.material.icons.outlined.VerticalSplit
@@ -85,4 +87,6 @@ object TmuxIcons {
     val History: ImageVector = Icons.Outlined.History
     val CheckboxChecked: ImageVector = Icons.Outlined.CheckBox
     val CheckboxUnchecked: ImageVector = Icons.Outlined.CheckBoxOutlineBlank
+    val StarFilled: ImageVector = Icons.Filled.Star
+    val StarOutline: ImageVector = Icons.Outlined.StarBorder
 }

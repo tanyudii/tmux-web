@@ -7,6 +7,7 @@ import type { RemoveWorktreeOptions } from "./worktree.ts";
 import type { GroupedChanges, FileDiff, DiffMode } from "./git-status.ts";
 import type { EnvFileEntry } from "./env-editor.ts";
 import type { SessionEventType } from "./session-events.ts";
+import type { SessionMeta } from "./session-meta.ts";
 
 export class SessionCreationInProgressError extends Error {}
 export class SessionCreationNotFoundError extends Error {}
@@ -35,6 +36,11 @@ export interface ProjectSession {
   // WindowTabs.kt) instead of a placeholder after a page refresh.
   windowNames?: string[];
   attached: boolean;
+  // EMB-222: short free-text organizational label + favorite flag,
+  // persisted in session-meta.ts. Absent/false for sessions nobody has
+  // labeled/favorited -- existing sessions need no migration.
+  label?: string;
+  favorite: boolean;
 }
 
 export interface ProjectSessionsDeps {
@@ -69,6 +75,12 @@ export interface ProjectSessionsDeps {
   // must never block the actual session operation.
   recordEvent?: (projectId: string, sessionSlug: string, type: SessionEventType, message?: string) => Promise<void>;
   worktreesRoot?: string;
+  // EMB-222: bulk-loads label/favorite metadata for every session in the
+  // project in ONE read (see session-meta.ts), looked up per session in
+  // listProjectSessions's loop below rather than one file read per
+  // session. Optional/best-effort like stopSessionEnv/recordEvent above --
+  // sessions just show no label/favorite if this isn't wired up.
+  listSessionMeta?: (projectId: string) => Promise<SessionMeta[]>;
 }
 
 // "no server running" covers the case where the session being killed was
@@ -97,21 +109,32 @@ export async function listProjectSessions(
   deps: ProjectSessionsDeps,
 ): Promise<ProjectSession[]> {
   const allSessions = await deps.listSessions();
+  const metaBySlug = await loadMetaBySlug(project.id, deps);
   const result: ProjectSession[] = [];
 
   for (const session of allSessions) {
     if (!belongsToProject(session.name, project.id)) continue;
     const parsed = parseSessionName(session.name);
+    const sessionSlug = parsed?.sessionSlug ?? session.name;
+    const meta = metaBySlug.get(sessionSlug);
     result.push({
-      name: parsed?.sessionSlug ?? session.name,
+      name: sessionSlug,
       fullName: session.name,
       windows: session.windows,
       windowNames: await fetchWindowNames(session.name, deps),
       attached: session.attached,
+      label: meta?.label,
+      favorite: meta?.favorite ?? false,
     });
   }
 
   return result;
+}
+
+async function loadMetaBySlug(projectId: string, deps: ProjectSessionsDeps): Promise<Map<string, SessionMeta>> {
+  if (!deps.listSessionMeta) return new Map();
+  const entries = await deps.listSessionMeta(projectId);
+  return new Map(entries.map((entry) => [entry.sessionSlug, entry]));
 }
 
 // Best-effort: a session that vanishes between deps.listSessions() and this
@@ -158,7 +181,7 @@ export async function createProjectSession(
 
   await deps.recordEvent?.(project.id, sessionSlug, "created").catch(() => {});
 
-  return { name: sessionSlug, fullName, windows: 1, attached: false };
+  return { name: sessionSlug, fullName, windows: 1, attached: false, favorite: false };
 }
 
 // Fast entry point: claims the store slot synchronously (mirroring

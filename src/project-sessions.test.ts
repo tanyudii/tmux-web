@@ -76,8 +76,24 @@ test("listProjectSessions returns only sessions belonging to the project, with t
   const result = await listProjectSessions(PROJECT, deps);
 
   assert.deepEqual(result, [
-    { name: "feature-x", fullName: "proj1-ab12cd__feature-x", windows: 2, windowNames: [], attached: true },
-    { name: "bugfix", fullName: "proj1-ab12cd__bugfix", windows: 1, windowNames: [], attached: false },
+    {
+      name: "feature-x",
+      fullName: "proj1-ab12cd__feature-x",
+      windows: 2,
+      windowNames: [],
+      attached: true,
+      label: undefined,
+      favorite: false,
+    },
+    {
+      name: "bugfix",
+      fullName: "proj1-ab12cd__bugfix",
+      windows: 1,
+      windowNames: [],
+      attached: false,
+      label: undefined,
+      favorite: false,
+    },
   ]);
 });
 
@@ -101,6 +117,37 @@ test("listProjectSessions fills in each session's real per-window tmux names, or
   const result = await listProjectSessions(PROJECT, deps);
 
   assert.deepEqual(result[0].windowNames, ["editor", "server"]);
+});
+
+test("listProjectSessions attaches label/favorite from listSessionMeta, looked up by session slug", async () => {
+  const deps = makeDeps({
+    listSessions: async () => [
+      { name: "proj1-ab12cd__feature-x", windows: 1, attached: true },
+      { name: "proj1-ab12cd__bugfix", windows: 1, attached: false },
+    ],
+    listSessionMeta: async (projectId) => {
+      assert.equal(projectId, PROJECT.id);
+      return [{ projectId, sessionSlug: "feature-x", label: "Important", favorite: true }];
+    },
+  });
+
+  const result = await listProjectSessions(PROJECT, deps);
+
+  assert.equal(result[0].label, "Important");
+  assert.equal(result[0].favorite, true);
+  assert.equal(result[1].label, undefined);
+  assert.equal(result[1].favorite, false);
+});
+
+test("listProjectSessions defaults label/favorite when listSessionMeta isn't wired up", async () => {
+  const deps = makeDeps({
+    listSessions: async () => [{ name: "proj1-ab12cd__feature-x", windows: 1, attached: true }],
+  });
+
+  const result = await listProjectSessions(PROJECT, deps);
+
+  assert.equal(result[0].label, undefined);
+  assert.equal(result[0].favorite, false);
 });
 
 test("listProjectSessions omits windowNames for a session whose window list can't be fetched", async () => {
@@ -579,7 +626,7 @@ test("startProjectSessionCreation reports {phase: 'ready', session} once the bac
 
   assert.deepEqual(store.get("proj1-ab12cd__feature-x"), {
     phase: "ready",
-    session: { name: "feature-x", fullName: "proj1-ab12cd__feature-x", windows: 1, attached: false },
+    session: { name: "feature-x", fullName: "proj1-ab12cd__feature-x", windows: 1, attached: false, favorite: false },
   });
 });
 

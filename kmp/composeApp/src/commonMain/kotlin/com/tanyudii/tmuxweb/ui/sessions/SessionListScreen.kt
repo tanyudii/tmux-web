@@ -1,20 +1,15 @@
 package com.tanyudii.tmuxweb.ui.sessions
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -33,22 +28,14 @@ import com.tanyudii.tmuxweb.ui.components.TmuxButtonVariant
 import com.tanyudii.tmuxweb.ui.components.TmuxConfirmDialog
 import com.tanyudii.tmuxweb.ui.components.TmuxEmptyState
 import com.tanyudii.tmuxweb.ui.components.TmuxErrorBanner
-import com.tanyudii.tmuxweb.ui.components.TmuxGroup
-import com.tanyudii.tmuxweb.ui.components.TmuxGroupDivider
 import com.tanyudii.tmuxweb.ui.components.TmuxIconButton
 import com.tanyudii.tmuxweb.ui.components.TmuxIconButtonSize
-import com.tanyudii.tmuxweb.ui.components.TmuxListRow
 import com.tanyudii.tmuxweb.ui.components.TmuxNavBar
 import com.tanyudii.tmuxweb.ui.components.TmuxNavBarBack
-import com.tanyudii.tmuxweb.ui.components.TmuxProgressBar
-import com.tanyudii.tmuxweb.ui.components.TmuxStatusBadge
-import com.tanyudii.tmuxweb.ui.components.TmuxStatusTone
-import com.tanyudii.tmuxweb.ui.components.TmuxSwipeToDeleteRow
 import com.tanyudii.tmuxweb.ui.theme.TmuxColors
 import com.tanyudii.tmuxweb.ui.theme.TmuxFonts
 import com.tanyudii.tmuxweb.ui.theme.TmuxIcons
 import com.tanyudii.tmuxweb.ui.theme.TmuxMonoSize
-import com.tanyudii.tmuxweb.ui.theme.TmuxRadius
 import com.tanyudii.tmuxweb.ui.theme.TmuxTextSize
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
@@ -67,6 +54,7 @@ fun SessionListRoute(
     val viewModel = remember(projectId) { SessionListViewModel(projectId, repository, scope) }
     val state by viewModel.state.collectAsState()
     var isCreateSheetOpen by remember { mutableStateOf(false) }
+    var editingLabelSession by remember { mutableStateOf<ProjectSession?>(null) }
     val deleteProjectState = rememberDeleteProjectState(projectId, onDeleted = onBack)
 
     SessionListScreen(
@@ -77,6 +65,7 @@ fun SessionListRoute(
         deleteProjectState = deleteProjectState,
         onOpenSession = onOpenSession,
         onNewSessionClick = { isCreateSheetOpen = true },
+        onEditLabel = { session -> editingLabelSession = session },
         onBack = onBack,
     )
 
@@ -85,6 +74,17 @@ fun SessionListRoute(
             creationState = state.sessionCreation,
             onCreate = { name -> isCreateSheetOpen = false; viewModel.createSession(name) },
             onCancel = { isCreateSheetOpen = false; viewModel.cancelSessionCreation() },
+        )
+    }
+
+    editingLabelSession?.let { session ->
+        SessionLabelSheet(
+            initialLabel = session.label,
+            onSave = { newLabel ->
+                viewModel.setSessionMeta(session, newLabel, session.favorite)
+                editingLabelSession = null
+            },
+            onCancel = { editingLabelSession = null },
         )
     }
 }
@@ -99,6 +99,7 @@ private fun SessionListScreen(
     deleteProjectState: DeleteProjectState,
     onOpenSession: (ProjectSession) -> Unit,
     onNewSessionClick: () -> Unit,
+    onEditLabel: (ProjectSession) -> Unit,
     onBack: () -> Unit,
 ) {
     Column(modifier = Modifier.fillMaxSize().background(TmuxColors.bgSurface)) {
@@ -147,6 +148,7 @@ private fun SessionListScreen(
             viewModel = viewModel,
             deleteProjectState = deleteProjectState,
             onOpenSession = onOpenSession,
+            onEditLabel = onEditLabel,
             modifier = Modifier.weight(1f),
         )
     }
@@ -165,6 +167,7 @@ private fun SessionsBody(
     viewModel: SessionListViewModel,
     deleteProjectState: DeleteProjectState,
     onOpenSession: (ProjectSession) -> Unit,
+    onEditLabel: (ProjectSession) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Column(modifier = modifier.verticalScroll(rememberScrollState()).padding(top = 8.dp)) {
@@ -192,7 +195,7 @@ private fun SessionsBody(
                     titleSize = TmuxTextSize.base,
                 )
             }
-            else -> SessionsGroup(visibleSessions, state, viewModel, onOpenSession)
+            else -> SessionsSections(visibleSessions, state, viewModel, onOpenSession, onEditLabel)
         }
         if (state.isSelectionMode) {
             BulkDeleteBar(state, viewModel)
@@ -266,90 +269,6 @@ private fun SessionListConfirmDialogs(
         )
     }
 }
-
-@Composable
-private fun SessionsGroup(
-    sessions: List<ProjectSession>,
-    state: SessionListUiState,
-    viewModel: SessionListViewModel,
-    onOpenSession: (ProjectSession) -> Unit,
-) {
-    TmuxGroup {
-        sessions.forEachIndexed { index, session ->
-            if (index > 0) TmuxGroupDivider()
-            // Keyed by identity, not loop position: without this, deleting a
-            // row shifts every row below it up by one slot, and
-            // TmuxSwipeToDeleteRow's remembered `hasFired`/dismiss-animation
-            // state (bound to the slot) leaks onto the session that now
-            // occupies it -- its next swipe is silently vetoed.
-            key(session.fullName) {
-                // EMB-221: selection mode swaps swipe-to-delete for a leading
-                // checkbox + tap-to-toggle -- the two gestures (swipe vs. tap
-                // select) shouldn't coexist on the same row at once.
-                if (state.isSelectionMode) {
-                    SelectableSessionRow(session, isSelected = session.name in state.selectedNames, viewModel)
-                } else {
-                    TmuxSwipeToDeleteRow(onDelete = { viewModel.delete(session) }) {
-                        TmuxListRow(
-                            title = session.name,
-                            icon = TmuxIcons.Terminal,
-                            subtitle = sessionSubtitle(session),
-                            trailing = { SessionStatusTrailingBadge(session) },
-                            onClick = { onOpenSession(session) },
-                        )
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun SelectableSessionRow(session: ProjectSession, isSelected: Boolean, viewModel: SessionListViewModel) {
-    TmuxListRow(
-        title = session.name,
-        icon = TmuxIcons.Terminal,
-        subtitle = sessionSubtitle(session),
-        leading = {
-            Icon(
-                if (isSelected) TmuxIcons.CheckboxChecked else TmuxIcons.CheckboxUnchecked,
-                contentDescription = if (isSelected) "Selected" else "Not selected",
-                tint = if (isSelected) TmuxColors.accent else TmuxColors.textTertiary,
-                modifier = Modifier
-                    .padding(end = 4.dp)
-                    .clickable { viewModel.bulkDelete.toggleSessionSelected(session.name) },
-            )
-        },
-        trailing = { SessionStatusTrailingBadge(session) },
-        chevron = false,
-        onClick = { viewModel.bulkDelete.toggleSessionSelected(session.name) },
-    )
-}
-
-@Composable
-private fun SessionStatusTrailingBadge(session: ProjectSession) {
-    TmuxStatusBadge(
-        text = if (session.attached) "attached" else "detached",
-        tone = if (session.attached) TmuxStatusTone.ATTACHED else TmuxStatusTone.IDLE,
-        dot = session.attached,
-    )
-}
-
-@Composable
-private fun CreatingSessionCard(progressMessage: String?) {
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 8.dp)
-            .background(TmuxColors.bgCard, RoundedCornerShape(TmuxRadius.xl))
-            .padding(14.dp),
-    ) {
-        TmuxProgressBar(label = progressMessage ?: "Creating session…")
-    }
-}
-
-private fun sessionSubtitle(session: ProjectSession): String =
-    "${session.windows} window${if (session.windows == 1) "" else "s"}"
 
 /**
  * Small, self-contained "delete this project" action for the Sessions

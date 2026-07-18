@@ -59,6 +59,7 @@ import {
   updateTemplate as updateTemplateImpl,
   deleteTemplate as deleteTemplateImpl,
 } from "./session-templates.ts";
+import { listProjectSessionMeta as listProjectSessionMetaImpl, setSessionMeta as setSessionMetaImpl } from "./session-meta.ts";
 import { appendAccessLogEntry, readAccessLog, type AccessLogOutcome } from "./access-log.ts";
 import { appendSessionEvent, readSessionEvents, type SessionEventType } from "./session-events.ts";
 import { loadEnvConfig } from "./env-config.ts";
@@ -162,6 +163,7 @@ export async function main(): Promise<void> {
 
   const projectsFile = join(configDir, "projects.json");
   const templatesFile = join(configDir, "session-templates.json");
+  const sessionMetaFile = join(configDir, "session-meta.json");
   const accessLogPath = join(configDir, "access.log");
   const worktreesRoot = join(configDir, "worktrees");
 
@@ -223,6 +225,7 @@ export async function main(): Promise<void> {
       stopSessionEnvImpl(project, sessionSlug, sessionEnvDeps, sessionEnvStore),
     recordEvent: recordSessionEvent,
     worktreesRoot,
+    listSessionMeta: (projectId) => listProjectSessionMetaImpl(sessionMetaFile, projectId),
   };
 
   const webBuildDir = resolveWebBuildDir(process.env.TMUX_WEB_PUBLIC_DIR ?? DEFAULT_WEB_BUILD_DIR);
@@ -285,6 +288,8 @@ export async function main(): Promise<void> {
     getProjectSessionEvents: (project, slug) => readSessionEvents(sessionEventsFilePath(project.id), slug),
     getProjectSessionResourceUsage: (project, slug) =>
       getSessionResourceUsage(project, slug, sessionEnvDeps, resourceUsageCache),
+    setProjectSessionMeta: (project, slug, label, favorite) =>
+      setSessionMetaImpl(sessionMetaFile, project.id, slug, label, favorite),
 
     getProjectSessionChanges: (project, slug) =>
       getProjectSessionChangesImpl(project, slug, projectSessionsDeps),

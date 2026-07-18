@@ -7,6 +7,7 @@ import com.tanyudii.tmuxweb.domain.model.PendingSessionCreation
 import com.tanyudii.tmuxweb.domain.model.ProjectSession
 import com.tanyudii.tmuxweb.domain.model.SessionCreationStatus
 import com.tanyudii.tmuxweb.domain.model.SessionListResponse
+import com.tanyudii.tmuxweb.domain.model.SessionMetaRequest
 
 /** Mirrors the `/api/projects/:id/sessions*` endpoints (src/server.ts) — see plan §2.2. */
 interface SessionsRepository {
@@ -29,6 +30,9 @@ interface SessionsRepository {
 
     /** EMB-207: read-only pre-check backing the "Delete branch too" checkbox's unmerged-branch warning. */
     suspend fun isBranchMerged(projectId: String, sessionName: String): Boolean
+
+    /** EMB-222: sets (or clears, when label is null and favorite is false) a session's label/favorite flag. */
+    suspend fun setSessionMeta(projectId: String, sessionName: String, label: String?, favorite: Boolean)
 }
 
 class KtorSessionsRepository(private val client: TmuxWebHttpClient) : SessionsRepository {
@@ -59,4 +63,8 @@ class KtorSessionsRepository(private val client: TmuxWebHttpClient) : SessionsRe
 
     override suspend fun isBranchMerged(projectId: String, sessionName: String): Boolean =
         client.getJson<BranchMergedResponse>("/api/projects/$projectId/sessions/$sessionName/branch-merged").merged
+
+    override suspend fun setSessionMeta(projectId: String, sessionName: String, label: String?, favorite: Boolean) {
+        client.putJson("/api/projects/$projectId/sessions/$sessionName/meta", SessionMetaRequest(label, favorite))
+    }
 }

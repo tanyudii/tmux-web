@@ -127,6 +127,29 @@ class SessionListViewModel(
     }
 
     /**
+     * EMB-222: sets (or clears, when label is null and favorite is false) a
+     * session's label/favorite flag. Optimistically applies the same values
+     * to the matching session in [state] on success rather than reloading
+     * the whole list -- label/favorite are the only fields this ever
+     * changes, so a targeted `copy` is safe and avoids an extra round trip.
+     */
+    fun setSessionMeta(session: ProjectSession, label: String?, favorite: Boolean) {
+        scope.launch {
+            runSuspendCatching { repository.setSessionMeta(projectId, session.name, label, favorite) }
+                .onSuccess {
+                    _state.update { state ->
+                        state.copy(
+                            sessions = state.sessions.map {
+                                if (it.name == session.name) it.copy(label = label, favorite = favorite) else it
+                            },
+                        )
+                    }
+                }
+                .onFailure { error -> _state.update { it.copy(errorMessage = error.toUiMessage()) } }
+        }
+    }
+
+    /**
      * EMB-221 bulk select/delete, exposed as a property (not delegated
      * one-liner methods) purely to keep this class under the project's
      * detekt TooManyFunctions threshold -- see [SessionBulkDeleteController]'s

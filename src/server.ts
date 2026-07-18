@@ -42,6 +42,7 @@ import { TemplateValidationError, TemplateNotFoundError, type SessionTemplate } 
 import { appendAccessLogEntry, type AccessLogEntry } from "./access-log.ts";
 import type { SessionEvent } from "./session-events.ts";
 import type { SessionResourceUsage } from "./session-env.ts";
+import type { SessionMeta } from "./session-meta.ts";
 
 const DIFF_MODES: readonly DiffMode[] = ["staged", "unstaged", "untracked"];
 
@@ -76,6 +77,14 @@ export interface ServerDeps {
   getProjectSessionEvents: (project: Project, sessionSlug: string) => Promise<SessionEvent[]>;
   // EMB-214: per-session CPU/mem (real docker stats output, cached).
   getProjectSessionResourceUsage: (project: Project, sessionSlug: string) => Promise<SessionResourceUsage>;
+  // EMB-222: sets (or clears, when label is undefined and favorite is
+  // false) a session's organizational label/favorite flag.
+  setProjectSessionMeta: (
+    project: Project,
+    sessionSlug: string,
+    label: string | undefined,
+    favorite: boolean,
+  ) => Promise<SessionMeta>;
 
   // EMB-220 session templates.
   listProjectTemplates: (project: Project) => Promise<SessionTemplate[]>;
@@ -622,6 +631,37 @@ export function createServer(deps: ServerDeps): Server {
           if (sendMappedError(res, error)) return;
           throw error;
         }
+      }
+
+      // EMB-222: sets a session's organizational label/favorite flag.
+      // Whole-resource PUT (not PATCH -- this codebase never uses PATCH,
+      // see the template PUT route above) -- the client always sends both
+      // fields, mirroring updateProjectTemplate's replace-whole-record
+      // shape.
+      const sessionMetaMatch = path.match(/^\/api\/projects\/([^/]+)\/sessions\/([^/]+)\/meta$/);
+      if (sessionMetaMatch && req.method === "PUT") {
+        if (!checkAuthorized(req, res, deps.token, clientIp, authFailureLimiter, deps.accessLogPath)) return;
+
+        const project = await deps.getProject(decodeURIComponent(sessionMetaMatch[1]));
+        if (!project) return sendJson(res, 404, { error: "Project not found" });
+        const sessionSlug = decodeURIComponent(sessionMetaMatch[2]);
+
+        let body: unknown;
+        try {
+          body = await readJsonBody(req);
+        } catch {
+          return sendJson(res, 400, { error: "Malformed JSON body" });
+        }
+        const { label, favorite } = body as { label?: unknown; favorite?: unknown };
+        if (label !== undefined && typeof label !== "string") {
+          return sendJson(res, 400, { error: "label must be a string" });
+        }
+        if (typeof favorite !== "boolean") {
+          return sendJson(res, 400, { error: "favorite must be a boolean" });
+        }
+
+        const meta = await deps.setProjectSessionMeta(project, sessionSlug, label, favorite);
+        return sendJson(res, 200, meta);
       }
 
       // EMB-217: tears down the split pane's linked tmux session -- see

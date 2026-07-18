@@ -76,6 +76,12 @@ function makeDeps(overrides: Partial<ServerDeps> = {}): ServerDeps {
     isProjectSessionBranchMerged: async () => true,
     getProjectSessionEvents: async () => [],
     getProjectSessionResourceUsage: async () => ({ available: false, services: [] }),
+    setProjectSessionMeta: async (_project, sessionSlug, label, favorite) => ({
+      projectId: SAMPLE_PROJECT.id,
+      sessionSlug,
+      label,
+      favorite,
+    }),
     getProjectSessionChanges: async () => ({ staged: [], unstaged: [], untracked: [], conflicted: [], repoState: "clean" }),
     getProjectSessionDiff: async () => ({ diff: "", isUntracked: false, isBinary: false }),
     stageProjectSessionFile: async () => {},
@@ -322,7 +328,7 @@ test("DELETE /api/projects/:id removes the project when it has no active session
 test("DELETE /api/projects/:id returns 409 when the project has active sessions and force is not set", async () => {
   let called = false;
   const deps = makeDeps({
-    listProjectSessions: async () => [{ name: "main", fullName: "x__main", windows: 1, attached: false }],
+    listProjectSessions: async () => [{ name: "main", fullName: "x__main", windows: 1, attached: false, favorite: false }],
     removeProject: async () => { called = true; },
   });
   await withServer(deps, async (baseUrl) => {
@@ -337,7 +343,7 @@ test("DELETE /api/projects/:id returns 409 when the project has active sessions 
 
 test("DELETE /api/projects/:id?force=true removes the project despite active sessions", async () => {
   const deps = makeDeps({
-    listProjectSessions: async () => [{ name: "main", fullName: "x__main", windows: 1, attached: false }],
+    listProjectSessions: async () => [{ name: "main", fullName: "x__main", windows: 1, attached: false, favorite: false }],
   });
   await withServer(deps, async (baseUrl) => {
     const res = await fetch(`${baseUrl}/api/projects/${SAMPLE_PROJECT.id}?force=true`, {
@@ -362,13 +368,13 @@ test("DELETE /api/projects/:id returns 404 for an unknown project", async () => 
 
 test("GET /api/projects/:id/sessions returns the session list", async () => {
   const deps = makeDeps({
-    listProjectSessions: async () => [{ name: "main", fullName: "proj1-ab12cd__main", windows: 1, attached: false }],
+    listProjectSessions: async () => [{ name: "main", fullName: "proj1-ab12cd__main", windows: 1, attached: false, favorite: false }],
   });
   await withServer(deps, async (baseUrl) => {
     const res = await fetch(`${baseUrl}/api/projects/${SAMPLE_PROJECT.id}/sessions`, { headers: authHeaders() });
     assert.equal(res.status, 200);
     assert.deepEqual(await res.json(), {
-      sessions: [{ name: "main", fullName: "proj1-ab12cd__main", windows: 1, attached: false }],
+      sessions: [{ name: "main", fullName: "proj1-ab12cd__main", windows: 1, attached: false, favorite: false }],
     });
   });
 });
@@ -1875,6 +1881,95 @@ test("DELETE /api/projects/:id/templates/:templateId returns 404 for an unknown 
       headers: authHeaders(),
     });
     assert.equal(res.status, 404);
+  });
+});
+
+test("PUT /api/projects/:id/sessions/:slug/meta sets label/favorite and returns 200", async () => {
+  const calls: Array<{ sessionSlug: string; label: string | undefined; favorite: boolean }> = [];
+  const deps = makeDeps({
+    setProjectSessionMeta: async (_project: Project, sessionSlug: string, label: string | undefined, favorite: boolean) => {
+      calls.push({ sessionSlug, label, favorite });
+      return { projectId: SAMPLE_PROJECT.id, sessionSlug, label, favorite };
+    },
+  });
+  await withServer(deps, async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/projects/${SAMPLE_PROJECT.id}/sessions/feature-x/meta`, {
+      method: "PUT",
+      headers: { ...authHeaders(), "Content-Type": "application/json" },
+      body: JSON.stringify({ label: "Important", favorite: true }),
+    });
+    assert.equal(res.status, 200);
+    assert.deepEqual(await res.json(), {
+      projectId: SAMPLE_PROJECT.id,
+      sessionSlug: "feature-x",
+      label: "Important",
+      favorite: true,
+    });
+    assert.deepEqual(calls, [{ sessionSlug: "feature-x", label: "Important", favorite: true }]);
+  });
+});
+
+test("PUT /api/projects/:id/sessions/:slug/meta accepts a clearing request with no label", async () => {
+  const deps = makeDeps({
+    setProjectSessionMeta: async (_project: Project, sessionSlug: string, label: string | undefined, favorite: boolean) => ({
+      projectId: SAMPLE_PROJECT.id,
+      sessionSlug,
+      label,
+      favorite,
+    }),
+  });
+  await withServer(deps, async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/projects/${SAMPLE_PROJECT.id}/sessions/feature-x/meta`, {
+      method: "PUT",
+      headers: { ...authHeaders(), "Content-Type": "application/json" },
+      body: JSON.stringify({ favorite: false }),
+    });
+    assert.equal(res.status, 200);
+    assert.equal((await res.json()).label, undefined);
+  });
+});
+
+test("PUT /api/projects/:id/sessions/:slug/meta returns 400 when favorite is missing", async () => {
+  await withServer(makeDeps(), async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/projects/${SAMPLE_PROJECT.id}/sessions/feature-x/meta`, {
+      method: "PUT",
+      headers: { ...authHeaders(), "Content-Type": "application/json" },
+      body: JSON.stringify({ label: "Important" }),
+    });
+    assert.equal(res.status, 400);
+  });
+});
+
+test("PUT /api/projects/:id/sessions/:slug/meta returns 400 when label is not a string", async () => {
+  await withServer(makeDeps(), async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/projects/${SAMPLE_PROJECT.id}/sessions/feature-x/meta`, {
+      method: "PUT",
+      headers: { ...authHeaders(), "Content-Type": "application/json" },
+      body: JSON.stringify({ label: 123, favorite: false }),
+    });
+    assert.equal(res.status, 400);
+  });
+});
+
+test("PUT /api/projects/:id/sessions/:slug/meta returns 404 for an unknown project", async () => {
+  await withServer(makeDeps(), async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/projects/unknown-id/sessions/feature-x/meta`, {
+      method: "PUT",
+      headers: { ...authHeaders(), "Content-Type": "application/json" },
+      body: JSON.stringify({ favorite: true }),
+    });
+    assert.equal(res.status, 404);
+  });
+});
+
+test("PUT /api/projects/:id/sessions/:slug/meta requires authorization", async () => {
+  await withServer(makeDeps(), async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/projects/${SAMPLE_PROJECT.id}/sessions/feature-x/meta`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ favorite: true }),
+    });
+    assert.equal(res.status, 401);
   });
 });
 
