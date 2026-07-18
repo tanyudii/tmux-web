@@ -8,16 +8,57 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.viewinterop.HtmlElementView
 import com.tanyudii.tmuxweb.data.remote.terminal.ClientMessage
+import com.tanyudii.tmuxweb.domain.accumulateScrollLines
 import kotlin.js.ExperimentalWasmJsInterop
+import kotlin.math.abs
 import kotlinx.browser.document
 import kotlinx.browser.window
 import org.w3c.dom.HTMLDivElement
 import org.w3c.dom.HTMLElement
+
+// Turns touch drags into tmux copy-mode scroll reports. See attachTouchScroll
+// (XtermJs.kt) for why xterm's own touch handling can't do this, and
+// accumulateScrollLines (domain/TerminalScroll.kt) for the pixels->lines math
+// this shares with the iOS actual.
+//
+// `onScroll` is read through a getter rather than captured by value: this runs
+// from `factory`, which Compose invokes exactly once, so capturing the callback
+// directly would pin the very first composition's lambda forever.
+private fun attachScrollHandling(
+    container: HTMLDivElement,
+    terminal: () -> XtermTerminal?,
+    onScroll: () -> (ClientMessage.ScrollDirection, Int) -> Unit,
+) {
+    var carry = 0.0
+    attachTouchScroll(
+        container = container,
+        onStart = { carry = 0.0 },
+        onDrag = { deltaY ->
+            val rows = terminal()?.rows ?: 0
+            val pixelsPerLine = if (rows > 0) container.clientHeight.toDouble() / rows else 0.0
+            // Dragging DOWN reveals earlier output -- i.e. scrolls UP into
+            // history -- so the raw finger delta is negated into
+            // accumulateScrollLines' "positive = down" convention. Same sign
+            // flip as SwiftTermViewFactory.swift's handleScrollPan.
+            val result = accumulateScrollLines(-deltaY, pixelsPerLine, carry)
+            carry = result.carry
+            if (result.lines != 0) {
+                val direction = if (result.lines < 0) {
+                    ClientMessage.ScrollDirection.UP
+                } else {
+                    ClientMessage.ScrollDirection.DOWN
+                }
+                onScroll()(direction, abs(result.lines))
+            }
+        },
+    )
+}
 
 // A single deferred fit() (in the composable's `update` lambda) only
 // catches ONE late layout pass. In practice the container's real settled
@@ -169,8 +210,11 @@ actual fun PlatformTerminalView(
     onResize: (cols: Int, rows: Int) -> Unit,
     handleReady: (PlatformTerminalHandle) -> Unit,
     isVisible: Boolean,
-    // Not wired on wasmJs: xterm.js's own wheel handling stays as-is for
-    // this change. See the expect declaration's kdoc.
+    // Wired for touch drags only (see attachScrollHandling). A real wheel or
+    // trackpad already reaches tmux without us: xterm.js forwards wheel events
+    // as SGR mouse escape sequences, and tmux -- running with `mouse on` --
+    // acts on those itself. Touch is the gap, because xterm emits no wheel
+    // event for a finger drag.
     onScroll: (direction: ClientMessage.ScrollDirection, lines: Int) -> Unit,
 ) {
     var terminal by remember { mutableStateOf<XtermTerminal?>(null) }
@@ -179,6 +223,10 @@ actual fun PlatformTerminalView(
     var lastCols by remember { mutableStateOf(0) }
     var lastRows by remember { mutableStateOf(0) }
     var fontSize by remember { mutableStateOf(DEFAULT_FONT_SIZE) }
+    // `factory` below runs once, but this callback can change identity on any
+    // recomposition -- rememberUpdatedState keeps the touch handler reading the
+    // current one instead of the one that happened to exist at mount.
+    val currentOnScroll = rememberUpdatedState(onScroll)
 
     // Caller keys this composable by session identity (WebMainPane's
     // `key(session.fullName)`) -- dispose the xterm.js instance once per
@@ -230,6 +278,7 @@ actual fun PlatformTerminalView(
                 },
             )
             attachResizeObserver(container, { terminal }, { fitAddon }, ::reportResizeIfChanged)
+            attachScrollHandling(container, { terminal }, { currentOnScroll.value })
             container
         },
         modifier = modifier.fillMaxSize(),

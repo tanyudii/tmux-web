@@ -69,6 +69,7 @@ fun TerminalArea(
                     onResize = primaryTerminal::onResize,
                     handleReady = primaryTerminal.onHandleReady,
                     isVisible = terminalVisible,
+                    onScroll = primaryTerminal::onScroll,
                 )
             }
         }
@@ -154,6 +155,7 @@ private fun SplitTerminalPane(
                     onResize = terminal::onResize,
                     handleReady = terminal.onHandleReady,
                     isVisible = isVisible,
+                    onScroll = terminal::onScroll,
                 )
             }
         }
