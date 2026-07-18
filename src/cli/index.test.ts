@@ -27,6 +27,9 @@ function recordingDeps(): { deps: Required<Omit<RunCliDeps, "exit">> & Pick<RunC
     runUpgrade: async (args) => {
       calls.push(`runUpgrade ${args.join(" ")}`);
     },
+    runMcpCommand: async (args) => {
+      calls.push(`runMcpCommand ${args.join(" ")}`);
+    },
     printVersion: () => {
       calls.push("printVersion");
     },
@@ -79,6 +82,16 @@ test("routes init/generate/config/service/upgrade with the remaining args", asyn
     "runServiceCommand status",
     "runUpgrade --tag v1.2.3",
   ]);
+});
+
+test("`mcp` starts the MCP server, forwarding remaining args", async () => {
+  const { deps, calls } = recordingDeps();
+  await runCli(["mcp"], deps);
+  assert.deepEqual(calls, ["runMcpCommand "]);
+
+  const { deps: deps2, calls: calls2 } = recordingDeps();
+  await runCli(["mcp", "--http", "--port", "5311"], deps2);
+  assert.deepEqual(calls2, ["runMcpCommand --http --port 5311"]);
 });
 
 test("unknown command prints an error, shows help, and exits 1", async () => {
