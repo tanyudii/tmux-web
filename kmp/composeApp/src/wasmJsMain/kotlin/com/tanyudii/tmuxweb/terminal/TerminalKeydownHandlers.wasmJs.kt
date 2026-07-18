@@ -2,6 +2,7 @@
 
 package com.tanyudii.tmuxweb.terminal
 
+import com.tanyudii.tmuxweb.domain.COPY_NO_SELECTION_MESSAGE
 import com.tanyudii.tmuxweb.domain.copyResultMessage
 import com.tanyudii.tmuxweb.domain.isCopyShortcut
 import com.tanyudii.tmuxweb.domain.isFindShortcut
@@ -19,6 +20,7 @@ internal const val DEFAULT_FONT_SIZE = 14
 private const val MIN_FONT_SIZE = 8
 private const val MAX_FONT_SIZE = 32
 private const val COPY_TOAST_DURATION_MS = 1800
+private const val NO_SELECTION_TOAST_DURATION_MS = 3200
 
 // Pure mapping, split out to keep the caller's cyclomatic complexity under
 // the project's threshold -- no behavior change.
@@ -33,24 +35,51 @@ private fun nextZoomFontSize(key: String, currentSize: Int): Int? = when (key) {
 // end up being what the browser's native copy command targets, so the
 // selected terminal text doesn't reliably reach the clipboard. Handle it
 // ourselves whenever there's an active selection -- same fix as the pre-KMP
-// public/app.js (commit 73be7a0). Ctrl+C is left alone so it still sends
-// SIGINT to the shell, matching every other terminal. Returns true if the
-// event was claimed as a copy request, so the caller can skip zoom handling.
+// public/app.js (commit 73be7a0). Ctrl+C is also recognized (see
+// isCopyShortcut's doc comment) but only claimed when there's a selection;
+// with nothing selected it's left alone so it still sends SIGINT to the
+// shell, matching every other terminal.
+//
+// MUST run in the capture phase (see attachTerminalKeydownListeners) and
+// call stopPropagation() when claiming the event, exactly like EMB-219's
+// Ctrl+F handling -- confirmed live (Playwright) that without this, xterm.js's
+// own keydown handler on its hidden textarea (the real event *target*) sends
+// the literal ^C byte to the shell unconditionally, before a bubble-phase
+// listener on `container` ever runs, regardless of what that later listener
+// decides. A bubble-phase preventDefault() is always too late for Ctrl+C
+// specifically (unlike Cmd+C, which isn't in xterm's Ctrl-letter VT keymap at
+// all, so it never raced this). Returns true if the event was claimed as a
+// copy request, so the caller can skip zoom handling.
 private fun handleCopyKeyDown(
     keyEvent: KeyboardEvent,
     terminal: XtermTerminal?,
     onCopyRequested: (XtermTerminal) -> Unit,
+    onCopyAttemptedWithoutSelection: () -> Unit,
 ): Boolean {
     val isCopy = isCopyShortcut(
         type = keyEvent.type,
         metaKey = keyEvent.metaKey,
+        ctrlKey = keyEvent.ctrlKey,
         shiftKey = keyEvent.shiftKey,
         key = keyEvent.key,
     )
-    if (terminal == null || !isCopy || !terminal.hasSelection()) return false
-    keyEvent.preventDefault()
-    onCopyRequested(terminal)
-    return true
+    if (terminal == null || !isCopy) return false
+    val hasSelection = terminal.hasSelection()
+    when {
+        hasSelection -> {
+            keyEvent.preventDefault()
+            keyEvent.stopPropagation()
+            onCopyRequested(terminal)
+        }
+        // Only Cmd+C gets the hint: Ctrl+C is also the shell's interrupt
+        // signal, and most Ctrl+C presses have nothing selected on purpose
+        // (the user just wants to send SIGINT) -- hinting there would spam
+        // a toast on every routine interrupt. Crucially, this branch does NOT
+        // stopPropagation: the event must keep flowing to xterm's textarea so
+        // Ctrl+C still sends the real SIGINT byte.
+        keyEvent.metaKey -> onCopyAttemptedWithoutSelection()
+    }
+    return hasSelection
 }
 
 // Ctrl/Cmd +/-/0 zoom, same convention as browsers and every desktop
@@ -118,18 +147,21 @@ private fun handleSearchKeyDown(keyEvent: KeyboardEvent, onOpenSearch: () -> Uni
     return true
 }
 
-// Registers the same two listeners (capture-phase search shortcut,
-// bubble-phase copy/zoom) that used to be wired inline in
-// PlatformTerminalView's `factory` block.
+// Registers a capture-phase listener (search + copy) and a bubble-phase one
+// (zoom) that used to be wired inline in PlatformTerminalView's `factory`
+// block.
 //
-// EMB-219: the search shortcut is registered separately, in the CAPTURE
-// phase (the trailing `true` below) -- confirmed live that xterm.js's own
-// internal keydown handler (on its hidden textarea, the actual event
-// *target*) treats Ctrl+F as the VT control character ^F and
-// stopPropagation()s it before a bubble-phase listener on `container` would
-// ever see it (Cmd+F worked fine, since metaKey isn't in xterm's
-// Ctrl-letter VT keymap). A capture-phase listener on an ancestor is the
-// only way to intercept ahead of xterm's own handling.
+// EMB-219: the search shortcut runs in the CAPTURE phase (the trailing
+// `true` below) -- confirmed live that xterm.js's own internal keydown
+// handler (on its hidden textarea, the actual event *target*) treats Ctrl+F
+// as the VT control character ^F and stopPropagation()s it before a
+// bubble-phase listener on `container` would ever see it (Cmd+F worked fine,
+// since metaKey isn't in xterm's Ctrl-letter VT keymap). A capture-phase
+// listener on an ancestor is the only way to intercept ahead of xterm's own
+// handling. Copy handling has the exact same requirement for Ctrl+C (see
+// handleCopyKeyDown's doc comment) so it runs in the same capture-phase
+// listener; zoom has no such race (Ctrl/Cmd +/-/0 aren't in xterm's keymap
+// either) so it stays on the original bubble-phase listener.
 internal fun attachTerminalKeydownListeners(
     container: HTMLDivElement,
     terminal: () -> XtermTerminal?,
@@ -146,16 +178,21 @@ internal fun attachTerminalKeydownListeners(
                 }
             ) {
                 keyEvent.stopPropagation()
+                return@addEventListener
             }
+            handleCopyKeyDown(
+                keyEvent = keyEvent,
+                terminal = terminal(),
+                onCopyRequested = { activeTerminal -> performCopy(activeTerminal, container) },
+                onCopyAttemptedWithoutSelection = {
+                    showCopyToast(container, COPY_NO_SELECTION_MESSAGE, false, NO_SELECTION_TOAST_DURATION_MS)
+                },
+            )
         },
         true,
     )
     container.addEventListener("keydown", { event: Event ->
         val keyEvent = event as KeyboardEvent
-        val copied = handleCopyKeyDown(keyEvent, terminal()) { activeTerminal ->
-            performCopy(activeTerminal, container)
-        }
-        if (copied) return@addEventListener
         handleZoomKeyDown(keyEvent, terminal(), fontSize(), onZoomApplied)
     })
 }
