@@ -1,0 +1,15 @@
+{
+  "name": "tmux-web",
+  "description": "Claude Code skills for tmux-web (https://github.com/tanyudii/tmux-web) -- currently: tmux-web-env, which scaffolds a project's .tmux-web-env/ per-session Docker environment.",
+  "author": {
+    "name": "Yudi Hertanto"
+  },
+  "homepage": "https://github.com/tanyudii/tmux-web",
+  "repository": "https://github.com/tanyudii/tmux-web",
+  "keywords": [
+    "tmux-web",
+    "tmux",
+    "docker-compose",
+    "dev-environment"
+  ]
+}

@@ -318,7 +318,10 @@ hand-edit any of them with tools you already trust.
 ## Per-session environments (docker-compose)
 
 Opt in per project by adding a `.tmux-web-env/` folder to the repo (so it's
-versioned like everything else, and can differ per branch):
+versioned like everything else, and can differ per branch). If you use
+Claude Code, `skills/tmux-web-env/` in this repo is an installable skill
+that scaffolds this folder for you — see its
+[README](skills/tmux-web-env/README.md) for install steps:
 
 ```
 .tmux-web-env/

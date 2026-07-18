@@ -1454,6 +1454,23 @@ test("serves .json static files (manifest.json) with the application/manifest+js
   }
 });
 
+// index.html and composeApp.js keep the same filename across every deploy
+// (unlike the content-hashed .wasm bundles below), so a browser must always
+// revalidate them -- otherwise it can keep serving a stale page/bundle pair
+// indefinitely after a deploy with no signal that a new version exists.
+test("serves index.html with a no-cache Cache-Control header", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tmux-web-public-"));
+  await writeFile(join(dir, "index.html"), "<html>hi</html>");
+  try {
+    await withServer(makeDeps({ publicDir: dir }), async (baseUrl) => {
+      const res = await fetch(`${baseUrl}/`);
+      assert.equal(res.headers.get("cache-control"), "no-cache");
+    });
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test("serves .png static files with the image/png content type", async () => {
   const dir = await mkdtemp(join(tmpdir(), "tmux-web-public-"));
   await writeFile(join(dir, "icon-192.png"), Buffer.from([0x89, 0x50, 0x4e, 0x47]));
@@ -1462,6 +1479,32 @@ test("serves .png static files with the image/png content type", async () => {
       const res = await fetch(`${baseUrl}/icon-192.png`);
       assert.equal(res.status, 200);
       assert.equal(res.headers.get("content-type"), "image/png");
+    });
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("serves a content-hashed .wasm filename with a long-lived immutable Cache-Control header", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tmux-web-public-"));
+  await writeFile(join(dir, "6e23e5428398b92da386.wasm"), Buffer.from([0x00, 0x61, 0x73, 0x6d]));
+  try {
+    await withServer(makeDeps({ publicDir: dir }), async (baseUrl) => {
+      const res = await fetch(`${baseUrl}/6e23e5428398b92da386.wasm`);
+      assert.equal(res.headers.get("cache-control"), "public, max-age=31536000, immutable");
+    });
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("serves a non-hashed .js filename (e.g. composeApp.js) with a no-cache Cache-Control header", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tmux-web-public-"));
+  await writeFile(join(dir, "composeApp.js"), "console.log('hi')");
+  try {
+    await withServer(makeDeps({ publicDir: dir }), async (baseUrl) => {
+      const res = await fetch(`${baseUrl}/composeApp.js`);
+      assert.equal(res.headers.get("cache-control"), "no-cache");
     });
   } finally {
     await rm(dir, { recursive: true, force: true });

@@ -35,21 +35,6 @@
             overflow: hidden;
             background: #0d1117;
         }
-        body {
-            /* border-box so the safe-area padding below is carved out of
-               the 100dvh height already set above instead of adding to
-               it -- with the default content-box, that padding would
-               push body's total box taller than 100dvh and `overflow:
-               hidden` would then clip that same amount off the bottom
-               of #composeApp instead of fixing anything. */
-            box-sizing: border-box;
-            /* Fills the home-indicator safe area on notched/home-indicator
-               iPhones and iPads instead of leaving it as a visible gap
-               below the app's own background -- see viewport-fit=cover
-               above, required for env() to resolve to anything nonzero.
-               0 on devices without a safe area. */
-            padding-bottom: env(safe-area-inset-bottom);
-        }
         /* Compose mounts into this dedicated element (see main.kt), not
            into <body> directly -- without this anchor, the canvas's own
            measured size and body's size feed back into each other (body
@@ -64,6 +49,25 @@
            rounding gap. */
         #composeApp {
             height: 100%;
+            /* The safe-area compensation used to live on `body` as a
+               border-box + padding-bottom pair. That doesn't compose with
+               how this element is actually sized: applyVisualViewportSize()
+               below sets #composeApp's height directly from
+               `visualViewport.height` via inline style, which ignores
+               body's (shrunk-by-padding) content-box entirely. The result
+               was body reserving safe-area space that #composeApp's
+               inline height didn't know about -- #composeApp either
+               overflowed body's content box by exactly the safe-area
+               amount (silently clipped by body's `overflow: hidden`) or,
+               depending on layout timing, left that same strip looking
+               like unfilled padding at the bottom. Carving the safe area
+               out of #composeApp's OWN box instead (border-box, so this
+               padding-bottom is subtracted from the already-correct
+               `visualViewport.height`, not added on top of it) makes this
+               the single place that both sets and compensates the height,
+               so there's nothing left for a parent box to double-count. */
+            box-sizing: border-box;
+            padding-bottom: env(safe-area-inset-bottom);
         }
         /* xterm's own .xterm-viewport (vendor/xterm.css) keeps
            `overflow-y: scroll` always-on for its local scrollback buffer.
@@ -108,19 +112,35 @@
         var appEl = document.getElementById("composeApp");
         function applyVisualViewportSize() {
           var vv = window.visualViewport;
-          if (vv) {
-            appEl.style.height = vv.height + "px";
-            appEl.style.transform = vv.offsetTop ? "translateY(" + vv.offsetTop + "px)" : "";
-          } else {
-            appEl.style.height = window.innerHeight + "px";
-            appEl.style.transform = "";
-          }
+          var h = (vv ? vv.height : window.innerHeight) + "px";
+          var tf = vv && vv.offsetTop ? "translateY(" + vv.offsetTop + "px)" : "";
+          // Write only on a real change. This runs on a poll (see below), and
+          // re-assigning identical values every tick would thrash layout --
+          // and, through PlatformTerminalView.wasmJs.kt's ResizeObserver, kick
+          // off a needless fit()/PTY-resize round trip several times a second.
+          if (appEl.style.height !== h) appEl.style.height = h;
+          if (appEl.style.transform !== tf) appEl.style.transform = tf;
         }
         if (window.visualViewport) {
           window.visualViewport.addEventListener("resize", applyVisualViewportSize);
           window.visualViewport.addEventListener("scroll", applyVisualViewportSize);
         }
         window.addEventListener("resize", applyVisualViewportSize);
+        // The listeners above cannot be trusted to fire at all. Measured live on
+        // a real iPad (Chrome/CriOS 150, iPadOS 26) by having the page report its
+        // own metrics home: visualViewport.height swung between 634 and 948 while
+        // NONE of the events above ever fired, so this element stayed frozen at
+        // its load-time height (678px) for the entire session -- leaving ~270px of
+        // dead space below the canvas at the taller size and clipping ~44px off
+        // the bottom at the shorter one. That dead strip is what a user reports as
+        // "there's padding at the bottom".
+        //
+        // Polling is the only thing that actually observes the change here; the
+        // listeners stay because they make the common (working) case react without
+        // waiting for the next tick. 250ms is below the threshold where the jump
+        // reads as a lag rather than a glitch, and the change-guard above keeps an
+        // idle poll free of layout work.
+        setInterval(applyVisualViewportSize, 250);
         applyVisualViewportSize();
       })();
     </script>

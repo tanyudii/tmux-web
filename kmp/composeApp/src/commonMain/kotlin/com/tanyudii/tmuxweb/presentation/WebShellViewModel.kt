@@ -452,7 +452,27 @@ class WebShellViewModel(
     }
 
     private fun deleteSession(pending: WebShellUiState.PendingDelete.OfSession) {
-        _state.update { it.copy(pendingDelete = null) }
+        // Clearing the selection here -- synchronously, before the DELETE
+        // request even starts -- tears down the terminal composable (and its
+        // /ws socket) immediately via TerminalSession's DisposableEffect.
+        // Without this, the socket stays open until the (possibly slow,
+        // e.g. `docker compose down -v` tearing down a session's
+        // environment -- see session-env.ts) DELETE resolves. The backend
+        // kills the tmux session almost instantly, well before that, which
+        // closes the socket out from under the still-mounted terminal and
+        // sends TerminalViewModel into an unconditional reconnect loop
+        // (scheduleReconnect has no way to tell "session was deleted" from
+        // "transient drop") against a session that no longer exists, for as
+        // long as the request is in flight. Closing client-side first makes
+        // this a manual disconnect instead, which skips the retry loop
+        // entirely (see TerminalViewModel.disconnect/isManualDisconnect).
+        val wasSelected = _state.value.selectedSessionName == pending.session.name
+        _state.update {
+            it.copy(
+                pendingDelete = null,
+                selectedSessionName = if (wasSelected) null else it.selectedSessionName,
+            )
+        }
         scope.launch {
             runSuspendCatching {
                 sessionsRepository.deleteSession(
@@ -466,13 +486,17 @@ class WebShellViewModel(
                     _state.update { state ->
                         val remaining = state.sessionsByProjectId[pending.projectId].orEmpty()
                             .filterNot { s -> s.name == pending.session.name }
-                        state.copy(
-                            sessionsByProjectId = state.sessionsByProjectId + (pending.projectId to remaining),
-                            selectedSessionName = state.selectedSessionName.takeUnless { it == pending.session.name },
-                        )
+                        state.copy(sessionsByProjectId = state.sessionsByProjectId + (pending.projectId to remaining))
                     }
                 }
                 .onFailure { error ->
+                    // The session survives a failed delete (e.g. a dirty
+                    // worktree without force) -- restore the selection that
+                    // was optimistically cleared above so the user's open
+                    // tab doesn't vanish underneath them.
+                    if (wasSelected) {
+                        _state.update { it.copy(selectedSessionName = pending.session.name) }
+                    }
                     handleDeleteConflict(error) { message ->
                         pending.copy(forced = true, message = message)
                     }
