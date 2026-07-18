@@ -29,7 +29,7 @@ class TerminalClipboardTest {
     }
 
     @Test
-    fun `recognizes plain Ctrl+C as a copy attempt, same convention as coolify's terminal`() {
+    fun `recognizes plain Ctrl+C as a copy attempt -- same convention as coolify's terminal`() {
         val result = isCopyShortcut(type = "keydown", metaKey = false, ctrlKey = true, shiftKey = false, key = "c")
 
         assertTrue(result)
