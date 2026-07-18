@@ -33,6 +33,21 @@ data class ChangesUiState(
 
 data class PendingDiscard(val file: ChangedFile, val mode: DiffMode)
 
+/**
+ * Shared wording for the discard confirmation dialog -- pulled out of
+ * `WebShellScreen.kt` (its only prior home) so `ui/terminal`'s mobile
+ * Changes screen (EMB-225) shows the exact same message instead of a
+ * copy that could drift.
+ */
+fun discardConfirmMessage(pending: PendingDiscard): String {
+    val fileName = pending.file.path.substringAfterLast('/')
+    return if (pending.mode == DiffMode.UNTRACKED) {
+        "“$fileName” will be deleted. This can't be undone."
+    } else {
+        "Uncommitted changes to “$fileName” will be reverted. This can't be undone."
+    }
+}
+
 class ChangesViewModel(
     private val projectId: String,
     private val sessionName: String,

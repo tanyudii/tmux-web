@@ -16,7 +16,10 @@ import androidx.compose.ui.Modifier
 import com.tanyudii.tmuxweb.data.remote.logs.LogsSocket
 import com.tanyudii.tmuxweb.data.remote.terminal.ClientMessage
 import com.tanyudii.tmuxweb.domain.model.ComposeServiceStatus
+import com.tanyudii.tmuxweb.domain.repository.ChangesRepository
 import com.tanyudii.tmuxweb.domain.repository.EnvironmentRepository
+import com.tanyudii.tmuxweb.presentation.ChangesViewModel
+import com.tanyudii.tmuxweb.presentation.EnvironmentUiState
 import com.tanyudii.tmuxweb.presentation.EnvironmentViewModel
 import com.tanyudii.tmuxweb.presentation.LogsViewModel
 import com.tanyudii.tmuxweb.terminal.PlatformTerminalHandle
@@ -42,12 +45,14 @@ fun TerminalRoute(
 ) {
     val session = rememberTerminalSession(sessionFullName)
     val environment = rememberEnvironment(projectId, sessionName)
+    val changes = rememberChanges(projectId, sessionName)
 
     TerminalScreen(
         title = sessionName,
         backLabel = projectName,
         isConnected = session.isConnected,
         environment = environment,
+        changes = changes,
         projectId = projectId,
         sessionName = sessionName,
         onInput = session::onInput,
@@ -67,6 +72,7 @@ private fun TerminalScreen(
     backLabel: String,
     isConnected: Boolean,
     environment: EnvironmentViewModel,
+    changes: ChangesViewModel,
     projectId: String,
     sessionName: String,
     onInput: (String) -> Unit,
@@ -78,19 +84,23 @@ private fun TerminalScreen(
     onBack: () -> Unit,
 ) {
     val envState by environment.state.collectAsState()
+    val changesState by changes.state.collectAsState()
     // The terminal's native DOM element must be hidden for the duration of any
-    // Popup/Dialog rendered over it (environment dropdown, stop-confirm) --
-    // see PlatformTerminalView's `isVisible` kdoc and WebMainPane.kt's mirror
-    // of this same gating. Omitting it here left this screen's terminal
-    // always-visible, letting its DOM overlay swallow clicks/keystrokes meant
-    // for the dialog on top of it (CLAUDE.md's flagged incident class).
+    // Popup/Dialog rendered over it (environment dropdown, stop-confirm,
+    // EMB-225's Changes dialog) -- see PlatformTerminalView's `isVisible`
+    // kdoc and WebMainPane.kt's mirror of this same gating. Omitting it here
+    // left this screen's terminal always-visible, letting its DOM overlay
+    // swallow clicks/keystrokes meant for the dialog on top of it
+    // (CLAUDE.md's flagged incident class).
     var environmentMenuOpen by remember { mutableStateOf(false) }
+    var changesOpen by remember { mutableStateOf(false) }
 
     Column(modifier = Modifier.fillMaxSize().background(TmuxColors.bgTerminal)) {
         TmuxNavBar(
             title = title,
             back = TmuxNavBarBack(label = backLabel, onClick = onBack),
             right = {
+                ChangesNavButton(changes = changesState.changes, onClick = { changesOpen = true })
                 TmuxEnvironmentMenu(
                     status = envState.status,
                     isBusy = envState.isBusy,
@@ -109,18 +119,46 @@ private fun TerminalScreen(
                 onRetry = onRetry,
             )
         }
+        val terminalVisible = !environmentMenuOpen && !envState.isShowingStopConfirm && !changesOpen &&
+            envState.logsService == null
         PlatformTerminalView(
             modifier = Modifier.fillMaxWidth().weight(1f),
             onInput = onInput,
             onBell = onBell,
             onResize = onResize,
             handleReady = onHandleReady,
-            isVisible = !environmentMenuOpen && !envState.isShowingStopConfirm && envState.logsService == null,
+            isVisible = terminalVisible,
             onScroll = onScroll,
         )
         QuickKeysBar(onKeyTap = onInput)
     }
 
+    TerminalScreenDialogs(
+        environment = environment,
+        changes = changes,
+        envState = envState,
+        projectId = projectId,
+        sessionName = sessionName,
+        changesOpen = changesOpen,
+        onChangesDismiss = { changesOpen = false },
+    )
+}
+
+/**
+ * Stop-confirm / logs / Changes dialogs -- split out of [TerminalScreen]
+ * purely to keep that composable under the project's detekt LongMethod
+ * threshold, no behavior change.
+ */
+@Composable
+private fun TerminalScreenDialogs(
+    environment: EnvironmentViewModel,
+    changes: ChangesViewModel,
+    envState: EnvironmentUiState,
+    projectId: String,
+    sessionName: String,
+    changesOpen: Boolean,
+    onChangesDismiss: () -> Unit,
+) {
     if (envState.isShowingStopConfirm) {
         TmuxConfirmDialog(
             title = "Stop environment?",
@@ -139,6 +177,15 @@ private fun TerminalScreen(
             services = envState.status?.services.orEmpty(),
             onDismiss = environment::hideLogs,
             onSwitchService = environment::switchLogsService,
+        )
+    }
+
+    if (changesOpen) {
+        ChangesDialog(
+            projectId = projectId,
+            sessionName = sessionName,
+            changes = changes,
+            onDismiss = onChangesDismiss,
         )
     }
 }
@@ -182,6 +229,18 @@ private fun TerminalLogsDialog(
         onDismiss = onDismiss,
         onSwitchService = onSwitchService,
     )
+}
+
+/**
+ * EMB-225: owned at [TerminalRoute] level (not inside [ChangesDialog]) so
+ * its 5s poll keeps [ChangesNavButton]'s badge count fresh even while the
+ * dialog is closed, the same lifecycle idiom as [rememberEnvironment].
+ */
+@Composable
+private fun rememberChanges(projectId: String, sessionName: String): ChangesViewModel {
+    val repository: ChangesRepository = koinInject()
+    val scope = rememberCoroutineScope()
+    return remember(projectId, sessionName) { ChangesViewModel(projectId, sessionName, repository, scope) }
 }
 
 @Composable

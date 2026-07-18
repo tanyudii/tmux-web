@@ -432,14 +432,17 @@ private fun LogsDialogHost(
     )
 }
 
-private val DiffMode.label: String
+// internal (not private): EMB-225's mobile ChangesDialog (ui/terminal) reuses
+// these for the exact same TmuxDiffDialog status label/tone, rather than a
+// copy of this mapping that could drift.
+internal val DiffMode.label: String
     get() = when (this) {
         DiffMode.STAGED -> "staged"
         DiffMode.UNSTAGED -> "unstaged"
         DiffMode.UNTRACKED -> "untracked"
     }
 
-private val DiffMode.tone: TmuxStatusTone
+internal val DiffMode.tone: TmuxStatusTone
     get() = when (this) {
         DiffMode.STAGED -> TmuxStatusTone.STAGED
         DiffMode.UNSTAGED -> TmuxStatusTone.UNSTAGED

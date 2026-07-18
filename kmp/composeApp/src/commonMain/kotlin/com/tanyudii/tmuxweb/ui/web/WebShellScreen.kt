@@ -46,6 +46,7 @@ import com.tanyudii.tmuxweb.domain.repository.SessionTemplatesRepository
 import com.tanyudii.tmuxweb.domain.repository.SessionsRepository
 import com.tanyudii.tmuxweb.presentation.AccessLogViewModel
 import com.tanyudii.tmuxweb.presentation.ChangesViewModel
+import com.tanyudii.tmuxweb.presentation.discardConfirmMessage
 import com.tanyudii.tmuxweb.presentation.EnvironmentViewModel
 import com.tanyudii.tmuxweb.presentation.PendingDiscard
 import com.tanyudii.tmuxweb.presentation.SessionResourceUsageViewModel
@@ -261,15 +262,6 @@ private fun AccessLogRow(entry: AccessLogEntry) {
             fontFamily = TmuxFonts.mono,
             fontSize = TmuxTextSize.sm,
         )
-    }
-}
-
-private fun discardConfirmMessage(pending: PendingDiscard): String {
-    val fileName = pending.file.path.substringAfterLast('/')
-    return if (pending.mode == DiffMode.UNTRACKED) {
-        "“$fileName” will be deleted. This can't be undone."
-    } else {
-        "Uncommitted changes to “$fileName” will be reverted. This can't be undone."
     }
 }
 

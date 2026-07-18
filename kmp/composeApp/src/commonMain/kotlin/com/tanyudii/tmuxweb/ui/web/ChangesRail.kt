@@ -56,6 +56,12 @@ import com.tanyudii.tmuxweb.ui.theme.TmuxWeight
  * purely to keep that file's function count under the project's detekt
  * threshold -- mirrors how `WindowActionDialogs` was split out of
  * `WindowTabs.kt` -- no behavior change from that split itself.
+ *
+ * [modifier] defaults to the fixed-width desktop rail sizing so every
+ * existing call site is unaffected; EMB-225's mobile Changes screen
+ * (`ui/terminal/ChangesDialog.kt`) overrides it to fill its own full-screen
+ * dialog instead of duplicating this entire row-rendering tree for a
+ * narrower layout.
  */
 @Composable
 internal fun ChangesRail(
@@ -68,16 +74,12 @@ internal fun ChangesRail(
     onCommitMessageChange: (String) -> Unit = {},
     isCommitting: Boolean = false,
     onCommit: () -> Unit = {},
+    modifier: Modifier = Modifier.width(290.dp).fillMaxHeight(),
 ) {
     var collapsedKeys by remember { mutableStateOf(emptySet<String>()) }
     val rows = buildChangeRows(changes, collapsedKeys)
 
-    Column(
-        modifier = Modifier
-            .width(290.dp)
-            .fillMaxHeight()
-            .background(TmuxColors.bgSurface),
-    ) {
+    Column(modifier = modifier.background(TmuxColors.bgSurface)) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier.fillMaxWidth().height(40.dp).padding(horizontal = 14.dp),
