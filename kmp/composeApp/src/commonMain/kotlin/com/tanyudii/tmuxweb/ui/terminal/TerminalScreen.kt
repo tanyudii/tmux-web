@@ -4,6 +4,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.collectAsState
@@ -102,7 +103,15 @@ private fun TerminalScreen(
     var environmentMenuOpen by remember { mutableStateOf(false) }
     var changesOpen by remember { mutableStateOf(false) }
 
-    Column(modifier = Modifier.fillMaxSize().background(TmuxColors.bgTerminal)) {
+    // imePadding() shrinks this Column by the on-screen keyboard's height
+    // instead of letting the keyboard paint over the terminal -- mirrors the
+    // web build's visualViewport-driven resize of #composeApp (index.html).
+    // On iOS this relies on iOSApp.swift's `.ignoresSafeArea(.keyboard)`,
+    // which deliberately hands keyboard-avoidance to Compose's own
+    // WindowInsets.ime instead of SwiftUI's; on wasmJs, WindowInsets.ime
+    // reports no inset (the web build handles this itself via JS), so this
+    // is a no-op there.
+    Column(modifier = Modifier.fillMaxSize().background(TmuxColors.bgTerminal).imePadding()) {
         TmuxNavBar(
             title = title,
             back = TmuxNavBarBack(label = backLabel, onClick = onBack),
