@@ -36,9 +36,18 @@ private fun nextZoomFontSize(key: String, currentSize: Int): Int? = when (key) {
 // selected terminal text doesn't reliably reach the clipboard. Handle it
 // ourselves whenever there's an active selection -- same fix as the pre-KMP
 // public/app.js (commit 73be7a0). Ctrl+C is also recognized (see
-// isCopyShortcut's doc comment) but only claimed when there's a selection;
-// with nothing selected it's left alone so it still sends SIGINT to the
+// isCopyShortcut's doc comment) but only claimed when there's something to
+// copy; with nothing to copy it's left alone so it still sends SIGINT to the
 // shell, matching every other terminal.
+//
+// [takeCapturedSelectionText] is the fallback source when xterm has no local
+// selection of its own: an Option-drag no longer produces one (see
+// XtermJs.kt's newTerminal() comment) -- instead it's relayed from tmux's
+// own paste buffer and cached by the caller right after the drag ends.
+// "take" (not just "get"): calling it also clears the cache, so a later
+// plain Cmd+C with nothing selected doesn't silently re-copy stale text --
+// only called when xterm itself has nothing selected, so a real selection
+// is never shadowed by a stale capture.
 //
 // MUST run in the capture phase (see attachTerminalKeydownListeners) and
 // call stopPropagation() when claiming the event, exactly like EMB-219's
@@ -53,7 +62,8 @@ private fun nextZoomFontSize(key: String, currentSize: Int): Int? = when (key) {
 private fun handleCopyKeyDown(
     keyEvent: KeyboardEvent,
     terminal: XtermTerminal?,
-    onCopyRequested: (XtermTerminal) -> Unit,
+    takeCapturedSelectionText: () -> String?,
+    onCopyRequested: (XtermTerminal, String) -> Unit,
     onCopyAttemptedWithoutSelection: () -> Unit,
 ): Boolean {
     val isCopy = isCopyShortcut(
@@ -64,12 +74,13 @@ private fun handleCopyKeyDown(
         key = keyEvent.key,
     )
     if (terminal == null || !isCopy) return false
-    val hasSelection = terminal.hasSelection()
-    when {
-        hasSelection -> {
+    val selectionText = if (terminal.hasSelection()) terminal.getSelection().toString() else takeCapturedSelectionText()
+    return when {
+        selectionText != null -> {
             keyEvent.preventDefault()
             keyEvent.stopPropagation()
-            onCopyRequested(terminal)
+            onCopyRequested(terminal, selectionText)
+            true
         }
         // Only Cmd+C gets the hint: Ctrl+C is also the shell's interrupt
         // signal, and most Ctrl+C presses have nothing selected on purpose
@@ -77,9 +88,12 @@ private fun handleCopyKeyDown(
         // a toast on every routine interrupt. Crucially, this branch does NOT
         // stopPropagation: the event must keep flowing to xterm's textarea so
         // Ctrl+C still sends the real SIGINT byte.
-        keyEvent.metaKey -> onCopyAttemptedWithoutSelection()
+        keyEvent.metaKey -> {
+            onCopyAttemptedWithoutSelection()
+            false
+        }
+        else -> false
     }
-    return hasSelection
 }
 
 // Ctrl/Cmd +/-/0 zoom, same convention as browsers and every desktop
@@ -147,6 +161,19 @@ private fun handleSearchKeyDown(keyEvent: KeyboardEvent, onOpenSearch: () -> Uni
     return true
 }
 
+/**
+ * Bundles the `remember`ed accessors [attachTerminalKeydownListeners] needs
+ * from the caller -- kept as one param purely to stay under detekt's
+ * LongParameterList threshold, same reasoning as PlatformTerminalView.wasmJs.kt's
+ * TerminalRefs/TerminalCallbacks.
+ */
+internal class TerminalKeydownState(
+    val terminal: () -> XtermTerminal?,
+    val searchAddon: () -> XtermSearchAddon?,
+    val fontSize: () -> Int,
+    val takeCapturedSelectionText: () -> String? = { null },
+)
+
 // Registers a capture-phase listener (search + copy) and a bubble-phase one
 // (zoom) that used to be wired inline in PlatformTerminalView's `factory`
 // block.
@@ -164,9 +191,7 @@ private fun handleSearchKeyDown(keyEvent: KeyboardEvent, onOpenSearch: () -> Uni
 // either) so it stays on the original bubble-phase listener.
 internal fun attachTerminalKeydownListeners(
     container: HTMLDivElement,
-    terminal: () -> XtermTerminal?,
-    searchAddon: () -> XtermSearchAddon?,
-    fontSize: () -> Int,
+    state: TerminalKeydownState,
     onZoomApplied: (current: XtermTerminal, nextSize: Int) -> Unit,
 ) {
     container.addEventListener(
@@ -174,7 +199,7 @@ internal fun attachTerminalKeydownListeners(
         { event: Event ->
             val keyEvent = event as KeyboardEvent
             if (handleSearchKeyDown(keyEvent) {
-                    openTerminalSearchBar(container, searchAddon, terminal)
+                    openTerminalSearchBar(container, state.searchAddon, state.terminal)
                 }
             ) {
                 keyEvent.stopPropagation()
@@ -182,8 +207,9 @@ internal fun attachTerminalKeydownListeners(
             }
             handleCopyKeyDown(
                 keyEvent = keyEvent,
-                terminal = terminal(),
-                onCopyRequested = { activeTerminal -> performCopy(activeTerminal, container) },
+                terminal = state.terminal(),
+                takeCapturedSelectionText = state.takeCapturedSelectionText,
+                onCopyRequested = { activeTerminal, text -> performCopy(activeTerminal, text, container) },
                 onCopyAttemptedWithoutSelection = {
                     showCopyToast(container, COPY_NO_SELECTION_MESSAGE, false, NO_SELECTION_TOAST_DURATION_MS)
                 },
@@ -193,7 +219,7 @@ internal fun attachTerminalKeydownListeners(
     )
     container.addEventListener("keydown", { event: Event ->
         val keyEvent = event as KeyboardEvent
-        handleZoomKeyDown(keyEvent, terminal(), fontSize(), onZoomApplied)
+        handleZoomKeyDown(keyEvent, state.terminal(), state.fontSize(), onZoomApplied)
     })
 }
 
@@ -206,8 +232,7 @@ internal fun attachTerminalKeydownListeners(
 // underneath xterm's real DOM node. Confirmed live via Playwright: a first
 // attempt using a Compose Box+Text overlay never appeared on screen despite
 // the copy itself succeeding.
-private fun performCopy(term: XtermTerminal, container: HTMLDivElement) {
-    val text = term.getSelection().toString()
+private fun performCopy(term: XtermTerminal, text: String, container: HTMLDivElement) {
     copyTextToClipboard(text) { success ->
         val durationMs = if (success) COPY_TOAST_DURATION_MS else 0
         showCopyToast(container, copyResultMessage(success), success, durationMs)

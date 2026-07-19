@@ -17,6 +17,8 @@ class FakeSessionsRepository(initialSessions: List<ProjectSession> = emptyList()
     var closeSplitPaneError: Throwable? = null
     val closeSplitPaneCalls = mutableListOf<Pair<String, String>>()
     var branchMerged = true
+    var pasteBufferText = ""
+    var pasteBufferError: Throwable? = null
     val deleteSessionCalls = mutableListOf<Triple<String, Boolean, Boolean>>()
     var setSessionMetaError: Throwable? = null
     val setSessionMetaCalls = mutableListOf<Triple<String, String?, Boolean>>()
@@ -58,6 +60,11 @@ class FakeSessionsRepository(initialSessions: List<ProjectSession> = emptyList()
     }
 
     override suspend fun isBranchMerged(projectId: String, sessionName: String): Boolean = branchMerged
+
+    override suspend fun pasteBuffer(projectId: String, sessionName: String): String {
+        pasteBufferError?.let { throw it }
+        return pasteBufferText
+    }
 
     override suspend fun setSessionMeta(projectId: String, sessionName: String, label: String?, favorite: Boolean) {
         setSessionMetaCalls.add(Triple(sessionName, label, favorite))

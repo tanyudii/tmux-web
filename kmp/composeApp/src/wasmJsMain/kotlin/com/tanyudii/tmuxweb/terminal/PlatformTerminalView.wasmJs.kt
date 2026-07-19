@@ -5,9 +5,11 @@ package com.tanyudii.tmuxweb.terminal
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.ExperimentalComposeUiApi
@@ -19,6 +21,8 @@ import kotlin.js.ExperimentalWasmJsInterop
 import kotlin.math.abs
 import kotlinx.browser.document
 import kotlinx.browser.window
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.launch
 import org.w3c.dom.HTMLDivElement
 import org.w3c.dom.HTMLElement
 
@@ -117,8 +121,106 @@ private class TerminalRefs(
     val setTerminal: (XtermTerminal) -> Unit,
     val fitAddon: () -> XtermFitAddon?,
     val setFitAddon: (XtermFitAddon) -> Unit,
+    val searchAddon: () -> XtermSearchAddon?,
     val setSearchAddon: (XtermSearchAddon) -> Unit,
 )
+
+// Tracks the last size reported to the server so a resize is only sent when
+// cols/rows actually change -- shared by the synchronous `update` pass AND
+// the deferred first-fit/ResizeObserver callbacks below, all of which can
+// otherwise race each other (see reportIfChanged's call sites). Reads
+// [onResize] through a State so a later recomposition's callback identity is
+// always the one used, matching rememberUpdatedState's usual purpose --
+// wrapped in a class (not a local closure) purely to keep
+// PlatformTerminalView itself under detekt's LongMethod threshold.
+private class ResizeTracker(private val onResize: State<(cols: Int, rows: Int) -> Unit>) {
+    private var lastCols = 0
+    private var lastRows = 0
+
+    fun reportIfChanged(term: XtermTerminal) {
+        if (term.cols != lastCols || term.rows != lastRows) {
+            lastCols = term.cols
+            lastRows = term.rows
+            onResize.value(term.cols, term.rows)
+        }
+    }
+}
+
+/** The two `var`s [attachContainerInteractions] mutates -- bundled to stay under the parameter limit. */
+private class TerminalMutableState(
+    val fontSize: () -> Int,
+    val setFontSize: (Int) -> Unit,
+    val capturedSelectionText: () -> String?,
+    val setCapturedSelectionText: (String?) -> Unit,
+)
+
+/**
+ * The rest of the composable's `remember`ed state/callbacks needed to wire up
+ * keydown/scroll/Option-drag handling -- bundled (with [TerminalRefs]) purely
+ * to keep [attachContainerInteractions] under detekt's parameter-count limit.
+ */
+private class TerminalInteractionRefs(
+    val state: TerminalMutableState,
+    val currentOnScroll: State<(ClientMessage.ScrollDirection, Int) -> Unit>,
+    val currentCaptureSelection: State<suspend () -> String?>,
+    val scope: CoroutineScope,
+    val reportResizeIfChanged: (XtermTerminal) -> Unit,
+)
+
+// Wires the container-level behaviors that used to be inlined in `factory`
+// (keydown shortcuts, resize, touch-scroll, Option-drag capture) -- split out
+// purely to keep PlatformTerminalView itself under detekt's LongMethod
+// threshold, no behavior change.
+private fun attachContainerInteractions(
+    container: HTMLDivElement,
+    refs: TerminalRefs,
+    interaction: TerminalInteractionRefs,
+) {
+    // EMB-219: the search shortcut is registered separately, in the CAPTURE
+    // phase, by attachTerminalKeydownListeners -- confirmed live that
+    // xterm.js's own internal keydown handler (on its hidden textarea, the
+    // real event *target*) treats Ctrl+F as the VT control character ^F and
+    // stopPropagation()s it before a bubble-phase listener on `container`
+    // would ever see it (Cmd+F worked fine, since metaKey isn't in xterm's
+    // Ctrl-letter VT keymap). A capture-phase listener on an ancestor is the
+    // only way to intercept ahead of xterm's own handling.
+    attachTerminalKeydownListeners(
+        container = container,
+        state = TerminalKeydownState(
+            terminal = refs.terminal,
+            searchAddon = refs.searchAddon,
+            fontSize = interaction.state.fontSize,
+            takeCapturedSelectionText = {
+                interaction.state.capturedSelectionText().also { interaction.state.setCapturedSelectionText(null) }
+            },
+        ),
+        onZoomApplied = { current, nextSize ->
+            interaction.state.setFontSize(nextSize)
+            setFontSize(current, nextSize)
+            refs.fitAddon()?.fit()
+            interaction.reportResizeIfChanged(current)
+        },
+    )
+    attachResizeObserver(container, refs.terminal, refs.fitAddon, interaction.reportResizeIfChanged)
+    attachScrollHandling(container, refs.terminal) { interaction.currentOnScroll.value }
+    attachOptionDragCaptureListener(container) {
+        interaction.scope.launch {
+            interaction.state.setCapturedSelectionText(interaction.currentCaptureSelection.value())
+        }
+    }
+}
+
+// Builds the actual DOM container -- split out of PlatformTerminalView's
+// `factory` purely to keep that composable under detekt's LongMethod
+// threshold, no behavior change.
+private fun createTerminalContainer(refs: TerminalRefs, interaction: TerminalInteractionRefs): HTMLDivElement {
+    val container = document.createElement("div") as HTMLDivElement
+    container.style.width = "100%"
+    container.style.height = "100%"
+    container.style.position = "relative"
+    attachContainerInteractions(container = container, refs = refs, interaction = interaction)
+    return container
+}
 
 /** The composable's stable callback params. Bundled for the same reason as [TerminalRefs]. */
 private class TerminalCallbacks(
@@ -216,88 +318,64 @@ actual fun PlatformTerminalView(
     // acts on those itself. Touch is the gap, because xterm emits no wheel
     // event for a finger drag.
     onScroll: (direction: ClientMessage.ScrollDirection, lines: Int) -> Unit,
+    captureSelection: suspend () -> String?,
 ) {
     var terminal by remember { mutableStateOf<XtermTerminal?>(null) }
     var fitAddon by remember { mutableStateOf<XtermFitAddon?>(null) }
     var searchAddon by remember { mutableStateOf<XtermSearchAddon?>(null) }
-    var lastCols by remember { mutableStateOf(0) }
-    var lastRows by remember { mutableStateOf(0) }
     var fontSize by remember { mutableStateOf(DEFAULT_FONT_SIZE) }
+    // Cached result of the last Option-drag's captureSelection() -- consumed
+    // (cleared) at most once by TerminalKeydownHandlers.wasmJs.kt's Cmd+C.
+    var capturedSelectionText by remember { mutableStateOf<String?>(null) }
+    val scope = rememberCoroutineScope()
     // `factory` below runs once, but this callback can change identity on any
     // recomposition -- rememberUpdatedState keeps the touch handler reading the
     // current one instead of the one that happened to exist at mount.
     val currentOnScroll = rememberUpdatedState(onScroll)
+    val currentCaptureSelection = rememberUpdatedState(captureSelection)
+    val currentOnResize = rememberUpdatedState(onResize)
+    val resizeTracker = remember { ResizeTracker(currentOnResize) }
 
     // Caller keys this composable by session identity (WebMainPane's
     // `key(session.fullName)`) -- dispose the xterm.js instance once per
     // lifetime instead of leaking it when the session switches away.
     DisposableEffect(Unit) { onDispose { terminal?.dispose() } }
 
-    // Shared by the synchronous `update` pass AND the deferred first-fit
-    // callback below -- a resize that only happens inside `update` would be
-    // silently dropped for the deferred one, since nothing about a plain
-    // requestAnimationFrame callback re-triggers Compose's `update` lambda.
-    // That gap previously let xterm settle on its real (larger, correctly
-    // laid-out) size while the PTY on the server stayed at whatever smaller
-    // size was last reported -- tmux kept painting to the old dimensions,
-    // leaving a blank strip below the actual content.
-    fun reportResizeIfChanged(term: XtermTerminal) {
-        if (term.cols != lastCols || term.rows != lastRows) {
-            lastCols = term.cols
-            lastRows = term.rows
-            onResize(term.cols, term.rows)
-        }
-    }
+    val refs = TerminalRefs(
+        terminal = { terminal },
+        setTerminal = { terminal = it },
+        fitAddon = { fitAddon },
+        setFitAddon = { fitAddon = it },
+        searchAddon = { searchAddon },
+        setSearchAddon = { searchAddon = it },
+    )
+
+    val interaction = TerminalInteractionRefs(
+        state = TerminalMutableState(
+            fontSize = { fontSize },
+            setFontSize = { fontSize = it },
+            capturedSelectionText = { capturedSelectionText },
+            setCapturedSelectionText = { capturedSelectionText = it },
+        ),
+        currentOnScroll = currentOnScroll,
+        currentCaptureSelection = currentCaptureSelection,
+        scope = scope,
+        reportResizeIfChanged = resizeTracker::reportIfChanged,
+    )
 
     HtmlElementView<HTMLDivElement>(
-        factory = {
-            val container = document.createElement("div") as HTMLDivElement
-            container.style.width = "100%"
-            container.style.height = "100%"
-            container.style.position = "relative"
-            // EMB-219: the search shortcut is registered separately, in the
-            // CAPTURE phase, by attachTerminalKeydownListeners below --
-            // confirmed live that xterm.js's own internal keydown handler
-            // (on its hidden textarea, the actual event *target*) treats
-            // Ctrl+F as the VT control character ^F and stopPropagation()s
-            // it before a bubble-phase listener on `container` would ever
-            // see it (Cmd+F worked fine, since metaKey isn't in xterm's
-            // Ctrl-letter VT keymap). A capture-phase listener on an
-            // ancestor is the only way to intercept ahead of xterm's own
-            // handling.
-            attachTerminalKeydownListeners(
-                container = container,
-                terminal = { terminal },
-                searchAddon = { searchAddon },
-                fontSize = { fontSize },
-                onZoomApplied = { current, nextSize ->
-                    fontSize = nextSize
-                    setFontSize(current, nextSize)
-                    fitAddon?.fit()
-                    reportResizeIfChanged(current)
-                },
-            )
-            attachResizeObserver(container, { terminal }, { fitAddon }, ::reportResizeIfChanged)
-            attachScrollHandling(container, { terminal }, { currentOnScroll.value })
-            container
-        },
+        factory = { createTerminalContainer(refs, interaction) },
         modifier = modifier.fillMaxSize(),
         update = { container: HTMLDivElement ->
             updateTerminalContainer(
                 container = container,
                 isVisible = isVisible,
-                refs = TerminalRefs(
-                    terminal = { terminal },
-                    setTerminal = { terminal = it },
-                    fitAddon = { fitAddon },
-                    setFitAddon = { fitAddon = it },
-                    setSearchAddon = { searchAddon = it },
-                ),
+                refs = refs,
                 callbacks = TerminalCallbacks(
                     onInput = onInput,
                     onBell = onBell,
                     handleReady = handleReady,
-                    reportResizeIfChanged = ::reportResizeIfChanged,
+                    reportResizeIfChanged = resizeTracker::reportIfChanged,
                 ),
             )
         },

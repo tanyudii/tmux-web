@@ -23,7 +23,11 @@ actual fun PlatformTerminalView(
     handleReady: (PlatformTerminalHandle) -> Unit,
     isVisible: Boolean,
     onScroll: (direction: ClientMessage.ScrollDirection, lines: Int) -> Unit,
+    captureSelection: suspend () -> String?,
 ) {
+    // captureSelection is a web-only concern (see the expect declaration's
+    // kdoc) -- iOS's copy flow doesn't go through this at all, so there's
+    // nothing to wire here.
     // isVisible is a web-only workaround (see kdoc on the expect declaration)
     // for interop DOM views always painting above Compose Popups -- native
     // UIKit modals already z-order correctly above sibling UIViews, so

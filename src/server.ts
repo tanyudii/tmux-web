@@ -73,6 +73,10 @@ export interface ServerDeps {
   // unmerged-branch warning -- see project-sessions.ts's
   // isProjectSessionBranchMerged.
   isProjectSessionBranchMerged: (project: Project, sessionSlug: string) => Promise<boolean>;
+  // Backs the Option-drag copy relay: reads tmux's paste buffer (see
+  // tmux.ts's readPasteBuffer) so the browser can write it to the real OS
+  // clipboard instead of it staying trapped in tmux's own buffer.
+  getProjectSessionPasteBuffer: (project: Project, sessionSlug: string) => Promise<string>;
   // EMB-213: read-only lifecycle event history for a session.
   getProjectSessionEvents: (project: Project, sessionSlug: string) => Promise<SessionEvent[]>;
   // EMB-214: per-session CPU/mem (real docker stats output, cached).
@@ -611,6 +615,27 @@ export function createServer(deps: ServerDeps): Server {
         try {
           const merged = await deps.isProjectSessionBranchMerged(project, sessionSlug);
           return sendJson(res, 200, { merged });
+        } catch (error) {
+          if (sendMappedError(res, error)) return;
+          throw error;
+        }
+      }
+
+      // Relays tmux's paste buffer (see tmux.ts's readPasteBuffer) after an
+      // Option-drag copy-mode selection, so PlatformTerminalView's Cmd+C
+      // handler can write it to the real OS clipboard -- see
+      // TerminalKeydownHandlers.wasmJs.kt for the client side.
+      const pasteBufferMatch = path.match(/^\/api\/projects\/([^/]+)\/sessions\/([^/]+)\/paste-buffer$/);
+      if (pasteBufferMatch && req.method === "GET") {
+        if (!checkAuthorized(req, res, deps.token, clientIp, authFailureLimiter, deps.accessLogPath)) return;
+
+        const project = await deps.getProject(decodeURIComponent(pasteBufferMatch[1]));
+        if (!project) return sendJson(res, 404, { error: "Project not found" });
+
+        const sessionSlug = decodeURIComponent(pasteBufferMatch[2]);
+        try {
+          const text = await deps.getProjectSessionPasteBuffer(project, sessionSlug);
+          return sendJson(res, 200, { text });
         } catch (error) {
           if (sendMappedError(res, error)) return;
           throw error;

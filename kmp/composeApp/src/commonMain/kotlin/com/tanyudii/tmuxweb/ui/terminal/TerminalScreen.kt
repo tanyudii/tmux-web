@@ -18,6 +18,7 @@ import com.tanyudii.tmuxweb.data.remote.terminal.ClientMessage
 import com.tanyudii.tmuxweb.domain.model.ComposeServiceStatus
 import com.tanyudii.tmuxweb.domain.repository.ChangesRepository
 import com.tanyudii.tmuxweb.domain.repository.EnvironmentRepository
+import com.tanyudii.tmuxweb.domain.repository.SessionsRepository
 import com.tanyudii.tmuxweb.presentation.ChangesViewModel
 import com.tanyudii.tmuxweb.presentation.EnvironmentUiState
 import com.tanyudii.tmuxweb.presentation.EnvironmentViewModel
@@ -46,6 +47,7 @@ fun TerminalRoute(
     val session = rememberTerminalSession(sessionFullName)
     val environment = rememberEnvironment(projectId, sessionName)
     val changes = rememberChanges(projectId, sessionName)
+    val sessionsRepository: SessionsRepository = koinInject()
 
     TerminalScreen(
         title = sessionName,
@@ -59,6 +61,10 @@ fun TerminalRoute(
         onResize = session::onResize,
         onBell = session::onBell,
         onScroll = session::onScroll,
+        // See PlatformTerminalView's captureSelection kdoc -- relays tmux's
+        // paste buffer (an Option-drag's real copy-mode selection) so
+        // Cmd+C can write it to the OS clipboard.
+        captureSelection = { runCatching { sessionsRepository.pasteBuffer(projectId, sessionName) }.getOrNull() },
         onHandleReady = session.onHandleReady,
         onRetry = session::onRetry,
         onBack = onBack,
@@ -79,6 +85,7 @@ private fun TerminalScreen(
     onResize: (cols: Int, rows: Int) -> Unit,
     onBell: () -> Unit,
     onScroll: (direction: ClientMessage.ScrollDirection, lines: Int) -> Unit,
+    captureSelection: suspend () -> String?,
     onHandleReady: (PlatformTerminalHandle) -> Unit,
     onRetry: () -> Unit,
     onBack: () -> Unit,
@@ -129,6 +136,7 @@ private fun TerminalScreen(
             handleReady = onHandleReady,
             isVisible = terminalVisible,
             onScroll = onScroll,
+            captureSelection = captureSelection,
         )
         QuickKeysBar(onKeyTap = onInput)
     }

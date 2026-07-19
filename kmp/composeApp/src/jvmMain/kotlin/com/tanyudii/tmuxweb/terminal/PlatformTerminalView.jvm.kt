@@ -18,6 +18,7 @@ actual fun PlatformTerminalView(
     handleReady: (PlatformTerminalHandle) -> Unit,
     isVisible: Boolean,
     onScroll: (direction: ClientMessage.ScrollDirection, lines: Int) -> Unit,
+    captureSelection: suspend () -> String?,
 ) {
     LaunchedEffect(Unit) { handleReady(PlatformTerminalHandle()) }
     Box(modifier = modifier)

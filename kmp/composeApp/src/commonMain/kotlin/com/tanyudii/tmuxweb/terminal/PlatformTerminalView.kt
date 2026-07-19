@@ -27,6 +27,14 @@ import com.tanyudii.tmuxweb.data.remote.terminal.ClientMessage
  * relying on the widget's local scrollback, which doesn't reflect a tmux
  * pane's repaint-by-cursor-addressing rendering correctly. Only the iOS
  * actual wires this up today; it defaults to a no-op elsewhere.
+ *
+ * [captureSelection] is called right after an Option-held drag selection
+ * finishes, and should return the text tmux's own copy-mode just copied
+ * (e.g. via [com.tanyudii.tmuxweb.domain.repository.SessionsRepository.pasteBuffer]),
+ * or null on failure/nothing to report. Only the wasmJs actual wires this up
+ * (see XtermJs.kt's newTerminal() comment for why Option-drag no longer
+ * produces a real local selection to read directly); it defaults to a no-op
+ * elsewhere.
  */
 @Composable
 expect fun PlatformTerminalView(
@@ -37,6 +45,7 @@ expect fun PlatformTerminalView(
     handleReady: (PlatformTerminalHandle) -> Unit,
     isVisible: Boolean = true,
     onScroll: (direction: ClientMessage.ScrollDirection, lines: Int) -> Unit = { _, _ -> },
+    captureSelection: suspend () -> String? = { null },
 )
 
 expect class PlatformTerminalHandle {

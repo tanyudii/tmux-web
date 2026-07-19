@@ -32,6 +32,10 @@ data class NewSessionRequest(val name: String, val startupCommand: String? = nul
 @Serializable
 data class BranchMergedResponse(val merged: Boolean)
 
+/** Mirrors the `{text}` body of `GET .../paste-buffer` (src/server.ts) -- tmux's paste buffer content. */
+@Serializable
+data class PasteBufferResponse(val text: String)
+
 /** Mirrors `SessionMeta` in src/session-meta.ts -- the PUT .../meta request/response body. */
 @Serializable
 data class SessionMetaRequest(val label: String? = null, val favorite: Boolean)
