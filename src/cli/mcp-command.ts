@@ -219,11 +219,13 @@ export async function runMcpCommand(args: string[] = [], deps: McpCommandDeps = 
   });
 
   const sendMessage = buildSendMessageHandler(configDir, worktreesRoot, hookPort, waitTimeoutMs, store);
-  const mcpServer = createMcpServer({ sendMessage });
 
   if (options.http) {
     const mcpToken = await loadOrCreateMcpToken(configDir);
-    const httpServer = createHttpMcpServer(mcpServer, { expectedToken: mcpToken });
+    // A fresh McpServer per request (see http-server.ts's comment) -- the
+    // sendMessage closure above (and the store/config it captures) is
+    // still built exactly once and reused across every request.
+    const httpServer = createHttpMcpServer(() => createMcpServer({ sendMessage }), { expectedToken: mcpToken });
     await new Promise<void>((resolve, reject) => {
       httpServer.once("error", reject);
       httpServer.listen(options.port, options.host, () => resolve());
@@ -234,5 +236,5 @@ export async function runMcpCommand(args: string[] = [], deps: McpCommandDeps = 
     return;
   }
 
-  await mcpServer.connect(new StdioServerTransport());
+  await createMcpServer({ sendMessage }).connect(new StdioServerTransport());
 }
