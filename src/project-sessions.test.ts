@@ -9,6 +9,7 @@ import {
   killProjectSession,
   killProjectSessionSplit,
   isProjectSessionBranchMerged,
+  getProjectSessionPasteBuffer,
   getProjectSessionChanges,
   getProjectSessionDiff,
   stageProjectSessionFile,
@@ -44,6 +45,7 @@ function makeDeps(overrides: Partial<ProjectSessionsDeps> = {}): ProjectSessions
     removeWorktree: async () => {},
     isBranchMerged: async () => true,
     deleteBranch: async () => {},
+    readPasteBuffer: async () => "",
     getChangedFiles: async () => ({ staged: [], unstaged: [], untracked: [], conflicted: [], repoState: "clean" }),
     getFileDiff: async () => ({ diff: "", isUntracked: false, isBinary: false }),
     stageFile: async () => {},
@@ -458,6 +460,27 @@ test("isProjectSessionBranchMerged delegates to deps.isBranchMerged with repoPat
 
   assert.equal(merged, false);
   assert.deepEqual(calls, [["/repo", "feature-x"]]);
+});
+
+test("getProjectSessionPasteBuffer validates the session slug before reading the buffer", async () => {
+  let called = false;
+  const deps = makeDeps({
+    readPasteBuffer: async () => {
+      called = true;
+      return "should not be reached";
+    },
+  });
+
+  await assert.rejects(() => getProjectSessionPasteBuffer(PROJECT, "!!!", deps), ValidationError);
+  assert.equal(called, false);
+});
+
+test("getProjectSessionPasteBuffer returns deps.readPasteBuffer's text for a valid session slug", async () => {
+  const deps = makeDeps({ readPasteBuffer: async () => "copied text\nsecond line\n" });
+
+  const text = await getProjectSessionPasteBuffer(PROJECT, "feature-x", deps);
+
+  assert.equal(text, "copied text\nsecond line\n");
 });
 
 test("killProjectSessionSplit kills only the split pane's linked session", async () => {
