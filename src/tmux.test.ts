@@ -12,6 +12,7 @@ import {
   capturePane,
   scrollPane,
   cancelCopyMode,
+  readPasteBuffer,
   setBellHook,
   ensureLinkedSession,
   sendKeysToSession,
@@ -269,6 +270,25 @@ test("capturePane returns tmux's captured pane text verbatim", async () => {
 
   assert.equal(await capturePane("main", fakeExec), "line one\nline two\n");
   assert.deepEqual(calls, [{ file: "tmux", args: ["capture-pane", "-p", "-t", "main"] }]);
+});
+
+test("readPasteBuffer returns tmux's paste buffer text verbatim", async () => {
+  const calls: Array<{ file: string; args: string[] }> = [];
+  const fakeExec = async (file: string, args: string[]) => {
+    calls.push({ file, args });
+    return { stdout: "selected line one\nselected line two\n" };
+  };
+
+  assert.equal(await readPasteBuffer(fakeExec), "selected line one\nselected line two\n");
+  assert.deepEqual(calls, [{ file: "tmux", args: ["save-buffer", "-"] }]);
+});
+
+test("readPasteBuffer propagates the error when tmux has no buffer to read", async () => {
+  const fakeExec = async () => {
+    throw new Error("no buffer");
+  };
+
+  await assert.rejects(() => readPasteBuffer(fakeExec), /no buffer/);
 });
 
 test("scrollPane rejects invalid session names without calling exec", async () => {
