@@ -15,7 +15,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.viewinterop.HtmlElementView
 import com.tanyudii.tmuxweb.data.remote.terminal.ClientMessage
 import com.tanyudii.tmuxweb.domain.accumulateScrollLines
-import com.tanyudii.tmuxweb.domain.dragEdgeScrollLines
 import kotlin.js.ExperimentalWasmJsInterop
 import kotlin.math.abs
 import kotlinx.browser.document
@@ -59,28 +58,6 @@ private fun attachScrollHandling(
             }
         },
     )
-}
-
-// Reports Option-forced-selection drags near the terminal's top/bottom edge
-// as tmux scroll requests -- see attachSelectionAutoScroll (this package) for
-// why xterm.js's own built-in edge-auto-scroll can't do this itself, and
-// dragEdgeScrollLines (domain/TerminalSelectionAutoScroll.kt) for the
-// edge-distance math shared with the touch-drag handler's pixels-per-line
-// approach above.
-private fun attachSelectionAutoScrollHandling(
-    container: HTMLDivElement,
-    terminal: () -> XtermTerminal?,
-    onScroll: () -> (ClientMessage.ScrollDirection, Int) -> Unit,
-) {
-    attachSelectionAutoScroll(container) { pointerY, containerHeight ->
-        val rows = terminal()?.rows ?: 0
-        val pixelsPerLine = if (rows > 0) containerHeight / rows else 0.0
-        val lines = dragEdgeScrollLines(pointerY, containerHeight, pixelsPerLine)
-        if (lines != 0) {
-            val direction = if (lines < 0) ClientMessage.ScrollDirection.UP else ClientMessage.ScrollDirection.DOWN
-            onScroll()(direction, abs(lines))
-        }
-    }
 }
 
 // A single deferred fit() (in the composable's `update` lambda) only
@@ -302,7 +279,6 @@ actual fun PlatformTerminalView(
             )
             attachResizeObserver(container, { terminal }, { fitAddon }, ::reportResizeIfChanged)
             attachScrollHandling(container, { terminal }, { currentOnScroll.value })
-            attachSelectionAutoScrollHandling(container, { terminal }, { currentOnScroll.value })
             container
         },
         modifier = modifier.fillMaxSize(),
