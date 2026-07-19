@@ -81,23 +81,26 @@ fun newFitAddon(): XtermFitAddon =
 // rightClickSelectsWord: false -- xterm.js defaults this to true on macOS,
 // which replaces an existing multi-line selection with a single word on
 // right-click. Same fix as public/app.js commit 73be7a0.
-// macOptionClickForcesSelection: true -- tmux runs with `mouse on` (see
-// src/tmux.ts), so a plain drag is captured by tmux's own mouse-reporting
-// (which enters tmux's copy-mode and copies into tmux's *own* internal
-// paste buffer -- the "copied N chars to tmux buffer" status message a
-// user sees is tmux's, not this app's). xterm.js's own vendored source
-// (vendor/xterm.js) forces local browser-side selection instead via
-// `isMac ? e.altKey && macOptionClickForcesSelection : e.shiftKey` -- i.e.
-// Shift+drag already worked on Windows/Linux without this option, but on
-// macOS the bypass modifier is Option/Alt, and it does nothing at all
-// unless this option is explicitly enabled (it's not part of xterm.js's
-// own defaults). Without it, every Mac user's drag falls through to tmux
-// every time, and hasSelection() (XtermTerminal) is always false, so
-// Cmd+C in PlatformTerminalView.wasmJs.kt never has anything to copy.
+// macOptionClickForcesSelection is deliberately left at its default (false),
+// unlike an earlier version of this file: a plain drag (with or without
+// Option/Alt on Mac, Shift elsewhere) is left to fall through to tmux's own
+// mouse-reporting when tmux.conf has `mouse on` (see README's Option/Shift
+// note), entering tmux's native copy-mode -- which already auto-scrolls
+// correctly at the pane edges (a real tmux feature), unlike xterm.js's own
+// local-selection auto-scroll, which drives a local scrollback buffer that
+// stays effectively empty in this app (see TerminalTouchScroll.wasmJs.kt).
+// Forcing local browser selection here would silently break scrolling for
+// any selection long enough to need it -- confirmed via a live spike that
+// xterm's local selection also can't be reconstructed correctly across a
+// tmux-driven repaint mid-drag (its buffer only ever holds one screen's
+// worth of content at a time). Instead, Option-drag is tracked separately
+// (see attachOptionDragCaptureListener, this package) purely to know when to
+// relay tmux's own resulting paste buffer to the real OS clipboard on
+// Cmd+C -- see TerminalKeydownHandlers.wasmJs.kt.
 fun newTerminal(): XtermTerminal =
     js(
         "new Terminal({ cursorBlink: true, fontFamily: 'monospace', fontSize: 14, bellStyle: 'none'," +
-            " rightClickSelectsWord: false, macOptionClickForcesSelection: true })",
+            " rightClickSelectsWord: false })",
     )
 
 // navigator.clipboard.writeText needs a secure context (HTTPS/localhost),

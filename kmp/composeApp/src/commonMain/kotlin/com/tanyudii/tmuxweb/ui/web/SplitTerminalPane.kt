@@ -52,6 +52,7 @@ fun TerminalArea(
     onSplitClosed: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val repository: SessionsRepository = koinInject()
     Row(modifier = modifier.fillMaxSize()) {
         Box(modifier = Modifier.weight(1f).fillMaxHeight()) {
             // Exactly one primary PlatformTerminalView instance regardless
@@ -70,6 +71,8 @@ fun TerminalArea(
                     handleReady = primaryTerminal.onHandleReady,
                     isVisible = terminalVisible,
                     onScroll = primaryTerminal::onScroll,
+                    // See PlatformTerminalView's captureSelection kdoc.
+                    captureSelection = { runCatching { repository.pasteBuffer(projectId, sessionSlug) }.getOrNull() },
                 )
             }
         }
@@ -156,6 +159,8 @@ private fun SplitTerminalPane(
                     handleReady = terminal.onHandleReady,
                     isVisible = isVisible,
                     onScroll = terminal::onScroll,
+                    // See PlatformTerminalView's captureSelection kdoc.
+                    captureSelection = { runCatching { repository.pasteBuffer(projectId, sessionSlug) }.getOrNull() },
                 )
             }
         }
