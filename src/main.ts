@@ -13,6 +13,7 @@ import {
   isValidSessionName,
   setBellHook,
   ensureLinkedSession,
+  readPasteBuffer,
 } from "./tmux.ts";
 import { parseSessionName, splitPaneSessionName } from "./session-naming.ts";
 import {
@@ -42,6 +43,7 @@ import {
   killProjectSession as killProjectSessionImpl,
   killProjectSessionSplit as killProjectSessionSplitImpl,
   isProjectSessionBranchMerged as isProjectSessionBranchMergedImpl,
+  getProjectSessionPasteBuffer as getProjectSessionPasteBufferImpl,
   getProjectSessionChanges as getProjectSessionChangesImpl,
   getProjectSessionDiff as getProjectSessionDiffImpl,
   stageProjectSessionFile as stageProjectSessionFileImpl,
@@ -212,6 +214,7 @@ export async function main(): Promise<void> {
     removeWorktree,
     isBranchMerged,
     deleteBranch,
+    readPasteBuffer,
     getChangedFiles,
     getFileDiff,
     stageFile,
@@ -285,6 +288,8 @@ export async function main(): Promise<void> {
       killProjectSessionSplitImpl(project, slug, projectSessionsDeps),
     isProjectSessionBranchMerged: (project, slug) =>
       isProjectSessionBranchMergedImpl(project, slug, projectSessionsDeps),
+    getProjectSessionPasteBuffer: (project, slug) =>
+      getProjectSessionPasteBufferImpl(project, slug, projectSessionsDeps),
     getProjectSessionEvents: (project, slug) => readSessionEvents(sessionEventsFilePath(project.id), slug),
     getProjectSessionResourceUsage: (project, slug) =>
       getSessionResourceUsage(project, slug, sessionEnvDeps, resourceUsageCache),
