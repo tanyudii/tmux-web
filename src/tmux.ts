@@ -15,6 +15,15 @@ export interface TmuxWindow {
 }
 
 export type ExecFn = (file: string, args: string[]) => Promise<{ stdout: string }>;
+export type DelayFn = () => Promise<void>;
+
+// How long readPasteBuffer waits before reading tmux's paste buffer -- see
+// its doc comment for the race this narrows.
+const PASTE_BUFFER_SETTLE_MS = 100;
+
+function defaultDelay(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, PASTE_BUFFER_SETTLE_MS));
+}
 
 const SESSION_LIST_FORMAT = "#{session_name}\t#{session_windows}\t#{session_attached}";
 const WINDOW_LIST_FORMAT = "#{window_index}\t#{window_name}";
@@ -212,12 +221,21 @@ export async function scrollPane(
 //
 // Paste buffers are scoped to the tmux SERVER, not to any one session --
 // there's no `-t` target to disambiguate, unlike every other function here.
-// This app runs one shared token against one server (see README's "one
-// shared token, one server" scope note), so treating "the most recent
-// buffer" as "the one this session's drag just produced" is correct for the
-// common case; two sessions finishing an Option-drag at the exact same
-// instant is an accepted, unhandled edge case.
-export async function readPasteBuffer(exec: ExecFn = defaultExec): Promise<string> {
+// Confirmed live (Phase 4 browser verification, real ~28-session tmux
+// server): this is a REAL race, not just a theoretical simultaneous-instant
+// one -- this app's mouseup-triggered GET can reach save-buffer before
+// tmux's own MouseDragEnd1Pane binding has finished writing the buffer, and
+// lose to an unrelated, concurrently-active session's own copy landing in
+// that window (observed ~14ms gap). [delayFn] narrows (does not eliminate)
+// that window by waiting a short, fixed settle time first -- this app runs
+// one shared token against one server (see README's "one shared token, one
+// server" scope note), so on a lightly-used host the caller's own copy is
+// overwhelmingly likely to already be the newest buffer by the time this
+// runs. A fully session-scoped fix would need tmux's own mouse keybindings
+// rebound per-session (invasive: would also affect the user's own tmux
+// customizations outside this app) -- not attempted here.
+export async function readPasteBuffer(exec: ExecFn = defaultExec, delayFn: DelayFn = defaultDelay): Promise<string> {
+  await delayFn();
   const { stdout } = await exec("tmux", ["save-buffer", "-"]);
   return stdout;
 }
