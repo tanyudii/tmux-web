@@ -201,6 +201,27 @@ export async function scrollPane(
   await exec("tmux", ["send-keys", "-X", "-t", name, "-N", String(lines), "scroll-down"]);
 }
 
+// Reads the tmux server's most recently copied paste buffer -- used to
+// relay what a user just selected via Option+drag to the browser's real OS
+// clipboard. tmux's default mouse bindings (MouseDragEnd1Pane ->
+// copy-selection-and-cancel) already copy a completed copy-mode drag
+// selection into this buffer and exit copy-mode on mouse release, with no
+// extra commands needed from this app -- see README's Option/Shift-drag
+// note and XtermJs.kt's newTerminal() comment for why the browser side no
+// longer tries to hold its own copy of the selected text.
+//
+// Paste buffers are scoped to the tmux SERVER, not to any one session --
+// there's no `-t` target to disambiguate, unlike every other function here.
+// This app runs one shared token against one server (see README's "one
+// shared token, one server" scope note), so treating "the most recent
+// buffer" as "the one this session's drag just produced" is correct for the
+// common case; two sessions finishing an Option-drag at the exact same
+// instant is an accepted, unhandled edge case.
+export async function readPasteBuffer(exec: ExecFn = defaultExec): Promise<string> {
+  const { stdout } = await exec("tmux", ["save-buffer", "-"]);
+  return stdout;
+}
+
 // Exits copy-mode, snapping the pane back to live output. Called when the
 // user resumes typing after scrolling, so keystrokes reach the shell instead
 // of being swallowed by copy-mode's own keytable.
