@@ -471,7 +471,9 @@ test("getProjectSessionPasteBuffer validates the session slug before reading the
     },
   });
 
-  await assert.rejects(() => getProjectSessionPasteBuffer(PROJECT, "!!!", deps), ValidationError);
+  // "__" is the session-name separator (session-naming.ts's buildSessionName)
+  // -- a slug containing it can't be composed into a valid full tmux name.
+  await assert.rejects(() => getProjectSessionPasteBuffer(PROJECT, "bad__slug", deps), ValidationError);
   assert.equal(called, false);
 });
 

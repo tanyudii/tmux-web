@@ -56,6 +56,9 @@ export interface ProjectSessionsDeps {
   // EMB-207 auto-delete branch on session delete.
   isBranchMerged: (repoPath: string, branchName: string) => Promise<boolean>;
   deleteBranch: (repoPath: string, branchName: string) => Promise<void>;
+  // Backs getProjectSessionPasteBuffer below -- see tmux.ts's readPasteBuffer
+  // for why this isn't scoped by session name.
+  readPasteBuffer: () => Promise<string>;
   getChangedFiles: (worktreePath: string) => Promise<GroupedChanges>;
   getFileDiff: (worktreePath: string, filePath: string, mode: DiffMode) => Promise<FileDiff>;
   stageFile: (worktreePath: string, filePath: string) => Promise<void>;
@@ -320,6 +323,21 @@ export async function isProjectSessionBranchMerged(
   deps: ProjectSessionsDeps,
 ): Promise<boolean> {
   return deps.isBranchMerged(project.repoPath, sessionSlug);
+}
+
+// Backs the paste-buffer relay route (server.ts): validates the session
+// slug the same way every other project-session operation does before
+// reading tmux's paste buffer, even though the buffer itself isn't
+// session-scoped (see tmux.ts's readPasteBuffer) -- keeps the same
+// project/session-existence error behavior other routes already have,
+// rather than a global buffer read bypassing that check entirely.
+export async function getProjectSessionPasteBuffer(
+  project: Project,
+  sessionSlug: string,
+  deps: ProjectSessionsDeps,
+): Promise<string> {
+  buildFullNameOrThrowValidation(project, sessionSlug);
+  return deps.readPasteBuffer();
 }
 
 // Closing a split pane in the UI (as opposed to a network blip / tab close,
