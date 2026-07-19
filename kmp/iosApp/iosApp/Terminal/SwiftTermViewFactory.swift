@@ -13,7 +13,7 @@ import ComposeApp
 // `Protocol` suffix, unlike the default Kotlin/Native Obj-C export
 // convention assumed when this file was first written. `Int` does bridge to
 // `Int32` as expected (see `resize(cols:rows:)` below).
-final class TerminalViewWrapper: TerminalView, TerminalViewHandle, TerminalViewDelegate {
+final class TerminalViewWrapper: TerminalView, TerminalViewHandle, TerminalViewDelegate, UIGestureRecognizerDelegate {
     private let onInputCallback: (String) -> Void
     private let onBellCallback: () -> Void
     // Kotlin (Int, Int) -> Unit bridges to (KotlinInt, KotlinInt) -> Void in
@@ -38,23 +38,58 @@ final class TerminalViewWrapper: TerminalView, TerminalViewHandle, TerminalViewD
         self.onScrollCallback = onScroll
         super.init(frame: .zero)
         self.terminalDelegate = self
-        // Adds an observer target to SwiftTerm's OWN scroll gesture
-        // recognizer (TerminalView subclasses UIScrollView, see
-        // docs/adr/0001-ios-terminal-embedding.md) rather than attaching a
-        // competing UIPanGestureRecognizer or overriding `contentOffset`:
-        // both of those risk fighting SwiftTerm's own native scroll/render
-        // handling in ways that can't be confirmed without a real
-        // device/Xcode build, which this Linux-only dev environment can't
-        // produce (see the file-level comment above). Adding a target to the
-        // EXISTING recognizer only *reads* translation(in:) -- it never
-        // mutates gesture or scroll-view state -- so SwiftTerm's own
-        // scrolling keeps working exactly as it did before this change; this
-        // purely layers tmux copy-mode reporting on top of it (see
-        // handleScrollPan below for why the two aren't fully unified).
-        // UIScrollView.panGestureRecognizer already accepts indirect
-        // trackpad input on iPadOS in addition to touch, so no separate
-        // trackpad-specific wiring is needed here.
-        self.panGestureRecognizer.addTarget(self, action: #selector(handleScrollPan(_:)))
+        // CONFIRMED against SwiftTerm 1.2.4 source
+        // (Sources/SwiftTerm/iOS/iOSTerminalView.swift): this used to add a
+        // target to SwiftTerm's OWN UIScrollView-inherited
+        // `panGestureRecognizer`, but that recognizer loses a silent,
+        // near-permanent tug-of-war against a SEPARATE one SwiftTerm installs
+        // itself. tmux runs with `mouse on` (tmux.ts), so
+        // `mouseModeChanged(source:)` calls `enableMousePanGesture()`, adding
+        // its own independent `panMouseGesture` (a plain UIPanGestureRecognizer,
+        // not the UIScrollView-special one) that forwards raw drag motion to
+        // tmux as SGR mouse events -- entering tmux's copy-mode selection,
+        // which auto-scrolls at pane edges as a real tmux feature. SwiftTerm
+        // sets no `shouldRecognizeSimultaneously` between that recognizer and
+        // `panGestureRecognizer`, so plain UIKit gesture arbitration lets only
+        // one win per touch, and `panMouseGesture` almost always did --
+        // starving this file's own scroll reporting almost entirely. What
+        // looked like "scrolling" before this fix was actually tmux's own
+        // edge auto-scroll, which is far more reachable when the on-screen
+        // keyboard shrinks the terminal's visible height (touches land closer
+        // to the edge) and far LESS reachable at full height with an external
+        // keyboard attached (no on-screen keyboard ever shrinks it) -- which
+        // is exactly the "can't scroll at all with a keyboard attached" bug
+        // report this fixes.
+        //
+        // Fix: a dedicated UIPanGestureRecognizer, wired via
+        // UIGestureRecognizerDelegate to always recognize simultaneously with
+        // every other recognizer on this view (see
+        // gestureRecognizer(_:shouldRecognizeSimultaneouslyWith:) below).
+        // That decouples "does tmux copy-mode get a scroll report" from
+        // "which recognizer iOS happened to pick as the winner for this
+        // touch" entirely -- it now fires regardless of panMouseGesture (or
+        // panSelectionGesture, or the inherited panGestureRecognizer) also
+        // firing for the same touch. handleScrollPan also toggles
+        // `allowMouseReporting` off for the duration of its own gesture (see
+        // that method) as a best-effort reduction of the copy-mode-select
+        // side effect described above -- NOT a guaranteed fix for it, since
+        // these are two independent, simultaneously-recognized gesture
+        // recognizers and UIKit does not guarantee their .began callbacks
+        // fire in a particular order for the same touch.
+        let scrollGesture = UIPanGestureRecognizer(target: self, action: #selector(handleScrollPan(_:)))
+        scrollGesture.delegate = self
+        addGestureRecognizer(scrollGesture)
+    }
+
+    // Unconditionally true: this view has several other UIPanGestureRecognizers
+    // (SwiftTerm's own panMouseGesture/panSelectionGesture/panGestureRecognizer),
+    // and scroll reporting to tmux copy-mode must never depend on winning
+    // arbitration against any of them -- see the long comment in init above.
+    func gestureRecognizer(
+        _ gestureRecognizer: UIGestureRecognizer,
+        shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer
+    ) -> Bool {
+        true
     }
 
     required init?(coder: NSCoder) {
@@ -111,22 +146,32 @@ final class TerminalViewWrapper: TerminalView, TerminalViewHandle, TerminalViewD
     // MARK: Scroll -> tmux copy-mode
     //
     // Reports pan-gesture deltas (touch AND trackpad -- iPadOS routes both
-    // through the same UIScrollView.panGestureRecognizer) as tmux copy-mode
+    // through this dedicated recognizer, see init above) as tmux copy-mode
     // scroll commands (see TerminalViewFactory.kt's onScroll kdoc for why:
     // tmux repaints a pane by cursor-addressing rather than appending lines,
     // so SwiftTerm's own local scrollback isn't a reliable substitute — same
     // reason the web build drives scroll through tmux copy-mode instead of
-    // xterm.js's own scrollback). This intentionally does NOT suppress
-    // SwiftTerm's own scroll rendering; both run side by side, since fully
-    // replacing it (e.g. by overriding `contentOffset`) can't be confirmed
-    // safe without a real build/device in this Linux-only dev environment —
-    // if the resulting double-scroll feels wrong once tested on a real
-    // iPad/trackpad, that's the next thing to revisit.
+    // xterm.js's own scrollback).
+    //
+    // allowMouseReporting is toggled off for the duration of this gesture --
+    // it's the one PUBLIC lever SwiftTerm exposes over its own
+    // (module-internal, unreachable from here) panMouseGesture, and turning
+    // it off makes that recognizer's handler a no-op for as long as this
+    // gesture is active (see its guard clause in SwiftTerm's
+    // panMouseHandler), suppressing the copy-mode-select side effect
+    // described in init's comment for THIS drag. This is a best-effort
+    // reduction, not a guaranteed fix: panMouseGesture's own .began can fire
+    // before this one flips the flag off, since UIKit gives no ordering
+    // guarantee between two independently-recognized simultaneous gesture
+    // recognizers for the same touch -- if a stray selection highlight still
+    // flashes briefly on the very first frame of a drag once tested on a
+    // real device, that's this race, not a regression.
     @objc private func handleScrollPan(_ gesture: UIPanGestureRecognizer) {
         switch gesture.state {
         case .began:
             lastPanTranslationY = 0
             scrollLineAccumulator = 0
+            allowMouseReporting = false
         case .changed:
             let translationY = gesture.translation(in: self).y
             let deltaY = translationY - lastPanTranslationY
@@ -140,6 +185,8 @@ final class TerminalViewWrapper: TerminalView, TerminalViewHandle, TerminalViewD
             // (no device/simulator available here) -- if scrolling feels
             // inverted when actually tested, flip this negation.
             reportScroll(deltaY: -deltaY)
+        case .ended, .cancelled, .failed:
+            allowMouseReporting = true
         default:
             break
         }
