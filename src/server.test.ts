@@ -74,6 +74,7 @@ function makeDeps(overrides: Partial<ServerDeps> = {}): ServerDeps {
     killProjectSession: async () => {},
     killProjectSessionSplit: async () => {},
     isProjectSessionBranchMerged: async () => true,
+    getProjectSessionPasteBuffer: async () => "",
     getProjectSessionEvents: async () => [],
     getProjectSessionResourceUsage: async () => ({ available: false, services: [] }),
     setProjectSessionMeta: async (_project, sessionSlug, label, favorite) => ({
@@ -573,6 +574,48 @@ test("GET /api/projects/:id/sessions/:name/branch-merged returns 404 for an unkn
       headers: authHeaders(),
     });
     assert.equal(res.status, 404);
+  });
+});
+
+test("GET /api/projects/:id/sessions/:name/paste-buffer without a token returns 401", async () => {
+  await withServer(makeDeps(), async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/projects/${SAMPLE_PROJECT.id}/sessions/feature-x/paste-buffer`);
+    assert.equal(res.status, 401);
+  });
+});
+
+test("GET /api/projects/:id/sessions/:name/paste-buffer returns the buffer text", async () => {
+  const deps = makeDeps({ getProjectSessionPasteBuffer: async () => "selected line one\nselected line two\n" });
+  await withServer(deps, async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/projects/${SAMPLE_PROJECT.id}/sessions/feature-x/paste-buffer`, {
+      headers: authHeaders(),
+    });
+    assert.equal(res.status, 200);
+    const body = (await res.json()) as { text: string };
+    assert.equal(body.text, "selected line one\nselected line two\n");
+  });
+});
+
+test("GET /api/projects/:id/sessions/:name/paste-buffer returns 404 for an unknown project", async () => {
+  await withServer(makeDeps(), async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/projects/unknown-id/sessions/feature-x/paste-buffer`, {
+      headers: authHeaders(),
+    });
+    assert.equal(res.status, 404);
+  });
+});
+
+test("GET /api/projects/:id/sessions/:name/paste-buffer returns 400 for an invalid session slug", async () => {
+  const deps = makeDeps({
+    getProjectSessionPasteBuffer: async () => {
+      throw new ValidationError("Invalid session slug");
+    },
+  });
+  await withServer(deps, async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/projects/${SAMPLE_PROJECT.id}/sessions/bad__slug/paste-buffer`, {
+      headers: authHeaders(),
+    });
+    assert.equal(res.status, 400);
   });
 });
 
