@@ -279,7 +279,7 @@ test("readPasteBuffer returns tmux's paste buffer text verbatim", async () => {
     return { stdout: "selected line one\nselected line two\n" };
   };
 
-  assert.equal(await readPasteBuffer(fakeExec), "selected line one\nselected line two\n");
+  assert.equal(await readPasteBuffer(fakeExec, async () => {}), "selected line one\nselected line two\n");
   assert.deepEqual(calls, [{ file: "tmux", args: ["save-buffer", "-"] }]);
 });
 
@@ -288,7 +288,28 @@ test("readPasteBuffer propagates the error when tmux has no buffer to read", asy
     throw new Error("no buffer");
   };
 
-  await assert.rejects(() => readPasteBuffer(fakeExec), /no buffer/);
+  await assert.rejects(() => readPasteBuffer(fakeExec, async () => {}), /no buffer/);
+});
+
+test("readPasteBuffer waits for delayFn before reading the buffer", async () => {
+  // Confirmed live (headless-Chromium verification): mouseup's REST call can
+  // reach save-buffer before tmux's own MouseDragEnd1Pane binding has
+  // finished writing the buffer, racing against -- and sometimes losing to
+  // -- an unrelated, concurrently-active session's own copy on the same
+  // shared tmux server. This settle delay narrows (does not eliminate) that
+  // window; see the doc comment above readPasteBuffer.
+  const order: string[] = [];
+  const fakeExec = async () => {
+    order.push("exec");
+    return { stdout: "" };
+  };
+  const fakeDelay = async () => {
+    order.push("delay");
+  };
+
+  await readPasteBuffer(fakeExec, fakeDelay);
+
+  assert.deepEqual(order, ["delay", "exec"]);
 });
 
 test("scrollPane rejects invalid session names without calling exec", async () => {
