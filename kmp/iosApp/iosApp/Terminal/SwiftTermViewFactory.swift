@@ -69,15 +69,36 @@ final class TerminalViewWrapper: TerminalView, TerminalViewHandle, TerminalViewD
         // "which recognizer iOS happened to pick as the winner for this
         // touch" entirely -- it now fires regardless of panMouseGesture (or
         // panSelectionGesture, or the inherited panGestureRecognizer) also
-        // firing for the same touch. handleScrollPan also toggles
-        // `allowMouseReporting` off for the duration of its own gesture (see
-        // that method) as a best-effort reduction of the copy-mode-select
-        // side effect described above -- NOT a guaranteed fix for it, since
-        // these are two independent, simultaneously-recognized gesture
-        // recognizers and UIKit does not guarantee their .began callbacks
-        // fire in a particular order for the same touch.
+        // firing for the same touch.
+        //
+        // FOLLOW-UP, confirmed on a real iPad: an earlier version of this
+        // fix left `cancelsTouchesInView` at its UIGestureRecognizer default
+        // (true) and ALSO toggled `allowMouseReporting` off for the
+        // duration of the gesture -- and that made scrolling stop working
+        // ENTIRELY, in every condition, not just the keyboard-attached one
+        // this file originally targeted. `cancelsTouchesInView = true`
+        // means that the moment this recognizer starts recognizing (which,
+        // having no competing requirements, is almost immediately on any
+        // drag), it cancels raw touch delivery to the view underneath --
+        // and TerminalView being a UIScrollView subclass, that raw touch
+        // stream is what its OWN internal scroll machinery depends on, not
+        // just its `panGestureRecognizer`'s recognized state.
+        // `shouldRecognizeSimultaneouslyWith` only arbitrates
+        // recognizer-vs-recognizer, not recognizer-vs-view, so it did
+        // nothing to prevent this. `cancelsTouchesInView = false` below
+        // makes this recognizer a pure observer -- it reports scroll deltas
+        // without ever cancelling or delaying touch delivery to anything
+        // else on this view. The `allowMouseReporting` toggle from that
+        // earlier version is also removed entirely: SwiftTerm's own
+        // panSelectionHandler sends actual cursor-key presses instead of
+        // scrolling when allowMouseReporting is false and a selection pan
+        // is mid-gesture (see its `.changed` case), which is a plausible
+        // second contributor to the same regression -- there is no need to
+        // touch that flag at all now that this recognizer no longer
+        // competes for the touch stream itself.
         let scrollGesture = UIPanGestureRecognizer(target: self, action: #selector(handleScrollPan(_:)))
         scrollGesture.delegate = self
+        scrollGesture.cancelsTouchesInView = false
         addGestureRecognizer(scrollGesture)
     }
 
@@ -146,32 +167,22 @@ final class TerminalViewWrapper: TerminalView, TerminalViewHandle, TerminalViewD
     // MARK: Scroll -> tmux copy-mode
     //
     // Reports pan-gesture deltas (touch AND trackpad -- iPadOS routes both
-    // through this dedicated recognizer, see init above) as tmux copy-mode
-    // scroll commands (see TerminalViewFactory.kt's onScroll kdoc for why:
-    // tmux repaints a pane by cursor-addressing rather than appending lines,
-    // so SwiftTerm's own local scrollback isn't a reliable substitute — same
-    // reason the web build drives scroll through tmux copy-mode instead of
-    // xterm.js's own scrollback).
-    //
-    // allowMouseReporting is toggled off for the duration of this gesture --
-    // it's the one PUBLIC lever SwiftTerm exposes over its own
-    // (module-internal, unreachable from here) panMouseGesture, and turning
-    // it off makes that recognizer's handler a no-op for as long as this
-    // gesture is active (see its guard clause in SwiftTerm's
-    // panMouseHandler), suppressing the copy-mode-select side effect
-    // described in init's comment for THIS drag. This is a best-effort
-    // reduction, not a guaranteed fix: panMouseGesture's own .began can fire
-    // before this one flips the flag off, since UIKit gives no ordering
-    // guarantee between two independently-recognized simultaneous gesture
-    // recognizers for the same touch -- if a stray selection highlight still
-    // flashes briefly on the very first frame of a drag once tested on a
-    // real device, that's this race, not a regression.
+    // through this dedicated, cancelsTouchesInView=false recognizer, see
+    // init above) as tmux copy-mode scroll commands (see
+    // TerminalViewFactory.kt's onScroll kdoc for why: tmux repaints a pane
+    // by cursor-addressing rather than appending lines, so SwiftTerm's own
+    // local scrollback isn't a reliable substitute — same reason the web
+    // build drives scroll through tmux copy-mode instead of xterm.js's own
+    // scrollback). This intentionally does NOT touch `allowMouseReporting`
+    // or otherwise suppress SwiftTerm's own panMouseGesture/selection
+    // handling -- both run side by side (see the FOLLOW-UP comment in init
+    // for why an earlier version that DID toggle allowMouseReporting made
+    // scrolling stop working entirely on a real device).
     @objc private func handleScrollPan(_ gesture: UIPanGestureRecognizer) {
         switch gesture.state {
         case .began:
             lastPanTranslationY = 0
             scrollLineAccumulator = 0
-            allowMouseReporting = false
         case .changed:
             let translationY = gesture.translation(in: self).y
             let deltaY = translationY - lastPanTranslationY
@@ -181,12 +192,8 @@ final class TerminalViewWrapper: TerminalView, TerminalViewHandle, TerminalViewD
             // sense as scrolling down a normal iOS list) -- negate so a
             // positive deltaY here means "down", matching the sign
             // convention already used by the web build's own
-            // wheelEventToLines (public/app.js, pre-KMP). NOT verified live
-            // (no device/simulator available here) -- if scrolling feels
-            // inverted when actually tested, flip this negation.
+            // wheelEventToLines (public/app.js, pre-KMP).
             reportScroll(deltaY: -deltaY)
-        case .ended, .cancelled, .failed:
-            allowMouseReporting = true
         default:
             break
         }
