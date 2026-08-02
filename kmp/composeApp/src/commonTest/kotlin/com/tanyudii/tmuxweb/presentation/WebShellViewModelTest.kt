@@ -69,19 +69,28 @@ class WebShellViewModelTest {
     }
 
     @Test
-    fun `clicking an expanded selected project row twice collapses it, mirroring WebSidebar's onClick`() {
+    fun `onProjectRowClick selects and expands an unselected project`() {
         val viewModel = immediateViewModel(sessions = FakeSessionsRepository(listOf(session())))
 
-        // WebSidebar.kt's ProjectNode row onClick calls onToggleProject then
-        // onSelectProject on every click, unconditionally.
-        viewModel.toggleProject("p1")
-        viewModel.selectProject("p1")
+        viewModel.onProjectRowClick("p1")
+
+        val state = viewModel.state.value
+        assertEquals("p1", state.selectedProjectId)
+        assertEquals(setOf("p1"), state.expandedProjectIds)
+    }
+
+    @Test
+    fun `onProjectRowClick collapses an already-selected, expanded project`() {
+        val viewModel = immediateViewModel(sessions = FakeSessionsRepository(listOf(session())))
+
+        viewModel.onProjectRowClick("p1")
         assertEquals(setOf("p1"), viewModel.state.value.expandedProjectIds)
 
-        // Clicking the same, now-selected row again should collapse it.
-        viewModel.toggleProject("p1")
-        viewModel.selectProject("p1")
+        // Second click on the row of the project that's already selected
+        // should collapse it, not re-expand it.
+        viewModel.onProjectRowClick("p1")
         assertEquals(emptySet(), viewModel.state.value.expandedProjectIds)
+        assertEquals("p1", viewModel.state.value.selectedProjectId)
     }
 
     @Test

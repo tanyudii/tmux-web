@@ -123,7 +123,7 @@ fun WebShellScreen(onSwitchServer: () -> Unit) {
                 serverHost = serverHost,
                 isConnected = terminal?.isConnected ?: true,
                 onToggleCollapsed = viewModel::toggleSidebarCollapsed,
-                onToggleProject = viewModel::toggleProject,
+                onProjectRowClick = viewModel::onProjectRowClick,
                 onSelectProject = viewModel::selectProject,
                 onSelectSession = viewModel::selectSession,
                 onNewProject = viewModel::showNewProjectDialog,

@@ -67,7 +67,7 @@ fun WebSidebar(
     serverHost: String,
     isConnected: Boolean,
     onToggleCollapsed: () -> Unit,
-    onToggleProject: (String) -> Unit,
+    onProjectRowClick: (String) -> Unit,
     onSelectProject: (String) -> Unit,
     onSelectSession: (String, String) -> Unit,
     onNewProject: () -> Unit,
@@ -119,7 +119,7 @@ fun WebSidebar(
                     ProjectNode(
                         project = project,
                         state = state,
-                        onToggleProject = onToggleProject,
+                        onProjectRowClick = onProjectRowClick,
                         onSelectProject = onSelectProject,
                         onSelectSession = onSelectSession,
                         onNewSession = onNewSession,
@@ -214,7 +214,7 @@ private fun CollapsedProjectRail(
 private fun ProjectNode(
     project: Project,
     state: WebShellUiState,
-    onToggleProject: (String) -> Unit,
+    onProjectRowClick: (String) -> Unit,
     onSelectProject: (String) -> Unit,
     onSelectSession: (String, String) -> Unit,
     onNewSession: (String) -> Unit,
@@ -231,7 +231,7 @@ private fun ProjectNode(
             label = project.name,
             subtitle = sessions.size.toString(),
             active = projectActive,
-            onClick = { onToggleProject(project.id); onSelectProject(project.id) },
+            onClick = { onProjectRowClick(project.id) },
             onDelete = { onDeleteProject(project) },
         )
         if (expanded) {

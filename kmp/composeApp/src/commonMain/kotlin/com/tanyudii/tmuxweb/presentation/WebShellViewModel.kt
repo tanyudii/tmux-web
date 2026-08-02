@@ -147,6 +147,21 @@ class WebShellViewModel(
         if (projectId !in _state.value.expandedProjectIds) toggleProject(projectId)
     }
 
+    /**
+     * Handles a click on a sidebar project row (WebSidebar.kt's
+     * `ProjectNode`): already the active project -> pure expand/collapse
+     * toggle; otherwise -> select it, which auto-expands via
+     * [selectProject]. Kept as one ViewModel-owned decision rather than
+     * having the row's onClick call [toggleProject] and [selectProject]
+     * unconditionally -- that used to re-expand a project the toggle had
+     * just collapsed, since [selectProject] force-expands whenever the
+     * project isn't in `expandedProjectIds`, which is exactly the state
+     * right after a collapsing toggle.
+     */
+    fun onProjectRowClick(projectId: String) {
+        if (projectId == _state.value.selectedProjectId) toggleProject(projectId) else selectProject(projectId)
+    }
+
     fun selectSession(projectId: String, sessionName: String) {
         _state.update {
             it.copy(
