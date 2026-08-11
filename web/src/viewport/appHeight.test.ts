@@ -1,6 +1,16 @@
 import { describe, expect, it, vi } from "vitest";
 import { attachAppHeight, APP_HEIGHT_PROPERTY } from "./appHeight";
 
+// Numbers throughout are the ones measured on the reporting devices:
+//   layout viewport 1024 (iPad portrait)
+//   software keyboard -> visual viewport 545  (479px overlap, ~47%)
+//   accessory bar     -> visual viewport 953  (71px overlap,  ~7%)
+//   stale/transient   -> visual viewport 866  (158px overlap, ~15%)
+const LAYOUT = 1024;
+const KEYBOARD = 545;
+const ACCESSORY_BAR = 953;
+const STALE = 866;
+
 function fakeViewport(height: number) {
   const listeners: Record<string, Array<() => void>> = { resize: [], scroll: [] };
   return {
@@ -21,38 +31,108 @@ function fakeTarget() {
   return { style: { setProperty: (name: string, value: string) => (props[name] = value) }, props };
 }
 
-describe("attachAppHeight", () => {
-  it("publishes the visual viewport height immediately", () => {
-    const target = fakeTarget();
-    attachAppHeight({ viewport: fakeViewport(812), target, onWindowResize: () => () => {}, onFocusChange: () => () => {}, scheduleSettle: () => {}, isTextEntryFocused: () => true });
+/** Inert defaults so each test only states what it is actually about. */
+function attach(overrides: Parameters<typeof attachAppHeight>[0] = {}) {
+  return attachAppHeight({
+    fallbackHeight: () => LAYOUT,
+    isTextEntryFocused: () => true,
+    onWindowResize: () => () => {},
+    onFocusChange: () => () => {},
+    scheduleSettle: () => {},
+    ...overrides,
+  });
+}
 
-    expect(target.props[APP_HEIGHT_PROPERTY]).toBe("812px");
+describe("attachAppHeight", () => {
+  it("publishes the visible height immediately", () => {
+    const target = fakeTarget();
+    attach({ viewport: fakeViewport(KEYBOARD), target });
+
+    expect(target.props[APP_HEIGHT_PROPERTY]).toBe(`${KEYBOARD}px`);
   });
 
   // The whole point: an open keyboard shrinks visualViewport.height, and the
   // shell has to shrink with it or the keyboard just covers the bottom.
   it("follows the viewport shrinking when the keyboard opens", () => {
     const target = fakeTarget();
-    const viewport = fakeViewport(812);
-    attachAppHeight({ viewport, target, onWindowResize: () => () => {}, onFocusChange: () => () => {}, scheduleSettle: () => {}, isTextEntryFocused: () => true });
+    const viewport = fakeViewport(LAYOUT);
+    attach({ viewport, target });
 
-    viewport.height = 476; // keyboard up
+    viewport.height = KEYBOARD;
     viewport.emit("resize");
 
-    expect(target.props[APP_HEIGHT_PROPERTY]).toBe("476px");
+    expect(target.props[APP_HEIGHT_PROPERTY]).toBe(`${KEYBOARD}px`);
   });
 
   // iOS reports the shift that scrolls a focused field above the keyboard as a
   // visualViewport SCROLL, not a resize.
   it("also updates on a visual viewport scroll", () => {
     const target = fakeTarget();
-    const viewport = fakeViewport(812);
-    attachAppHeight({ viewport, target, onWindowResize: () => () => {}, onFocusChange: () => () => {}, scheduleSettle: () => {}, isTextEntryFocused: () => true });
+    const viewport = fakeViewport(LAYOUT);
+    attach({ viewport, target });
 
-    viewport.height = 500;
+    viewport.height = KEYBOARD;
     viewport.emit("scroll");
 
-    expect(target.props[APP_HEIGHT_PROPERTY]).toBe("500px");
+    expect(target.props[APP_HEIGHT_PROPERTY]).toBe(`${KEYBOARD}px`);
+  });
+
+  // Reported from a real iPad: with a hardware keyboard attached, iPadOS
+  // reserves ~71px for the shortcut bar and reports it exactly like a keyboard,
+  // but nothing was drawn there -- so shrinking left a strip of dead space that
+  // grew while typing.
+  it("ignores an accessory-bar-sized overlap while typing", () => {
+    const target = fakeTarget();
+    attach({ viewport: fakeViewport(ACCESSORY_BAR), target, isTextEntryFocused: () => true });
+
+    expect(target.props[APP_HEIGHT_PROPERTY]).toBe(`${LAYOUT}px`);
+  });
+
+  // Same device, nothing focused: the reported overlap oscillated between 158px
+  // and 71px on its own. Nothing can cover the page when nothing is focused.
+  it("ignores a stale shrunken viewport while nothing is focused", () => {
+    const target = fakeTarget();
+    attach({ viewport: fakeViewport(STALE), target, isTextEntryFocused: () => false });
+
+    expect(target.props[APP_HEIGHT_PROPERTY]).toBe(`${LAYOUT}px`);
+  });
+
+  it("shrinks again as soon as a field takes focus and a real keyboard opens", () => {
+    const target = fakeTarget();
+    const viewport = fakeViewport(KEYBOARD);
+    let focused = false;
+    let notify = () => {};
+    attach({
+      viewport,
+      target,
+      isTextEntryFocused: () => focused,
+      onFocusChange: (l) => {
+        notify = l;
+        return () => {};
+      },
+    });
+    expect(target.props[APP_HEIGHT_PROPERTY]).toBe(`${LAYOUT}px`);
+
+    focused = true;
+    notify();
+
+    expect(target.props[APP_HEIGHT_PROPERTY]).toBe(`${KEYBOARD}px`);
+  });
+
+  // iOS's first value mid-transition is often not the one it settles on.
+  it("re-reads once after the transition settles", () => {
+    const target = fakeTarget();
+    const viewport = fakeViewport(KEYBOARD);
+    let settle = () => {};
+    attach({ viewport, target, scheduleSettle: (run) => (settle = run) });
+
+    viewport.emit("resize");
+    expect(target.props[APP_HEIGHT_PROPERTY]).toBe(`${KEYBOARD}px`);
+
+    viewport.height = ACCESSORY_BAR; // keyboard went away, only the bar is left
+    settle();
+
+    expect(target.props[APP_HEIGHT_PROPERTY]).toBe(`${LAYOUT}px`);
   });
 
   // A px value must be written even without visualViewport: the CSS fallback is
@@ -60,7 +140,7 @@ describe("attachAppHeight", () => {
   // custom properties but not dvh units, collapsing the shell to height:auto.
   it("falls back to the window height when there is no visual viewport", () => {
     const target = fakeTarget();
-    attachAppHeight({ viewport: null, fallbackHeight: () => 640, target, onWindowResize: () => () => {}, onFocusChange: () => () => {}, scheduleSettle: () => {}, isTextEntryFocused: () => true });
+    attach({ viewport: null, fallbackHeight: () => 640, target });
 
     expect(target.props[APP_HEIGHT_PROPERTY]).toBe("640px");
   });
@@ -69,77 +149,26 @@ describe("attachAppHeight", () => {
   // collapse the shell for a frame.
   it("ignores a non-positive height rather than committing it", () => {
     const target = fakeTarget();
-    const viewport = fakeViewport(812);
-    attachAppHeight({ viewport, target, onWindowResize: () => () => {}, onFocusChange: () => () => {}, scheduleSettle: () => {}, isTextEntryFocused: () => true });
+    const viewport = fakeViewport(KEYBOARD);
+    attach({ viewport, target });
 
     viewport.height = 0;
     viewport.emit("resize");
 
-    expect(target.props[APP_HEIGHT_PROPERTY]).toBe("812px");
-  });
-
-  // Measured on a real iPad with a hardware keyboard and NOTHING focused: the
-  // reported overlap oscillated between 158px and 71px on its own, so the shell
-  // kept shrinking below the visible area and left a strip of dead space. With
-  // nothing focused there is no keyboard and no accessory bar to hide behind,
-  // so the layout viewport is the truth.
-  it("ignores a stale shrunken viewport while nothing is focused", () => {
-    const target = fakeTarget();
-    const viewport = fakeViewport(866); // iPadOS still claiming 158px is covered
-    attachAppHeight({
-      viewport, target, fallbackHeight: () => 1024,
-      isTextEntryFocused: () => false,
-      onWindowResize: () => () => {}, onFocusChange: () => () => {}, scheduleSettle: () => {},
-    });
-
-    expect(target.props[APP_HEIGHT_PROPERTY]).toBe("1024px");
-  });
-
-  it("shrinks again as soon as a field takes focus", () => {
-    const target = fakeTarget();
-    const viewport = fakeViewport(545);
-    let focused = false;
-    let notify = () => {};
-    attachAppHeight({
-      viewport, target, fallbackHeight: () => 1024,
-      isTextEntryFocused: () => focused,
-      onFocusChange: (l) => { notify = l; return () => {}; },
-      onWindowResize: () => () => {}, scheduleSettle: () => {},
-    });
-    expect(target.props[APP_HEIGHT_PROPERTY]).toBe("1024px");
-
-    focused = true;
-    notify();
-
-    expect(target.props[APP_HEIGHT_PROPERTY]).toBe("545px");
-  });
-
-  // iOS's first value mid-transition is often not the one it settles on.
-  it("re-reads once after the transition settles", () => {
-    const target = fakeTarget();
-    const viewport = fakeViewport(866);
-    let settle = () => {};
-    attachAppHeight({
-      viewport, target, isTextEntryFocused: () => true,
-      scheduleSettle: (run) => { settle = run; },
-      onWindowResize: () => () => {}, onFocusChange: () => () => {},
-    });
-
-    viewport.emit("resize");
-    expect(target.props[APP_HEIGHT_PROPERTY]).toBe("866px");
-
-    viewport.height = 953; // what iPadOS actually ends on
-    settle();
-
-    expect(target.props[APP_HEIGHT_PROPERTY]).toBe("953px");
+    expect(target.props[APP_HEIGHT_PROPERTY]).toBe(`${KEYBOARD}px`);
   });
 
   it("removes every listener it added on cleanup", () => {
     const target = fakeTarget();
-    const viewport = fakeViewport(812);
+    const viewport = fakeViewport(KEYBOARD);
     const detachWindow = vi.fn();
     const detachFocus = vi.fn();
-    const detach = attachAppHeight({ viewport, target, onWindowResize: () => detachWindow, onFocusChange: () => detachFocus, scheduleSettle: () => {}, isTextEntryFocused: () => true });
+    const detach = attach({
+      viewport,
+      target,
+      onWindowResize: () => detachWindow,
+      onFocusChange: () => detachFocus,
+    });
 
     expect(viewport.listenerCount()).toBe(2);
     detach();
