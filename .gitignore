@@ -4,3 +4,6 @@ dist/
 ios/TmuxWebClient.xcodeproj/
 .serena/
 .env
+
+# TypeScript incremental build cache -- regenerated on every typecheck.
+*.tsbuildinfo

@@ -105,13 +105,13 @@ const VAPID_SUBJECT = "mailto:tmux-web@localhost";
 // this every one would fan out its own push to every subscribed device.
 const BELL_PUSH_COOLDOWN_MS = 30_000;
 
-// Default location of the KMP Web client's compiled output relative to this
-// file (src/main.ts) -- see kmp/composeApp/build.gradle.kts's wasmJs target
-// and .claude/plans/rebuild-web-ios-kmp.plan.md Phase 6 "Cutover".
+// Default location of the SolidJS PWA client's compiled output relative to
+// this file (src/main.ts) -- see web/vite.config.ts's `build.outDir` and
+// docs/adr/0004-solidjs-pwa-migration.md. Was
+// kmp/composeApp/build/dist/wasmJs/productionExecutable (the KMP wasmJs
+// target) before Phase 9; kmp/ itself was deleted entirely in Phase 10.
 // Overridable via TMUX_WEB_PUBLIC_DIR for non-standard install layouts.
-const DEFAULT_WEB_BUILD_DIR = fileURLToPath(
-  new URL("../kmp/composeApp/build/dist/wasmJs/productionExecutable", import.meta.url),
-);
+const DEFAULT_WEB_BUILD_DIR = fileURLToPath(new URL("../web/dist", import.meta.url));
 
 interface DestroyableSocket {
   write(data: string): void;
@@ -235,7 +235,7 @@ export async function main(): Promise<void> {
   if (!webBuildDir) {
     console.log(
       `Web client build not found (looked in ${process.env.TMUX_WEB_PUBLIC_DIR ?? DEFAULT_WEB_BUILD_DIR}) -- ` +
-        "serving API only. Run `./gradlew :composeApp:wasmJsBrowserDistribution` in kmp/ to enable it.",
+        "serving API only. Run `npm run build` in web/ to enable it.",
     );
   }
 

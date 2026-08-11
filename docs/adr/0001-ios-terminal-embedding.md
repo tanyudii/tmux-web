@@ -1,9 +1,15 @@
 # ADR 0001: iOS terminal embedding — SwiftTerm via inversion-of-control factory
 
 ## Status
-Accepted (Phase 0 spike). Kotlin side compiled and verified on Linux; Swift
-side and final linking are unverified until the CI macOS runner
-(`.github/workflows/kmp-ci.yml`, `ios` job) builds this for the first time.
+**Superseded** by [ADR 0004](0004-solidjs-pwa-migration.md) — `kmp/`
+(including this native iOS SwiftUI app) was deleted in Phase 10 of the web
+rebuild once the SolidJS PWA reached full feature parity; iOS access is now
+via that PWA installed to the home screen through Safari, not a native app.
+Kept here as historical record of the approach that was tried first.
+
+Originally: Accepted (Phase 0 spike). Kotlin side compiled and verified on
+Linux; Swift side and final linking were verified once the CI macOS runner
+(`.github/workflows/kmp-ci.yml`, `ios` job, since removed) built this.
 
 ## Context
 The client rebuild shares UI via Compose Multiplatform across iOS and Web, but

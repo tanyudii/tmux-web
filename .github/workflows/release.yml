@@ -189,32 +189,29 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       # Built before the version bump/tag/push below, on purpose: if the
-      # Gradle build fails, the workflow fails cleanly with nothing pushed to
+      # web/ build fails, the workflow fails cleanly with nothing pushed to
       # main and no tag created, instead of leaving a dangling
       # released-looking tag with no working web UI asset behind it.
       #
-      # Not re-gated by kmp-ci.yml's detekt/wasmJsTest/koverVerify here --
-      # that already runs on every push to main touching kmp/**, so a broken
-      # kmp/ is visible before a release is ever cut, and
-      # wasmJsBrowserDistribution itself requires a successful compile as an
-      # inherent (if partial) smoke test. Re-running the full kmp-ci suite
-      # here would roughly double this workflow's runtime for a release-time
-      # convenience gate, not a merge gate -- see CLAUDE.md's "Cutting a
-      # release" section.
-      - name: Set up JDK 21
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: "21"
+      # Not re-gated by web-ci.yml's typecheck/test suite here -- that
+      # already runs on every push to main touching web/**, so a broken
+      # web/ is visible before a release is ever cut, and `vite build`
+      # itself requires a successful typecheck+compile as an inherent (if
+      # partial) smoke test. Re-running the full web-ci suite here would add
+      # release-time runtime for a convenience gate, not a merge gate -- see
+      # CLAUDE.md's "Cutting a release" section (same reasoning previously
+      # applied to kmp-ci.yml, before the KMP client was replaced by this
+      # SolidJS PWA in Phase 9/10 of the web rebuild).
+      - name: Install web/ dependencies
+        working-directory: web
+        run: npm ci
 
-      - uses: gradle/actions/setup-gradle@v4
-
-      - name: Build the KMP web (wasmJs) production bundle
-        working-directory: kmp
-        run: ./gradlew :composeApp:wasmJsBrowserDistribution
+      - name: Build the web (PWA) production bundle
+        working-directory: web
+        run: npm run build
 
       - name: Package the web build for the release
-        run: tar -czf kmp-web.tar.gz -C kmp/composeApp/build/dist/wasmJs/productionExecutable .
+        run: tar -czf web-dist.tar.gz -C web/dist .
 
       - name: Bump, commit, tag, and push
         env:
@@ -247,7 +244,7 @@ jobs:
           git push origin "$NEW_TAG"
           echo "Released $NEW_TAG"
 
-      # Attaches the wasmJs bundle built above to the just-pushed tag's
+      # Attaches the PWA bundle built above to the just-pushed tag's
       # GitHub Release (auto-creating the release, since the tag exists but
       # no release object does yet). This is what `tmuxweb upgrade`'s
       # downloadWebBuild() (src/cli/upgrade.ts) fetches via `gh release
@@ -259,5 +256,5 @@ jobs:
           NEW_TAG: ${{ steps.next.outputs.new_tag }}
         run: |
           set -eu
-          gh release create "$NEW_TAG" kmp-web.tar.gz --title "$NEW_TAG" --generate-notes
-          echo "Attached kmp-web.tar.gz to $NEW_TAG"
+          gh release create "$NEW_TAG" web-dist.tar.gz --title "$NEW_TAG" --generate-notes
+          echo "Attached web-dist.tar.gz to $NEW_TAG"

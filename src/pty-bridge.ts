@@ -1,5 +1,5 @@
 import * as pty from "node-pty";
-import { scrollPane, cancelCopyMode, type ScrollDirection } from "./tmux.ts";
+import { scrollPane, cancelCopyMode, listSessions, type ScrollDirection } from "./tmux.ts";
 
 export type ClientMessage =
   | { type: "input"; data: string }
@@ -73,11 +73,30 @@ function defaultCancelCopyMode(sessionName: string): Promise<void> {
   return cancelCopyMode(sessionName);
 }
 
+/**
+ * WebSocket close code telling the client the tmux session itself is gone, so
+ * reconnecting is pointless. In the application-private 4000-4999 range, which
+ * browsers pass through to `CloseEvent.code` untouched.
+ *
+ * Without this the client cannot tell "the session ended" from "the network
+ * blipped" -- both arrive as a plain close -- so closing the last window (which
+ * makes tmux destroy the session) left the UI retrying forever against
+ * something that will never come back.
+ */
+export const SESSION_ENDED_CLOSE_CODE = 4001;
+
+export type SessionExistsFn = (sessionName: string) => Promise<boolean>;
+
+async function defaultSessionExists(sessionName: string): Promise<boolean> {
+  const sessions = await listSessions();
+  return sessions.some((session) => session.name === sessionName);
+}
+
 export interface SocketLike {
   readyState: number;
   OPEN: number;
   send(data: string): void;
-  close(): void;
+  close(code?: number, reason?: string): void;
   on(event: "message" | "close", listener: (data?: unknown) => void): void;
 }
 
@@ -89,16 +108,69 @@ export function attachPtyToSocket(
   spawnPty: SpawnPtyFn = defaultSpawnPty,
   scrollPaneFn: ScrollPaneFn = defaultScrollPane,
   cancelCopyModeFn: CancelCopyModeFn = defaultCancelCopyMode,
+  sessionExistsFn: SessionExistsFn = defaultSessionExists,
 ): PtyLike {
   const term = spawnPty(sessionName, cols, rows);
+
+  // Root-caused live (not guesswork): closing a session's last tmux window
+  // kills the whole tmux session, which tears down the `tmux attach-session`
+  // process node-pty is wrapping -- its underlying fd becomes invalid before
+  // this side's `onExit` callback (itself event-driven/async) has run. A
+  // `resize`/`input` WS message that was already in flight (e.g. from a
+  // ResizeObserver firing off the WindowTabs layout shift right as the
+  // window closed) then calls `term.resize()`/`term.write()` on a dead fd,
+  // which throws synchronously (`Error: ioctl(2) failed, EBADF` for resize).
+  // Node has no try/catch around this WS `message` handler by default, so an
+  // uncaught throw here crashes the ENTIRE server process -- taking down
+  // every other user's session too, not just this one. `ptyAlive` short-
+  // circuits the common case; the try/catch below is defense-in-depth for
+  // the inherent race window where a message lands in the same tick as the
+  // fd dying but before `onExit` has fired to flip the flag.
+  let ptyAlive = true;
 
   term.onData((data) => {
     if (ws.readyState === ws.OPEN) ws.send(data);
   });
 
   term.onExit(() => {
-    if (ws.readyState === ws.OPEN) ws.close();
+    ptyAlive = false;
+    if (ws.readyState !== ws.OPEN) return;
+    // The pty ending does NOT by itself mean the session is gone: `Ctrl-B d`
+    // detaches, which ends this `tmux attach-session` process while the session
+    // keeps running in the background -- and reconnecting after a detach is
+    // exactly the right behaviour. So ask tmux which of the two happened rather
+    // than assuming, and only tell the client to stop retrying when the session
+    // really is no longer listed.
+    void sessionExistsFn(sessionName)
+      .then((exists) => {
+        if (ws.readyState !== ws.OPEN) return;
+        if (exists) ws.close();
+        else ws.close(SESSION_ENDED_CLOSE_CODE, "session ended");
+      })
+      // A failed lookup must not leave the socket open forever; fall back to a
+      // plain close, which keeps the old reconnect behaviour.
+      .catch(() => {
+        if (ws.readyState === ws.OPEN) ws.close();
+      });
   });
+
+  function safeResize(cols: number, rows: number): void {
+    if (!ptyAlive) return;
+    try {
+      term.resize(cols, rows);
+    } catch {
+      ptyAlive = false;
+    }
+  }
+
+  function safeWrite(data: string): void {
+    if (!ptyAlive) return;
+    try {
+      term.write(data);
+    } catch {
+      ptyAlive = false;
+    }
+  }
 
   // tmux CLI calls (copy-mode entry/exit, send-keys) are spawned as separate
   // subprocesses and must not race each other -- chaining them onto one
@@ -124,7 +196,7 @@ export function attachPtyToSocket(
     if (!message) return;
 
     if (message.type === "resize") {
-      term.resize(message.cols, message.rows);
+      safeResize(message.cols, message.rows);
       return;
     }
 
@@ -150,11 +222,11 @@ export function attachPtyToSocket(
     }
 
     if (cancelInFlight) {
-      cancelInFlight.then(() => term.write(message.data));
+      cancelInFlight.then(() => safeWrite(message.data));
       return;
     }
 
-    term.write(message.data);
+    safeWrite(message.data);
   });
 
   ws.on("close", () => {

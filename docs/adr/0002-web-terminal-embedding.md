@@ -1,8 +1,16 @@
 # ADR 0002: Web terminal embedding — xterm.js via HtmlElementView
 
 ## Status
-Accepted. Verified end-to-end on this (Linux) dev machine, including a real
-headless-Chrome round trip of simulated keyboard input.
+**Superseded** by [ADR 0004](0004-solidjs-pwa-migration.md) — `kmp/` was
+deleted in Phase 10 of the web rebuild once the SolidJS PWA reached full
+feature parity. The PWA embeds `@xterm/xterm` directly as a real DOM
+element (`web/src/terminal/TerminalView.tsx`) with no Compose canvas, no
+`HtmlElementView` interop layer, and no CMP-8521 overlay constraint to
+design around — the whole class of problem this ADR solved doesn't exist
+once the UI framework itself is DOM-native. Kept here as historical record.
+
+Originally: Accepted. Verified end-to-end on this (Linux) dev machine,
+including a real headless-Chrome round trip of simulated keyboard input.
 
 ## Context
 Same problem as ADR 0001 (re-implementing an ANSI/VT100 emulator in Compose

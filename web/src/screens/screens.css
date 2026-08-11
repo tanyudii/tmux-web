@@ -1,0 +1,1009 @@
+/*
+ * Screen-level layout styles -- one file per app, same "single shared
+ * stylesheet" reasoning as ui/ui.css: these are small page compositions
+ * built from the ui/ kit, not independent component libraries each
+ * needing their own file. Grows section-by-section as Phase 6's screens
+ * land (Connect now; Project list/Session list/Terminal follow).
+ */
+
+.tw-screen {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: var(--bg-surface);
+}
+
+/* overflow-x explicit for the same spec reason as .tw-sidebar__scroll --
+   leaving it `visible` made this the mobile layout's horizontal scroller
+   (measured live: scrollWidth 512 vs clientWidth 390).
+
+   The bottom inset is padding on the scroll container rather than a margin
+   below it, so the list's last row can still be scrolled fully clear of the
+   home indicator instead of coming to rest underneath it. On the project and
+   session list screens this scroller IS the last child of the screen, so
+   without it the final row is permanently half-covered. */
+.tw-screen__scroll {
+  flex: 1;
+  min-height: 0;
+  padding-bottom: var(--safe-bottom);
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+
+/* ---------- Connect screen ---------- */
+
+/* Made a scroller (it previously was not) because this screen's content has a
+ * fixed intrinsic height -- wordmark, two fields, footer copy -- that does not
+ * shrink, while the viewport does. On a small phone in a browser whose URL bar
+ * and toolbar are both showing (an iPhone SE leaves roughly 560px) the content
+ * ran past the bottom edge, and because `html, body { overflow: hidden }` makes
+ * the document itself unscrollable there was no way to bring it back into
+ * reach. Measured live at 375x560: content 468px in a 396px box, so 72px was
+ * simply unreachable before this.
+ *
+ * `flex: 1` + `min-height: 0` is what actually lets it shrink below its content
+ * height inside .tw-screen's flex column; `overflow-y` alone would not, because
+ * a flex item's default `min-height: auto` pins it to its content.
+ *
+ * The Connect button is deliberately NOT in here -- see
+ * .tw-connect-screen__submit below. */
+.tw-connect-screen__body {
+  flex: 1;
+  min-height: 0;
+  padding-top: 14px;
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+
+.tw-connect-screen__wordmark {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 0 22px;
+}
+
+.tw-connect-screen__badge {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 60px;
+  height: 60px;
+  border-radius: var(--radius-xl);
+  background: var(--green-glow);
+  color: var(--accent);
+}
+
+.tw-connect-screen__wordmark-text {
+  color: var(--text-tertiary);
+  font-family: var(--font-mono);
+  font-size: var(--mono-sm);
+}
+
+.tw-connect-screen__form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 12px 14px;
+}
+
+/* Pinned bottom row of the Connect screen (a sibling of the scrolling
+ * __body, see ConnectScreen.tsx). `flex-shrink: 0` keeps it at full height
+ * when __body is competing for space on a short viewport -- without it the
+ * button is the thing that gets squashed, which is the opposite of what this
+ * layout is for. */
+.tw-connect-screen__submit {
+  flex-shrink: 0;
+  padding: 12px 16px calc(12px + var(--safe-bottom));
+}
+
+/* ---------- Session list screen ---------- */
+
+.tw-filter-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) 14px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.tw-filter-bar__chips {
+  display: flex;
+  gap: 6px;
+}
+
+.tw-filter-bar__chip {
+  padding: 5px 10px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-full);
+  background: transparent;
+  color: var(--text-secondary);
+  font-family: var(--font-sans);
+  font-size: var(--text-xs);
+  cursor: pointer;
+}
+
+.tw-filter-bar__chip[data-active="true"] {
+  border-color: var(--accent);
+  background: var(--accent-fill);
+  color: var(--accent);
+}
+
+.tw-filter-bar__branch {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 5px 10px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  background: var(--bg-raised);
+}
+
+.tw-filter-bar__branch-icon {
+  display: flex;
+  color: var(--text-tertiary);
+  flex-shrink: 0;
+}
+
+.tw-filter-bar__branch-input {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  background: transparent;
+  outline: none;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: var(--mono-sm);
+}
+
+.tw-filter-bar__branch-input::placeholder {
+  color: var(--text-tertiary);
+}
+
+.tw-bulk-delete-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-3) 14px;
+  background: var(--bg-raised);
+  color: var(--text-secondary);
+  font-family: var(--font-sans);
+  font-size: var(--text-sm);
+}
+
+.tw-session-row__checkbox {
+  display: flex;
+  align-items: center;
+  color: var(--text-tertiary);
+  margin-right: var(--space-4);
+}
+
+.tw-session-row__actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* ---------- Terminal screen ---------- */
+
+.tw-terminal-screen {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+  background: var(--bg-terminal);
+}
+
+/* Same clipping rationale as .tw-web-main-pane__terminal above -- xterm's
+   own measured row block can overshoot this box by a pixel or two and
+   would otherwise grow the document. */
+.tw-terminal-screen__view {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* Last child of the mobile terminal screen, so its 44px keys sit exactly on
+ * the home indicator. The inset is added to the existing 6px rather than
+ * replacing it, so the keys keep their normal breathing room on every device
+ * where the inset is 0px. Padding (not margin) keeps the bar's surface colour
+ * and top border spanning the full width down to the physical screen edge. */
+.tw-quick-keys {
+  display: flex;
+  gap: 6px;
+  padding: 6px 10px calc(6px + var(--safe-bottom));
+  border-top: 1px solid var(--border-subtle);
+  background: var(--bg-surface);
+}
+
+@media (min-width: 600px) {
+  .tw-quick-keys {
+    display: none;
+  }
+}
+
+.tw-quick-keys__key {
+  flex: 1;
+  height: var(--quick-keys-height);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  background: var(--bg-raised);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: var(--mono-sm);
+  cursor: pointer;
+}
+
+.tw-terminal-screen__nav-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* This span holds FOUR controls on the terminal screen (changes button, env
+ * menu, push toggle, plus the absolutely-positioned unread count) but was
+ * styled only `position: relative` -- i.e. it stayed a plain inline box, so
+ * its children laid out in normal inline flow and WRAPPED as soon as they ran
+ * out of room. Measured live at 393px: the nav bar's end rail resolved to its
+ * 76px min-width while the controls needed ~150px, so they stacked onto three
+ * lines and the group spanned y=25..137 inside a 44px bar -- overflowing it by
+ * more than double its height. That is the clipped terminal menu reported from
+ * a real iPhone.
+ *
+ * inline-flex + nowrap is what actually forbids the wrap; flex-shrink: 0 stops
+ * the row being squeezed narrower than its controls in the first place (see
+ * .tw-navbar__rail, which now yields to content instead of pinning at 76px). */
+.tw-terminal-badge {
+  position: relative;
+  display: inline-flex;
+  flex-shrink: 0;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 2px;
+}
+
+.tw-terminal-badge__count {
+  position: absolute;
+  top: -2px;
+  right: -2px;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 3px;
+  border-radius: var(--radius-full);
+  background: var(--red-500);
+  color: var(--text-on-accent);
+  font-family: var(--font-sans);
+  font-size: 10px;
+  font-weight: var(--weight-bold);
+  line-height: 15px;
+  text-align: center;
+}
+
+/* ---------- Changes dialog ---------- */
+
+/* `position: fixed` means this is positioned against the viewport, NOT
+ * against #app -- so it does not inherit the horizontal safe-area padding set
+ * there and has to state its own. Its top edge needs nothing: the first child
+ * is a NavBar, which pads the top inset itself. */
+.tw-changes-dialog {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  display: flex;
+  flex-direction: column;
+  padding-left: var(--safe-left);
+  padding-right: var(--safe-right);
+  overflow: hidden;
+  background: var(--bg-surface);
+}
+
+.tw-changes-dialog__repo-state {
+  padding: 8px 14px;
+  background: var(--amber-glow);
+  color: var(--amber-500);
+  font-family: var(--font-sans);
+  font-size: var(--text-sm);
+}
+
+.tw-changes-section {
+  padding: var(--space-3) 0;
+}
+
+.tw-changes-section__title {
+  margin: 0 0 4px;
+  padding: 0 14px;
+  color: var(--text-tertiary);
+  font-family: var(--font-sans);
+  font-size: var(--text-xs);
+  letter-spacing: var(--tracking-wide);
+  text-transform: uppercase;
+}
+
+.tw-changes-row {
+  display: flex;
+  align-items: center;
+  min-height: 36px;
+  padding-right: 10px;
+  border: none;
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.tw-changes-row__name {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.tw-changes-row__marker {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 3px;
+  background: var(--bg-overlay);
+  color: var(--text-tertiary);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  flex-shrink: 0;
+}
+
+.tw-changes-row__marker[data-conflicted="true"] {
+  background: var(--red-glow);
+  color: var(--red-500);
+}
+
+.tw-changes-row__path {
+  overflow: hidden;
+  font-family: var(--font-mono);
+  font-size: var(--mono-sm);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tw-changes-row--folder {
+  color: var(--text-secondary);
+}
+
+.tw-changes-row__actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+/* Bottom row of the changes rail. On mobile its parent is .tw-changes-dialog
+ * (fixed, full-screen), which puts the Commit button right on the home
+ * indicator; on desktop the inset is 0px and this is inert. */
+.tw-changes-dialog__commit {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--space-3);
+  min-width: 0;
+  padding: var(--space-3) 14px calc(var(--space-3) + var(--safe-bottom));
+  border-top: 1px solid var(--border-subtle);
+  background: var(--bg-raised);
+}
+
+/* min-width: 0 is what actually stops this row overflowing the 290px rail:
+   a flex item defaults to min-width:auto (its content's intrinsic size), so
+   the text field refused to shrink and pushed the Commit button past the
+   rail -- and past the viewport, which is what produced the page-level
+   horizontal scrollbar (measured live: button label right edge at 1408px in
+   a 1400px viewport). */
+.tw-changes-dialog__commit .tw-textfield {
+  flex: 1;
+  min-width: 0;
+}
+
+.tw-changes-dialog__commit .tw-button {
+  flex-shrink: 0;
+}
+
+/* ---------- Diff view ---------- */
+
+/* Same fixed-positioning caveat as .tw-changes-dialog above. */
+.tw-diff-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 95;
+  display: flex;
+  flex-direction: column;
+  padding-left: var(--safe-left);
+  padding-right: var(--safe-right);
+  background: var(--bg-surface);
+}
+
+.tw-diff-overlay__notice {
+  padding: var(--space-5);
+  color: var(--text-tertiary);
+  font-family: var(--font-sans);
+  font-size: var(--text-sm);
+}
+
+.tw-diff-view {
+  font-family: var(--font-mono);
+  font-size: var(--mono-sm);
+}
+
+.tw-diff-view__summary {
+  display: flex;
+  gap: var(--space-3);
+  padding: var(--space-3) 14px;
+}
+
+.tw-diff-view__additions {
+  color: var(--git-added);
+}
+
+.tw-diff-view__deletions {
+  color: var(--git-removed);
+}
+
+.tw-diff-view__hunk-header {
+  padding: 4px 14px;
+  background: var(--bg-overlay);
+  color: var(--text-tertiary);
+}
+
+.tw-diff-view__row {
+  display: flex;
+  gap: 10px;
+  padding: 0 14px;
+  white-space: pre;
+}
+
+.tw-diff-view__row[data-row-type="add"] {
+  background: var(--git-added-bg);
+}
+
+.tw-diff-view__row[data-row-type="del"] {
+  background: var(--git-removed-bg);
+}
+
+.tw-diff-view__lineno {
+  width: 32px;
+  color: var(--text-disabled);
+  text-align: right;
+  flex-shrink: 0;
+}
+
+.tw-diff-view__content {
+  color: var(--text-primary);
+}
+
+.tw-diff-view__segment--changed {
+  background: rgb(255 255 255 / 12%);
+}
+
+/* ---------- Web shell ---------- */
+
+.tw-web-shell {
+  display: flex;
+  height: 100%;
+  overflow: hidden;
+  background: var(--bg-app);
+}
+
+.tw-sidebar {
+  display: flex;
+  flex-direction: column;
+  width: var(--web-sidebar-width);
+  flex-shrink: 0;
+  min-width: 0;
+  overflow: hidden;
+  border-right: 1px solid var(--border-subtle);
+  background: var(--bg-surface);
+}
+
+.tw-sidebar--collapsed {
+  align-items: center;
+  width: var(--web-sidebar-collapsed-width);
+  padding-top: var(--space-3);
+  gap: 6px;
+}
+
+.tw-sidebar__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-4) 14px 6px;
+  color: var(--text-tertiary);
+  font-family: var(--font-sans);
+  font-size: var(--text-xs);
+  letter-spacing: var(--tracking-wide);
+}
+
+/* overflow-x MUST be stated explicitly. Per the CSS overflow spec, when one
+   axis is a scrolling value and the other is `visible`, that `visible`
+   computes to `auto` -- so `overflow-y: auto` alone silently produced a
+   horizontal scrollbar here too (measured live: scrollWidth 308 vs
+   clientWidth 260, from long session names that weren't truncating). */
+.tw-sidebar__scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+
+.tw-sidebar__footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-3) 10px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.tw-sidebar__footer .tw-sidebar-row {
+  flex: 1;
+}
+
+.tw-sidebar-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 32px;
+  padding: 6px 14px;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.tw-sidebar-row:hover,
+.tw-sidebar-row--active {
+  background: var(--bg-hover);
+}
+
+.tw-sidebar-row--active {
+  color: var(--text-primary);
+}
+
+.tw-sidebar-row--session {
+  padding-left: 34px;
+}
+
+.tw-sidebar-row--new-session {
+  padding-left: 34px;
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+}
+
+.tw-sidebar-row__chevron {
+  display: flex;
+  flex-shrink: 0;
+  color: var(--text-tertiary);
+  transition: transform var(--duration-fast) var(--ease-standard);
+}
+
+.tw-sidebar-row__chevron--open {
+  transform: rotate(90deg);
+}
+
+.tw-sidebar-row__icon {
+  display: flex;
+  flex-shrink: 0;
+  color: var(--text-tertiary);
+}
+
+.tw-sidebar-row__texts {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+}
+
+/* min-width: 0 is what lets the ellipsis actually engage: a flex item
+   defaults to min-width:auto (its intrinsic content width), so a long
+   session/project name refused to shrink and widened the whole sidebar
+   instead of truncating (measured live: sidebar scrollWidth 308 vs
+   clientWidth 260). The default flex-shrink of 1 then does the rest, in
+   both parents this label appears in (the session row's flex row and the
+   project row's .tw-sidebar-row__texts column). */
+.tw-sidebar-row__label {
+  min-width: 0;
+  overflow: hidden;
+  color: inherit;
+  font-family: var(--font-sans);
+  font-size: var(--text-sm);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tw-sidebar-row__meta {
+  flex-shrink: 0;
+  color: var(--text-tertiary);
+  font-family: var(--font-mono);
+  font-size: var(--mono-xs);
+}
+
+.tw-sidebar-row__dot {
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-full);
+  background: var(--gray-600);
+  flex-shrink: 0;
+}
+
+.tw-sidebar-row__dot--on {
+  background: var(--status-attached);
+}
+
+/* Trailing action (delete) on a sidebar row, pinned to the row's end.
+ *
+ * `margin-left: auto` rather than relying on a sibling to grow: the project row
+ * gets end-alignment for free because .tw-sidebar-row__texts is `flex: 1`, but
+ * the session row is `[dot] [label] [meta] [action]` where nothing grows, so its
+ * trash icon sat immediately after the "3w" window count instead of at the
+ * right edge -- the two row types disagreed. auto-margin fixes the session row
+ * and is a harmless no-op on the project row (there is no free space left to
+ * absorb), so both end up aligned by the same rule rather than by coincidence.
+ *
+ * Hidden until the row is hovered, by request -- a delete button on every row
+ * is visual noise on a sidebar you mostly read rather than act on.
+ *
+ * `pointer-events: none` is carried alongside the `opacity: 0` rather than
+ * relying on opacity alone: opacity does NOT disable hit-testing, so the
+ * previous version left the delete button clickable and tab-focusable while
+ * completely invisible. That matters more here than in most places, because
+ * desktop delete runs immediately with no confirmation step unless the worktree
+ * is dirty (see webShellStore's requestDeleteSession) -- so a stray click on an
+ * unseen button destroyed a session outright. Hovering the row restores both
+ * the opacity and the interactivity together, so nothing is lost. */
+.tw-sidebar-row__end-action {
+  flex-shrink: 0;
+  margin-left: auto;
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* `:focus-visible`, not `:focus-within`. Plain focus matches a row you merely
+ * CLICKED -- and a clicked row keeps focus, so its delete button would stay
+ * visible afterwards, which is exactly the always-on look this was reverted
+ * away from. :focus-visible fires only for keyboard-driven focus, so a mouse
+ * user sees hover-only behaviour while a keyboard user can still reach the
+ * button -- which they must, since it is pointer-events:none and invisible
+ * otherwise.
+ *
+ * Two selectors are needed because the row itself is the focusable element
+ * (button / role=button) while the delete button is a descendant, and `:has()`
+ * only matches descendants. */
+.tw-sidebar-row:hover .tw-sidebar-row__end-action,
+.tw-sidebar-row:focus-visible .tw-sidebar-row__end-action,
+.tw-sidebar-row:has(:focus-visible) .tw-sidebar-row__end-action {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.tw-sidebar-collapsed-item {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.tw-sidebar-collapsed-item:hover,
+.tw-sidebar-collapsed-item.tw-sidebar-row--active {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.tw-web-main-pane {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  overflow: hidden;
+}
+
+.tw-web-main-pane__content {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.tw-web-main-pane__topbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: var(--web-topbar-height);
+  padding: 0 14px;
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--bg-surface);
+}
+
+.tw-web-main-pane__breadcrumb {
+  overflow: hidden;
+  flex-shrink: 1;
+  color: var(--text-secondary);
+  font-family: var(--font-sans);
+  font-size: var(--text-sm);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tw-web-main-pane__resource-usage {
+  flex-shrink: 0;
+  color: var(--text-tertiary);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+}
+
+/* Absorbs the remaining space so the breadcrumb/badge stay left-anchored
+   and the icon buttons stay right-anchored, without relying on
+   justify-content: space-between (which spreads *every* child evenly --
+   wrong once this row has more than two children). */
+.tw-web-main-pane__topbar-spacer {
+  flex: 1;
+}
+
+/* `overflow: hidden` is load-bearing, not cosmetic: xterm.js sizes its own
+   .xterm-rows from fitAddon's measurement, which can land a pixel or two
+   taller than this box. Without clipping here that overshoot escapes the
+   flex column and grows the whole document, producing a page-level
+   scrollbar (measured live: .xterm-rows 800px tall inside a ~752px box,
+   pushing `document.scrollHeight` past the viewport). The terminal's own
+   scrollback still scrolls -- that lives inside xterm's .xterm-viewport,
+   which this does not touch. */
+.tw-web-main-pane__terminal {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--bg-terminal);
+}
+
+.tw-changes-rail {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  height: 100%;
+  overflow: hidden;
+}
+
+.tw-changes-rail--panel {
+  width: 290px;
+  flex-shrink: 0;
+  border-left: 1px solid var(--border-subtle);
+  background: var(--bg-surface);
+}
+
+/* No horizontal scroll: tabs shrink and ellipsis instead of overflowing.
+   `flex-shrink` on the tab plus `min-width: 0` + ellipsis on its label is
+   what lets many windows fit a narrow pane without a scrollbar -- the "+"
+   button stays pinned and always reachable. */
+.tw-window-tabs {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--bg-surface);
+  overflow: hidden;
+}
+
+.tw-window-tab {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+  flex-shrink: 1;
+  padding: 4px 4px 4px 10px;
+  border-radius: var(--radius-sm);
+  color: var(--text-tertiary);
+}
+
+/* Optimistic tab for a window tmux has not confirmed yet. Creating a window is
+ * a raw keystroke with no response to await, so this placeholder is what stops
+ * the strip looking empty during the refetch delay. */
+.tw-window-tab--pending .tw-window-tab__label {
+  cursor: default;
+}
+
+/* Same border-arc technique as .tw-button__spinner (and the same tw-spin
+   keyframes), scaled to sit on a text line: a full ring in the dimmed track
+   colour with one side left transparent, so the gap reads as motion. */
+.tw-window-tab__spinner {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  vertical-align: -1px;
+  border: 1.5px solid var(--text-tertiary);
+  border-right-color: transparent;
+  border-radius: var(--radius-full);
+  animation: tw-spin 700ms linear infinite;
+}
+
+.tw-window-tab--active {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.tw-window-tab__label {
+  min-width: 0;
+  overflow: hidden;
+  border: none;
+  background: none;
+  color: inherit;
+  font-family: var(--font-mono);
+  font-size: var(--mono-sm);
+  cursor: pointer;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tw-window-tab__actions {
+  display: flex;
+  flex-shrink: 0;
+  opacity: 0;
+}
+
+.tw-window-tab:hover .tw-window-tab__actions {
+  opacity: 1;
+}
+
+.tw-delete-branch-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+  color: var(--text-secondary);
+  font-family: var(--font-sans);
+  font-size: var(--text-sm);
+}
+
+.tw-delete-branch-warning {
+  margin: 8px 0 0;
+  color: var(--amber-500);
+  font-family: var(--font-sans);
+  font-size: var(--text-xs);
+}
+
+.tw-empty-main-pane {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  flex: 1;
+  gap: var(--space-3);
+  color: var(--text-tertiary);
+}
+
+/* ---------- Command palette (#18g) ---------- */
+
+/* The only scrim child anchored to the TOP instead of the bottom, so it is
+ * also the only one whose top inset matters -- added to the existing 96px
+ * rather than replacing it. */
+.tw-command-palette-scrim {
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: calc(96px + var(--safe-top));
+  z-index: 110;
+}
+
+.tw-command-palette {
+  display: flex;
+  flex-direction: column;
+  width: 560px;
+  max-width: calc(100vw - 32px - var(--safe-left) - var(--safe-right));
+  max-height: calc(100dvh - 160px - var(--safe-top) - var(--safe-bottom));
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-lg);
+  background: var(--bg-card);
+  box-shadow: 0 20px 60px rgb(0 0 0 / 0.4);
+  overflow: hidden;
+}
+
+.tw-command-palette__search-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 16px;
+}
+
+.tw-command-palette__search-icon {
+  display: flex;
+  color: var(--text-tertiary);
+  flex-shrink: 0;
+}
+
+.tw-command-palette__input {
+  flex: 1;
+  padding: 14px 0;
+  border: none;
+  outline: none;
+  background: none;
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  font-size: var(--text-md);
+}
+
+.tw-command-palette__input::placeholder {
+  color: var(--text-tertiary);
+}
+
+.tw-command-palette__divider {
+  height: 1px;
+  background: var(--border-default);
+}
+
+.tw-command-palette__empty {
+  margin: 0;
+  padding: 16px;
+  color: var(--text-tertiary);
+  font-family: var(--font-sans);
+  font-size: var(--text-sm);
+}
+
+.tw-command-palette__results {
+  overflow-y: auto;
+  max-height: 360px;
+}
+
+.tw-command-palette__row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 16px;
+  cursor: pointer;
+}
+
+.tw-command-palette__row--selected {
+  background: var(--bg-hover);
+}
+
+.tw-command-palette__row-icon {
+  display: flex;
+  color: var(--text-tertiary);
+  flex-shrink: 0;
+}
+
+.tw-command-palette__row-labels {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.tw-command-palette__row-label {
+  overflow: hidden;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tw-command-palette__row-sublabel {
+  overflow: hidden;
+  color: var(--text-tertiary);
+  font-family: var(--font-sans);
+  font-size: var(--text-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

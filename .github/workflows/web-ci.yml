@@ -1,0 +1,49 @@
+name: Web CI
+
+# Own workflow, path-scoped so it only runs when web/ actually changes, for
+# the SolidJS PWA client under web/ -- mirrors the shape of kmp-ci.yml
+# (deleted in Phase 10, docs/adr/0004-solidjs-pwa-migration.md, once kmp/
+# itself was deleted), which played the same role for the KMP client this
+# PWA replaced. Separate from the root ci.yml job (which covers the Node
+# backend under src/) because web/ has its own package.json/lockfile and
+# dependency tree.
+
+on:
+  push:
+    branches: [main]
+    paths: ["web/**", ".github/workflows/web-ci.yml"]
+  pull_request:
+    branches: [main]
+    paths: ["web/**", ".github/workflows/web-ci.yml"]
+
+defaults:
+  run:
+    working-directory: web
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        run: npm test
+
+      # Also acts as a build smoke test -- `npm run build` runs `tsc --noEmit`
+      # (redundant with Typecheck above, harmless) then `vite build`, so a
+      # broken production build fails CI here rather than surfacing only at
+      # release time in release.yml.
+      - name: Build
+        run: npm run build

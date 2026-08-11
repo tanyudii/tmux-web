@@ -19,10 +19,15 @@ below — the per-session environment feature shells out to the
 `docker`/`docker compose` CLIs already on your system rather than adding a
 client library.
 
-The client (web + iOS) is being rebuilt as a single Kotlin Multiplatform +
-Compose Multiplatform project under `kmp/` — see
-`.claude/plans/rebuild-web-ios-kmp.plan.md` for the in-progress migration
-plan. The backend (`src/`) is a frozen contract throughout that migration.
+The web client is a hand-written SolidJS + Vite PWA under `web/` —
+installable to the home screen on iOS Safari, so it runs full-screen
+without going through the App Store. It replaced an earlier Kotlin
+Multiplatform + Compose Multiplatform client (`kmp/`, both a web target and
+a native iOS SwiftUI app) once it reached full feature parity — see
+`docs/adr/0004-solidjs-pwa-migration.md` for why, and
+`.claude/plans/rebuild-web-ios-kmp.plan.md` for the phase-by-phase
+migration history. The backend (`src/`) has been a frozen contract
+throughout every client rewrite.
 
 ## How it works
 
@@ -217,7 +222,7 @@ cloned. On the code itself it's a no-op (already checked out; `npm
 ci`/`npm link` just re-run harmlessly) — its real job here is fetching and
 installing that tag's prebuilt web UI bundle from its GitHub Release (see
 "Upgrading" below), which the bootstrap clone above doesn't include
-(`kmp/composeApp/build/` is gitignored, by design). This reuses the same,
+(`web/dist/` is gitignored, by design). This reuses the same,
 already-tested code path as every later `tmuxweb upgrade` rather than
 documenting a separate manual `gh release download` command here. Skipping
 this step still leaves you with a fully working install — just API-only, no
@@ -265,7 +270,7 @@ Internally this is the same clone-or-update + `npm ci --omit=dev` +
 one more step: it downloads that tag's prebuilt web UI bundle from this
 repo's GitHub Release (via the `gh` CLI — see "Requirements on the host
 machine" above) and extracts it to
-`~/.local/share/tmux-web/kmp/composeApp/build/dist/wasmJs/productionExecutable`,
+`~/.local/share/tmux-web/web/dist`,
 where the running server looks for it. That step is best-effort: if `gh`
 isn't installed/authenticated, or a given release has no web UI asset (e.g.
 an old tag cut before this mechanism existed), `tmuxweb upgrade` logs a
@@ -299,6 +304,31 @@ Open `http://<host>:<port>` (`http://127.0.0.1:5309` by default — see
 point it at an absolute path to a git repo already on this server, open the
 project, then **+ New session** and confirm you land in a real shell whose
 `pwd` is a freshly created worktree.
+
+### Web client (PWA)
+
+`npm run dev` above only starts the backend (API + WebSocket). The web
+client itself lives under `web/` as a separate npm project and needs its
+own install/build:
+
+```bash
+cd web
+npm install
+npm run build                # writes web/dist -- src/main.ts serves this
+                              # automatically once it exists (see the
+                              # DEFAULT_WEB_BUILD_DIR log line at startup)
+
+# or, for fast iteration with hot reload against a real backend:
+npm run dev                  # Vite dev server; point its proxy/base URL at
+                              # the backend's host:port from ~/.tmux-web/config.json
+```
+
+`npm test` / `npm run typecheck` in `web/` run its own Vitest suite and
+`tsc --noEmit` — kept separate from the root project's `npm test` since
+they're two independent npm projects with their own `package.json`/
+`package-lock.json` (see `web-ci.yml`, which runs on every push touching
+`web/**`). Any UI-affecting change must additionally be verified live in a
+real browser before being called done — see this repo's `CLAUDE.md`.
 
 ### Data directory
 
@@ -611,11 +641,34 @@ src/
     help.ts                         `tmuxweb help`
 bin/
   tmuxweb.ts             CLI entry point (shebang); dispatches into src/cli/
-kmp/
-  Kotlin Multiplatform + Compose Multiplatform client (web + iOS), replacing
-  the old vanilla-JS `public/` frontend and the old `ios/TmuxWebClient`
-  SwiftUI app -- see `.claude/plans/rebuild-web-ios-kmp.plan.md` for the
-  in-progress migration plan and architecture decisions.
+web/
+  SolidJS + Vite PWA client (installable on iOS Safari via "Add to Home
+  Screen") -- replaced the Kotlin Multiplatform + Compose Multiplatform
+  `kmp/` client (deleted in Phase 10, see docs/adr/0004), which had itself
+  replaced the original vanilla-JS `public/` frontend and the old
+  `ios/TmuxWebClient` SwiftUI app. `npm run build` produces `web/dist`,
+  which `src/main.ts`'s `DEFAULT_WEB_BUILD_DIR` serves statically alongside
+  the API -- see "Local development" above for running it.
+    src/api/           REST client (client.ts) + WebSocket clients
+                       (terminalSocket.ts, logsSocket.ts) + Zod-validated
+                       domain types (types.ts)
+    src/domain/        pure ports of the old kmp/ domain/*.kt logic
+                       (fuzzy search, bell alerts, terminal search/clipboard
+                       shortcut detection, etc.) -- no DOM, no network
+    src/stores/        `createXStore(deps)` state containers (solid-js/store)
+                       -- one per screen/feature, DI-testable via injected
+                       fakes instead of mocking modules
+    src/screens/       screen/dialog components -- mobile-first layouts plus
+                       the >=900px desktop "web shell" (sidebar + main pane)
+    src/terminal/      the @xterm/xterm binding (TerminalView.tsx) and its
+                       supporting DOM wiring (keydown shortcuts, clipboard,
+                       touch scroll, search bar) -- the highest-risk area,
+                       see this file's live-verification mandate above
+    src/ui/            reusable design-system components (Button, TextField,
+                       Sheet, ConfirmDialog, etc.) + ui.css
+    public/sw.js       service worker (offline shell + Web Push)
+  docs/adr/0004-solidjs-pwa-migration.md documents why this replaced kmp/
+  and the concrete parity work involved.
 scripts/
   install-service.mjs   `npm run install-service` -- thin wrapper around
                         `tmuxweb service install`, for a local dev clone

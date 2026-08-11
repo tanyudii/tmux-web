@@ -1,0 +1,198 @@
+/* Global border-box reset.
+ *
+ * This project shipped without one for a long time, and paid for it
+ * component-by-component: `.tw-list-row` carries a long comment explaining
+ * why it needs a local `box-sizing: border-box`, and five other components
+ * (.tw-textfield, .tw-env-editor, .tw-logs-dialog, ...) each grew the same
+ * one-line patch independently. Every one of those is the same bug --
+ * `width: 100%` plus horizontal padding renders WIDER than the parent under
+ * content-box sizing, because padding is added on top of the 100% instead of
+ * fitted inside it.
+ *
+ * `.tw-group` never got the patch, so it stayed broken: measured live at an
+ * iPhone viewport (393px wide) it rendered 425px = 393 + 16 + 16, i.e. its
+ * own `padding: 6px var(--space-5)` pushed the Connect screen's whole card
+ * -- fields, footer text and all -- past the right edge, where the app's
+ * `overflow: hidden` silently clipped it rather than revealing a scrollbar.
+ * That is the "ada yang terpotong" the repo owner reported from a real
+ * iPhone. Patching `.tw-group` alone would have left the same trap armed for
+ * the next component, so the reset is global here instead.
+ *
+ * The per-component declarations left in ui.css are now redundant but
+ * harmless (identical value, higher specificity); they are kept so this file
+ * is not load-bearing for components that already state their own intent. */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+/* The app is a fixed-viewport shell: the page itself never scrolls, only
+   the terminal does (see the scrollbar rules at the bottom of this file).
+   `overflow: hidden` here is the last line of defence -- every layout box
+   inside is already `min-height: 0` + `overflow: hidden` in screens.css, but
+   without this a single mis-measured child (xterm's own row block is the
+   repeat offender) silently turns the whole document into a scroller.
+
+   `height` is declared twice on purpose: `100%` is the fallback, `100dvh`
+   (dynamic viewport height) overrides it wherever supported. On iOS the two
+   are NOT equivalent -- a percentage height resolves against the initial
+   containing block, which keeps the size the viewport has when the browser's
+   URL bar and toolbar are hidden, so with `overflow: hidden` the bottom strip
+   of the app ends up behind Chrome/Safari's own chrome and is unreachable
+   (nothing can scroll it into view). `100dvh` tracks the viewport that is
+   actually visible right now, toolbars included. */
+html,
+body {
+  height: 100%;
+  height: 100dvh;
+  /* Set by viewport/appHeight.ts from window.visualViewport, which is the only
+     thing that shrinks when the software keyboard opens -- 100dvh does not.
+     Without it the keyboard covered the terminal's cursor line and the Connect
+     screen's fields, and `overflow: hidden` meant they could not be scrolled
+     back into view. The dvh fallback applies only if that script never runs. */
+  height: var(--app-height, 100dvh);
+  margin: 0;
+  overflow: hidden;
+  background: var(--bg-app);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  font-size: var(--text-base);
+  line-height: var(--leading-normal);
+  -webkit-tap-highlight-color: transparent;
+}
+
+#app {
+  height: 100%;
+  overflow: hidden;
+}
+
+/* Horizontal safe-area insets, applied once at the root.
+ *
+ * index.html sets `viewport-fit=cover`, which opts the page INTO drawing
+ * under iOS's notch / Dynamic Island / home indicator instead of letting the
+ * OS letterbox them away. That opt-in is only half a decision: the other half
+ * is compensating with env(safe-area-inset-*), and until now the project did
+ * neither -- a repo-wide grep for `env(` / `safe-area` returned zero hits, so
+ * the app drew straight under the hardware cutouts.
+ *
+ * Left/right live here because in landscape the notch eats one whole side of
+ * every screen at once, so a single root-level inset is both correct and
+ * cheaper than repeating it per screen. Top/bottom are deliberately NOT here
+ * -- they are applied to the specific chrome that touches those edges
+ * (.tw-navbar, .tw-quick-keys, sheets/dialog footers) so those surfaces'
+ * backgrounds still extend under the cutout, which is the native iOS look. A
+ * root-level top/bottom pad would instead leave a dead black band above the
+ * translucent nav bar. */
+#app {
+  padding-left: var(--safe-left);
+  padding-right: var(--safe-right);
+}
+
+.app-shell {
+  padding: var(--pad-screen);
+}
+
+/* ---------- Scrollbar chrome ----------
+ *
+ * Lists that can genuinely outgrow their box (project/session sidebar,
+ * mobile screen body, the changes file list) stay scrollable -- content
+ * must never become unreachable -- but their scrollbars are hidden, so the
+ * UI reads as one fixed surface with no visible scroll furniture.
+ *
+ * The terminal USED to be deliberately exempt, on the reasoning that long
+ * output had to be scrollable AND visibly so. That exemption is withdrawn at
+ * the repo owner's explicit request ("perlu full width dan scrollbar hidden
+ * saja walaupun bisa scroll"), and the original reasoning no longer holds
+ * anyway: scrolling here does not go through xterm's scroller at all --
+ * wheelScroll.ts / touchScroll.ts translate the gesture into a `scroll`
+ * message that drives tmux copy-mode -- so a visible xterm scrollbar was
+ * indicating a scroll position nothing in this app actually uses.
+ *
+ * The rules below only hide the scrollbar CHROME. They do not reclaim the
+ * 14px the fit addon reserves for it, because that reservation is a constant
+ * in the addon rather than a DOM measurement -- see the long note on
+ * `scrollback: 0` in terminal/xterm.ts, which is what actually recovers the
+ * width.
+ */
+.xterm-viewport,
+.xterm-scrollable-element {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.xterm-viewport::-webkit-scrollbar,
+.xterm-scrollable-element::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
+
+/* xterm 6 draws its own slider (a VS Code ScrollableElement) rather than
+   relying on a native scrollbar, so the rules above do not reach it. */
+.xterm .xterm-scrollable-element > .scrollbar {
+  display: none;
+}
+.tw-screen__scroll,
+.tw-sidebar__scroll,
+.tw-changes-rail .tw-screen__scroll,
+.tw-diff-overlay .tw-screen__scroll,
+.tw-env-menu__dropdown,
+.tw-logs-dialog__body,
+.tw-dir-picker__content,
+.tw-template-picker__list,
+.tw-simple-log-dialog__list,
+.tw-env-editor__tabs {
+  scrollbar-width: none; /* Firefox */
+  -ms-overflow-style: none; /* legacy Edge */
+}
+
+.tw-screen__scroll::-webkit-scrollbar,
+.tw-sidebar__scroll::-webkit-scrollbar,
+.tw-env-menu__dropdown::-webkit-scrollbar,
+.tw-logs-dialog__body::-webkit-scrollbar,
+.tw-dir-picker__content::-webkit-scrollbar,
+.tw-template-picker__list::-webkit-scrollbar,
+.tw-simple-log-dialog__list::-webkit-scrollbar,
+.tw-env-editor__tabs::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
+
+/* ---------- iOS focus-zoom workaround ----------
+ *
+ * Safari on iOS zooms the whole page in when a text control is focused whose
+ * computed font-size is under 16px, and does not zoom back out afterwards.
+ * Every text control here was under that threshold -- the Connect screen's
+ * Server URL and Access token fields worst of all at 13px (--mono-base), which
+ * is why logging in on an iPhone left the page magnified.
+ *
+ * 16px is not a style choice, it is the threshold itself: the zoom is driven by
+ * the COMPUTED font-size, so there is no way to render smaller text and still
+ * avoid it. The alternative -- `maximum-scale=1` in the viewport meta -- is
+ * deliberately NOT used: it suppresses the zoom by banning pinch-zoom across
+ * the entire app, which fails WCAG 1.4.4 and takes away a control real users
+ * rely on, to fix a problem in four inputs.
+ *
+ * Scoped to `pointer: coarse` so this applies to touch devices (where the zoom
+ * happens) and leaves desktop typography exactly as it was.
+ *
+ * The field BOXES do not grow: .tw-textfield__row is a fixed 40px, and the
+ * filter bar's row is pinned below for the same reason -- only the glyphs
+ * inside change size. Verified by measuring the boxes before and after.
+ */
+@media (pointer: coarse) {
+  .tw-textfield__input,
+  .tw-textfield__row--mono .tw-textfield__input,
+  .tw-env-editor__textarea,
+  .tw-filter-bar__branch-input {
+    font-size: 16px;
+  }
+
+  /* This row sizes from padding rather than a fixed height, so the larger
+     glyphs would otherwise make it a few px taller and shift the list below. */
+  .tw-filter-bar__branch {
+    height: 32px;
+    padding-top: 0;
+    padding-bottom: 0;
+  }
+}
