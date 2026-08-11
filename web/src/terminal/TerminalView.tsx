@@ -15,9 +15,12 @@
 // only be verified live in a real browser (see CLAUDE.md).
 import { createEffect, onCleanup, onMount } from "solid-js";
 import type { ScrollDirection } from "../api/terminalSocket";
+import type { VirtualKeyName } from "../domain/virtualKeys";
+import { pressVirtualKey } from "./virtualKeys";
 import { accumulateScrollLines } from "../domain/terminalScroll";
 import { attachTerminalKeydownListeners } from "./keydownHandlers";
 import { hideCopyToast } from "./clipboardDom";
+import { applySelectionMode, clearContainerSelection, copySelectionToClipboard } from "./selectionMode";
 import { attachOptionDragCaptureListener } from "./optionDrag";
 import { hideSearchBar } from "./searchBarDom";
 import { attachTouchScroll } from "./touchScroll";
@@ -29,6 +32,17 @@ import { DEFAULT_FONT_SIZE } from "./zoom";
 export interface TerminalHandle {
   write(data: string): void;
   resize(cols: number, rows: number): void;
+  // Mobile clipboard surface (QuickKeysBar's Paste/Copy/Clear). These sit on
+  // the handle rather than being driven by props because they are one-shot
+  // commands, not state: the screen tells the terminal to do something at
+  // the moment of a tap, and nothing about that outlives the tap.
+  paste(data: string): void;
+  copySelection(): Promise<boolean>;
+  clearSelection(): void;
+  // On-screen arrow pad. Deliberately takes a key NAME, not bytes: the
+  // escape sequence for an arrow depends on the terminal's cursor key mode,
+  // so xterm has to be the one to decide it (see terminal/virtualKeys.ts).
+  pressKey(name: VirtualKeyName): void;
 }
 
 export interface TerminalViewProps {
@@ -48,6 +62,12 @@ export interface TerminalViewProps {
   // default install the wheel was instead translated by xterm into arrow
   // keys and came out as shell history. See wheelScroll.ts's header.
   onScroll: (direction: ScrollDirection, lines: number) => void;
+  // Mobile "select text" mode. While true the browser gets the touch
+  // gesture back (no preventDefault) and xterm's `user-select: none` is
+  // overridden, so iOS can run its own long-press selection -- see
+  // selectionMode.ts for why this has to be an explicit mode rather than
+  // something always available.
+  isSelecting?: boolean;
   captureSelection: () => Promise<string | null>;
   createTerminal?: () => TerminalLike;
   createFitAddon?: () => FitAddonLike;
@@ -105,6 +125,12 @@ export function TerminalView(props: TerminalViewProps) {
     props.onReady({
       write: (data) => created.write(data),
       resize: (cols, rows) => created.resize(cols, rows),
+      paste: (data) => created.paste(data),
+      copySelection: () => copySelectionToClipboard(container),
+      clearSelection: () => clearContainerSelection(container),
+      pressKey: (name) => {
+        pressVirtualKey(container, name);
+      },
     });
 
     // FitAddon.fit() measures the container's current layout box. Calling
@@ -166,6 +192,9 @@ export function TerminalView(props: TerminalViewProps) {
     };
 
     detachTouchScroll = attachTouchScroll(container, {
+      // Selection mode and scrolling both want the single-finger drag; the
+      // mode decides which one gets it (see selectionMode.ts).
+      isEnabled: () => props.isSelecting !== true,
       onStart: () => {
         touchScrollCarry = 0;
       },
@@ -208,6 +237,10 @@ export function TerminalView(props: TerminalViewProps) {
   // first mount: an unconditional focus() here would yank focus away from
   // whatever else legitimately has it while the terminal is merely
   // rendering behind an open sheet.
+  createEffect(() => {
+    applySelectionMode(container, props.isSelecting === true);
+  });
+
   let wasVisible = props.isVisible;
   createEffect(() => {
     const visibility = props.isVisible ? "visible" : "hidden";

@@ -1,5 +1,5 @@
-import { cleanup, fireEvent, render, screen } from "@solidjs/testing-library";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { cleanup, fireEvent, render, screen, waitFor } from "@solidjs/testing-library";
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import type { FitAddonLike, SearchAddonLike, TerminalLike } from "../terminal/types";
 import { createPushStore, type PushStore } from "../stores/pushStore";
 import { TerminalScreen } from "./TerminalScreen";
@@ -20,6 +20,7 @@ function fakeTerminal(): TerminalLike {
     hasSelection: vi.fn().mockReturnValue(false),
     getSelection: vi.fn().mockReturnValue(""),
     clearSelection: vi.fn(),
+    paste: vi.fn(),
   };
 }
 
@@ -354,5 +355,241 @@ describe("TerminalScreen", () => {
 
     expect(await screen.findByRole("button", { name: "Disable push notifications" })).toBeInTheDocument();
     expect(api.subscribePush).toHaveBeenCalled();
+  });
+});
+
+// Mobile copy/paste wiring. The selection itself is browser-native and can
+// only be exercised for real in a browser (jsdom cannot run @xterm/xterm at
+// all -- see terminal/TerminalView.tsx's header), so what is asserted here is
+// the composition: which control reaches which handle method, and whether the
+// terminal is hidden while the paste sheet is up.
+describe("TerminalScreen mobile clipboard controls", () => {
+  let pasteSpy: Mock<(data: string) => void>;
+
+  beforeEach(() => {
+    pasteSpy = vi.fn();
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  function renderScreen() {
+    render(() => (
+      <TerminalScreen
+        api={fakeApi() as never}
+        baseUrl="https://tmux.example.com"
+        token="tok"
+        projectId="proj"
+        sessionFullName="proj__build"
+        sessionName="build"
+        projectName="my-project"
+        onBack={vi.fn()}
+        pushStore={fakePushStore()}
+        createSocket={() => fakeSocket() as never}
+        createTerminal={() => ({ ...fakeTerminal(), paste: pasteSpy })}
+        createFitAddon={fakeFitAddon}
+        createSearchAddon={fakeSearchAddon}
+      />
+    ));
+  }
+
+  function terminalContainer(): HTMLElement {
+    return document.querySelector(".tw-terminal-screen__view > div") as HTMLElement;
+  }
+
+  it("swaps the control keys for the selection controls when Select is tapped", () => {
+    renderScreen();
+
+    fireEvent.click(screen.getByRole("button", { name: "Select" }));
+
+    expect(screen.getByRole("button", { name: "Copy" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "^C" })).toBeNull();
+  });
+
+  it("puts the terminal into selection mode so the browser can own the gesture", () => {
+    renderScreen();
+
+    fireEvent.click(screen.getByRole("button", { name: "Select" }));
+
+    expect(terminalContainer().classList.contains("tw-terminal--selecting")).toBe(true);
+  });
+
+  it("leaves selection mode again on Done", () => {
+    renderScreen();
+    fireEvent.click(screen.getByRole("button", { name: "Select" }));
+
+    fireEvent.click(screen.getByRole("button", { name: "Done" }));
+
+    expect(terminalContainer().classList.contains("tw-terminal--selecting")).toBe(false);
+    expect(screen.getByRole("button", { name: "^C" })).toBeInTheDocument();
+  });
+
+  it("reports an empty copy rather than silently doing nothing", async () => {
+    renderScreen();
+    fireEvent.click(screen.getByRole("button", { name: "Select" }));
+
+    fireEvent.click(screen.getByRole("button", { name: "Copy" }));
+
+    const toast = await waitFor(() => {
+      const found = terminalContainer().querySelector(".tmux-copy-toast");
+      expect(found).not.toBeNull();
+      return found as HTMLElement;
+    });
+    expect(toast.textContent).toContain("Nothing selected");
+  });
+
+  it("opens the paste sheet from Paste", () => {
+    renderScreen();
+
+    fireEvent.click(screen.getByRole("button", { name: "Paste" }));
+
+    expect(screen.getByLabelText("Text to paste")).toBeInTheDocument();
+  });
+
+  // Same rule CLAUDE.md flags for every other dialog on this screen: xterm's
+  // own DOM sits on top and swallows clicks meant for whatever is shown over
+  // it unless the container is explicitly hidden.
+  it("hides the terminal while the paste sheet is open", () => {
+    renderScreen();
+
+    fireEvent.click(screen.getByRole("button", { name: "Paste" }));
+
+    expect(terminalContainer().style.visibility).toBe("hidden");
+  });
+
+  it("sends the pasted text through xterm's paste path and closes the sheet", () => {
+    renderScreen();
+    fireEvent.click(screen.getByRole("button", { name: "Paste" }));
+    const field = screen.getByLabelText("Text to paste");
+
+    fireEvent.input(field, { target: { value: "npm run build" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+    expect(pasteSpy).toHaveBeenCalledExactlyOnceWith("npm run build");
+    expect(screen.queryByLabelText("Text to paste")).toBeNull();
+    expect(terminalContainer().style.visibility).toBe("visible");
+  });
+});
+
+// Arrow pad wiring. What xterm emits for each key was measured in a real
+// browser (see domain/virtualKeys.ts's header); jsdom cannot run xterm, so
+// what is asserted here is the composition: which control reaches which
+// handle method, and that the two bar modes never overlap.
+describe("TerminalScreen arrow keys", () => {
+  afterEach(() => {
+    cleanup();
+  });
+
+  function renderScreen() {
+    render(() => (
+      <TerminalScreen
+        api={fakeApi() as never}
+        baseUrl="https://tmux.example.com"
+        token="tok"
+        projectId="proj"
+        sessionFullName="proj__build"
+        sessionName="build"
+        projectName="my-project"
+        onBack={vi.fn()}
+        pushStore={fakePushStore()}
+        createSocket={() => fakeSocket() as never}
+        createTerminal={fakeTerminal}
+        createFitAddon={fakeFitAddon}
+        createSearchAddon={fakeSearchAddon}
+      />
+    ));
+  }
+
+  it("swaps the control keys for the arrow pad when the toggle is tapped", () => {
+    renderScreen();
+
+    fireEvent.click(screen.getByRole("button", { name: "Arrow keys" }));
+
+    expect(screen.getByRole("button", { name: "Up" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "^C" })).toBeNull();
+  });
+
+  it("routes an arrow tap all the way to a keydown on xterm's own input", () => {
+    // The fake stands in for xterm closely enough to prove the routing: it
+    // renders the same helper textarea the real library does, which is the
+    // element pressVirtualKey targets. What xterm then EMITS for that event
+    // is not knowable here (jsdom cannot run it) and was measured live
+    // instead -- see domain/virtualKeys.ts's header.
+    const events: KeyboardEvent[] = [];
+    const terminalWithInput = () => {
+      const fake = fakeTerminal();
+      return {
+        ...fake,
+        open: (container: HTMLElement) => {
+          const textarea = document.createElement("textarea");
+          textarea.className = "xterm-helper-textarea";
+          textarea.addEventListener("keydown", (event) => events.push(event));
+          container.appendChild(textarea);
+        },
+      };
+    };
+    render(() => (
+      <TerminalScreen
+        api={fakeApi() as never}
+        baseUrl="https://tmux.example.com"
+        token="tok"
+        projectId="proj"
+        sessionFullName="proj__build"
+        sessionName="build"
+        projectName="my-project"
+        onBack={vi.fn()}
+        pushStore={fakePushStore()}
+        createSocket={() => fakeSocket() as never}
+        createTerminal={terminalWithInput}
+        createFitAddon={fakeFitAddon}
+        createSearchAddon={fakeSearchAddon}
+      />
+    ));
+    fireEvent.click(screen.getByRole("button", { name: "Arrow keys" }));
+
+    fireEvent.click(screen.getByRole("button", { name: "Down" }));
+    fireEvent.click(screen.getByRole("button", { name: "Shift Tab" }));
+
+    expect(events.map((e) => [e.key, e.shiftKey])).toEqual([
+      ["ArrowDown", false],
+      ["Tab", true],
+    ]);
+  });
+
+  it("leaves arrow mode on Done", () => {
+    renderScreen();
+    fireEvent.click(screen.getByRole("button", { name: "Arrow keys" }));
+
+    fireEvent.click(screen.getByRole("button", { name: "Done" }));
+
+    expect(screen.getByRole("button", { name: "^C" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Up" })).toBeNull();
+  });
+
+  // The two modes fight over the same row and the same touch gesture, so
+  // entering one must leave the other rather than stacking.
+  it("entering selection mode leaves arrow mode", () => {
+    renderScreen();
+    fireEvent.click(screen.getByRole("button", { name: "Arrow keys" }));
+
+    fireEvent.click(screen.getByRole("button", { name: "Done" }));
+    fireEvent.click(screen.getByRole("button", { name: "Select" }));
+
+    expect(screen.getByRole("button", { name: "Copy" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Up" })).toBeNull();
+  });
+
+  it("entering arrow mode leaves selection mode and drops the highlight", () => {
+    renderScreen();
+    fireEvent.click(screen.getByRole("button", { name: "Select" }));
+    const container = document.querySelector(".tw-terminal-screen__view > div") as HTMLElement;
+    expect(container.classList.contains("tw-terminal--selecting")).toBe(true);
+
+    fireEvent.click(screen.getByRole("button", { name: "Done" }));
+    fireEvent.click(screen.getByRole("button", { name: "Arrow keys" }));
+
+    expect(screen.getByRole("button", { name: "Up" })).toBeInTheDocument();
+    expect(container.classList.contains("tw-terminal--selecting")).toBe(false);
   });
 });

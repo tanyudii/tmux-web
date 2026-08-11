@@ -85,3 +85,67 @@ describe("attachTouchScroll", () => {
     expect(onStart).not.toHaveBeenCalled();
   });
 });
+
+// Selection mode (the mobile copy flow) hands the gesture back to the
+// browser: iOS drives its own long-press selection and drag handles through
+// touchmove, so a preventDefault here cancels the drag handles outright and
+// the user can never adjust what they selected.
+describe("attachTouchScroll with an isEnabled guard", () => {
+  let container: HTMLDivElement;
+  let onStart: Mock<() => void>;
+  let onDrag: Mock<(deltaY: number) => void>;
+  let enabled: boolean;
+  let detach: () => void;
+
+  beforeEach(() => {
+    container = document.createElement("div");
+    onStart = vi.fn();
+    onDrag = vi.fn();
+    enabled = true;
+    detach = attachTouchScroll(container, { onStart, onDrag, isEnabled: () => enabled });
+  });
+
+  afterEach(() => {
+    detach();
+  });
+
+  it("does not preventDefault on touchmove while disabled", () => {
+    enabled = false;
+    container.dispatchEvent(touchEvent("touchstart", 100));
+    const moveEvent = touchEvent("touchmove", 130);
+    const preventDefault = vi.spyOn(moveEvent, "preventDefault");
+
+    container.dispatchEvent(moveEvent);
+
+    expect(preventDefault).not.toHaveBeenCalled();
+  });
+
+  it("does not report scroll while disabled", () => {
+    enabled = false;
+
+    container.dispatchEvent(touchEvent("touchstart", 100));
+    container.dispatchEvent(touchEvent("touchmove", 130));
+
+    expect(onStart).not.toHaveBeenCalled();
+    expect(onDrag).not.toHaveBeenCalled();
+  });
+
+  it("reads the guard per event so toggling the mode takes effect without re-attaching", () => {
+    enabled = false;
+    container.dispatchEvent(touchEvent("touchstart", 100));
+    container.dispatchEvent(touchEvent("touchmove", 130));
+
+    enabled = true;
+    container.dispatchEvent(touchEvent("touchstart", 100));
+    container.dispatchEvent(touchEvent("touchmove", 130));
+
+    expect(onDrag).toHaveBeenCalledExactlyOnceWith(30);
+  });
+
+  it("still scrolls normally while enabled", () => {
+    container.dispatchEvent(touchEvent("touchstart", 100));
+    container.dispatchEvent(touchEvent("touchmove", 130));
+
+    expect(onDrag).toHaveBeenCalledWith(30);
+  });
+});

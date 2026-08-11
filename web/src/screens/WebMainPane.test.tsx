@@ -25,6 +25,7 @@ function fakeTerminal(): TerminalLike {
     hasSelection: vi.fn().mockReturnValue(false),
     getSelection: vi.fn().mockReturnValue(""),
     clearSelection: vi.fn(),
+    paste: vi.fn(),
   };
 }
 const fakeFitAddon = (): FitAddonLike => ({ fit: vi.fn() });

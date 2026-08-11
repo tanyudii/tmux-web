@@ -45,3 +45,11 @@ export function copyResultMessage(success: boolean): string {
 // mouse-reporting capture (tmux runs with `mouse on`).
 export const COPY_NO_SELECTION_MESSAGE =
   "No text selected — hold Option (Mac) or Shift (Windows/Linux) while dragging, then copy again";
+
+// The touch equivalent, deliberately kept separate from the message above:
+// on a phone there is no Option/Shift key to hold, and the gesture that
+// makes a selection is entirely different (press and hold, then drag the
+// handles). Reusing the desktop wording here would tell a phone user to do
+// something they cannot do.
+export const TOUCH_COPY_NO_SELECTION_MESSAGE =
+  "Nothing selected — press and hold on the terminal, drag the handles, then tap Copy";

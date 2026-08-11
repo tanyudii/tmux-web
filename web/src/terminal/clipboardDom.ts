@@ -20,13 +20,38 @@ export async function copyTextToClipboard(text: string): Promise<boolean> {
   return copyViaExecCommand(text);
 }
 
+// iOS Safari ignores `textarea.select()` on a field it considers
+// non-editable, and treats a plain `readOnly` textarea as exactly that --
+// execCommand("copy") then reports success while putting nothing on the
+// clipboard. The combination that does work there is contentEditable="true"
+// + readOnly (editable enough for the selection to take, still not
+// focusable-for-typing enough to pop the on-screen keyboard) followed by an
+// explicit setSelectionRange; `select()` alone is the documented no-op.
+// Desktop browsers are unaffected by any of this, so there is no branch on
+// user agent -- the iOS-safe sequence is simply the sequence.
+//
+// font-size 16px matters for the same reason: anything smaller makes iOS
+// zoom the viewport when the field takes focus, which on this app would
+// visibly jolt the terminal mid-copy.
 function copyViaExecCommand(text: string): boolean {
   const scratch = document.createElement("textarea");
   scratch.value = text;
+  scratch.readOnly = true;
+  scratch.contentEditable = "true";
   scratch.style.position = "fixed";
+  scratch.style.top = "0";
   scratch.style.opacity = "0";
+  scratch.style.fontSize = "16px";
   document.body.appendChild(scratch);
-  scratch.select();
+
+  const restoreSelection = captureSelection();
+  const selection = window.getSelection();
+  const scratchRange = document.createRange();
+  scratchRange.selectNodeContents(scratch);
+  selection?.removeAllRanges();
+  selection?.addRange(scratchRange);
+  scratch.setSelectionRange(0, text.length);
+
   let copied = false;
   try {
     copied = document.execCommand("copy");
@@ -34,10 +59,34 @@ function copyViaExecCommand(text: string): boolean {
     copied = false;
   }
   scratch.remove();
+  restoreSelection();
   return copied;
 }
 
+/**
+ * Snapshots the live document selection and returns a function that puts it
+ * back. The copy path above has to hijack the selection to reach the
+ * clipboard, but on the mobile copy flow the selection being hijacked is the
+ * terminal text the user just picked out by hand -- losing it on the very
+ * tap that copies it reads as the app throwing their selection away.
+ */
+function captureSelection(): () => void {
+  const selection = window.getSelection();
+  const ranges = selection ? Array.from({ length: selection.rangeCount }, (_, i) => selection.getRangeAt(i)) : [];
+  return () => {
+    if (!selection) return;
+    selection.removeAllRanges();
+    for (const range of ranges) selection.addRange(range);
+  };
+}
+
 const TOAST_CLASS = "tmux-copy-toast";
+
+// Shared by every copy path (Cmd+C in keydownHandlers.ts, the mobile Copy
+// button in selectionMode.ts) so the same action never reports itself for a
+// different length depending on which surface triggered it.
+export const COPY_TOAST_DURATION_MS = 1800;
+export const NO_SELECTION_TOAST_DURATION_MS = 3200;
 
 interface ToastElement extends HTMLDivElement {
   tmuxHideTimer?: ReturnType<typeof setTimeout>;

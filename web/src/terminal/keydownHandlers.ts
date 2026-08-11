@@ -14,13 +14,15 @@
 // bubble-phase listener.
 import { COPY_NO_SELECTION_MESSAGE, copyResultMessage, isCopyShortcut } from "../domain/terminalClipboard";
 import { isFindShortcut } from "../domain/terminalSearch";
-import { copyTextToClipboard, showCopyToast } from "./clipboardDom";
+import {
+  COPY_TOAST_DURATION_MS,
+  NO_SELECTION_TOAST_DURATION_MS,
+  copyTextToClipboard,
+  showCopyToast,
+} from "./clipboardDom";
 import { hideSearchBar, showSearchBar } from "./searchBarDom";
 import type { SearchAddonLike, TerminalLike } from "./types";
 import { nextZoomFontSize } from "./zoom";
-
-const COPY_TOAST_DURATION_MS = 1800;
-const NO_SELECTION_TOAST_DURATION_MS = 3200;
 
 export interface TerminalKeydownState {
   terminal: () => TerminalLike | null;

@@ -39,7 +39,14 @@ describe("createTerminalStore", () => {
     const socket = fakeSocket();
     const store = createTerminalStore({ socket, sessionFullName: "proj__a", sessionLabel: "a" });
     const write = vi.fn();
-    store.onReady({ write, resize: vi.fn() });
+    store.onReady({
+      write,
+      resize: vi.fn(),
+      paste: vi.fn(),
+      copySelection: vi.fn().mockResolvedValue(true),
+      clearSelection: vi.fn(),
+      pressKey: vi.fn(),
+    });
 
     socket.emit("data", "hello\r\n");
 
