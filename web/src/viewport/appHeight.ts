@@ -52,6 +52,28 @@ export const APP_HEIGHT_PROPERTY = "--app-height";
 /** Long enough to outlast iOS's keyboard/accessory-bar transition. */
 const SETTLE_DELAY_MS = 300;
 
+/**
+ * Smallest share of the viewport an overlap must cover before it is treated as
+ * a keyboard rather than a keyboard ACCESSORY BAR.
+ *
+ * With a hardware keyboard attached, iPadOS reserves room for the shortcut bar
+ * and reports it through visualViewport exactly like a keyboard -- but the bar
+ * is a fraction of the height, and on this reporter's iPad nothing was drawn
+ * there at all, so shrinking by it left dead space that grew as they typed.
+ *
+ * A ratio, not a pixel count, because the two classes separate cleanly by share
+ * of the viewport on every device while their pixel values do not. Measured on
+ * the reporting iPad and iPhone:
+ *
+ *   software keyboard  391px portrait / 479px landscape  -> ~38% / ~62%
+ *   accessory bar      71px typing, 158px transient      -> ~7%  / ~15%
+ *
+ * 25% sits in the middle of that gap with a wide margin on both sides. An
+ * absolute threshold would not: an iPhone's landscape keyboard is only ~190px,
+ * which is close to the iPad's 158px transient, yet as a ratio it is ~55%.
+ */
+const KEYBOARD_MIN_VIEWPORT_SHARE = 0.25;
+
 // iPadOS keeps reporting a shrunken visual viewport after a keyboard or
 // accessory bar has gone, and the value oscillates: measured on a real iPad
 // with a hardware keyboard attached and NOTHING focused, the reported overlap
@@ -112,9 +134,15 @@ export function attachAppHeight(deps: AppHeightDeps = {}): () => void {
   const measure = (): number => {
     const layout = fallbackHeight();
     if (!viewport) return layout;
-    // Only trust the visual viewport while something is focused -- see
-    // defaultIsTextEntryFocused's note on the iPad oscillation.
+    // Nothing focused means nothing can be covering the page, whatever the
+    // viewport claims -- see defaultIsTextEntryFocused's note.
     if (!isTextEntryFocused()) return layout;
+
+    const overlap = layout - viewport.height;
+    if (overlap <= 0) return layout;
+    // Too small a share to be a keyboard: an accessory bar, or a stale value.
+    // Shrinking by it is what produced the growing strip of dead space on iPad.
+    if (overlap / layout < KEYBOARD_MIN_VIEWPORT_SHARE) return layout;
     return viewport.height;
   };
 
