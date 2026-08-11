@@ -1,6 +1,6 @@
 import { execFile as execFileCb, spawn as spawnCb } from "node:child_process";
 import { promisify } from "node:util";
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { defaultAppDir } from "./app-dir.ts";
@@ -99,6 +99,8 @@ export interface UpgradeDeps {
   spawn?: SpawnFn;
   /** True when this process IS the re-exec'd child (see runUpgrade) -- defaults to reading the guard env var. */
   isReexecChild?: boolean;
+  findStrayPids?: FindStrayPidsFn;
+  stopPid?: StopPidFn;
 }
 
 interface ResolvedUpgradeDeps {
@@ -112,6 +114,8 @@ interface ResolvedUpgradeDeps {
   refreshService: (deps: { exec: ExecFn }) => Promise<void>;
   spawn: SpawnFn;
   isReexecChild: boolean;
+  findStrayPids: FindStrayPidsFn;
+  stopPid: StopPidFn;
 }
 
 function resolveUpgradeDeps(deps: UpgradeDeps): ResolvedUpgradeDeps {
@@ -126,6 +130,8 @@ function resolveUpgradeDeps(deps: UpgradeDeps): ResolvedUpgradeDeps {
     refreshService: deps.refreshService ?? installService,
     spawn: deps.spawn ?? defaultSpawn,
     isReexecChild: deps.isReexecChild ?? process.env[REEXEC_ENV_FLAG] === "1",
+    findStrayPids: deps.findStrayPids ?? defaultFindStrayPids,
+    stopPid: deps.stopPid ?? defaultStopPid,
   };
 }
 
@@ -152,6 +158,87 @@ async function isServiceActive(exec: ExecFn): Promise<boolean> {
     return stdout.trim() === "active";
   } catch {
     return false;
+  }
+}
+
+export type FindStrayPidsFn = (appDir: string, selfPid: number) => Promise<number[]>;
+export type StopPidFn = (pid: number) => Promise<void>;
+
+/** How long a stray server gets to exit on SIGTERM before SIGKILL. */
+const STRAY_STOP_TIMEOUT_MS = 10_000;
+const STRAY_STOP_POLL_MS = 200;
+
+/**
+ * tmux-web server processes that systemd is NOT managing.
+ *
+ * Only called when the unit is inactive, so anything matching is by
+ * definition running outside it -- typically a `tmuxweb start` launched by
+ * hand in a terminal. Such a process keeps serving the code that was on disk
+ * when it started, which after an upgrade is the version we just replaced;
+ * leaving it alone is what made `tmuxweb upgrade` report success while the
+ * old server kept running.
+ *
+ * Matching is on the process's own cmdline containing this appDir's
+ * bin/tmuxweb.ts plus the `start` subcommand -- deliberately NOT "whoever
+ * holds the configured port". Port ownership would identify an unrelated
+ * program as ours and get it killed; the cmdline cannot.
+ *
+ * Linux-only (/proc), which is the same constraint the systemd path already
+ * has. Returns empty rather than throwing anywhere /proc is unavailable.
+ */
+export async function defaultFindStrayPids(appDir: string, selfPid: number): Promise<number[]> {
+  const needle = join(appDir, "bin", "tmuxweb.ts");
+  let entries: string[];
+  try {
+    entries = await readdir("/proc");
+  } catch {
+    return [];
+  }
+
+  const found: number[] = [];
+  for (const entry of entries) {
+    const pid = Number(entry);
+    if (!Number.isInteger(pid) || pid <= 0 || pid === selfPid) continue;
+    let cmdline: string;
+    try {
+      cmdline = await readFile(`/proc/${entry}/cmdline`, "utf8");
+    } catch {
+      // Process exited between readdir and here, or is not ours to read.
+      continue;
+    }
+    const argv = cmdline.split("\0").filter((part) => part !== "");
+    if (argv.includes(needle) && argv.includes("start")) found.push(pid);
+  }
+  return found;
+}
+
+/** SIGTERM, wait for the process to actually go, then SIGKILL as a last resort. */
+export async function defaultStopPid(pid: number): Promise<void> {
+  const isAlive = (): boolean => {
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  try {
+    process.kill(pid, "SIGTERM");
+  } catch {
+    return; // already gone
+  }
+
+  const deadline = Date.now() + STRAY_STOP_TIMEOUT_MS;
+  while (Date.now() < deadline) {
+    if (!isAlive()) return;
+    await new Promise((resolve) => setTimeout(resolve, STRAY_STOP_POLL_MS));
+  }
+
+  try {
+    process.kill(pid, "SIGKILL");
+  } catch {
+    // Raced us to exit.
   }
 }
 
@@ -313,13 +400,15 @@ export async function runUpgrade(args: string[], deps: UpgradeDeps = {}): Promis
   const tagFlagIndex = args.indexOf("--tag");
   const explicitTag = tagFlagIndex !== -1 ? args[tagFlagIndex + 1] : undefined;
   if (tagFlagIndex !== -1 && !explicitTag) {
-    throw new UpgradeError("Usage: tmuxweb upgrade [--tag <tag>] [--app-dir <path>]");
+    throw new UpgradeError("Usage: tmuxweb upgrade [--tag <tag>] [--app-dir <path>] [--no-restart]");
   }
+
+  const noRestart = args.includes("--no-restart");
 
   const appDirFlagIndex = args.indexOf("--app-dir");
   const explicitAppDir = appDirFlagIndex !== -1 ? args[appDirFlagIndex + 1] : undefined;
   if (appDirFlagIndex !== -1 && !explicitAppDir) {
-    throw new UpgradeError("Usage: tmuxweb upgrade [--tag <tag>] [--app-dir <path>]");
+    throw new UpgradeError("Usage: tmuxweb upgrade [--tag <tag>] [--app-dir <path>] [--no-restart]");
   }
 
   const {
@@ -333,6 +422,8 @@ export async function runUpgrade(args: string[], deps: UpgradeDeps = {}): Promis
     refreshService,
     spawn,
     isReexecChild,
+    findStrayPids,
+    stopPid,
   } = resolveUpgradeDeps({
     ...deps,
     appDir: explicitAppDir ?? deps.appDir,
@@ -357,6 +448,9 @@ export async function runUpgrade(args: string[], deps: UpgradeDeps = {}): Promis
     // code that was just installed, in a single `tmuxweb upgrade` call.
     const binPath = join(appDir, "bin", "tmuxweb.ts");
     const reexecArgs = ["--experimental-strip-types", binPath, "upgrade", "--tag", tag, "--app-dir", appDir];
+    // The child is what actually reaches the restart step, so the flag has to
+    // travel with it -- otherwise --no-restart is silently ignored.
+    if (noRestart) reexecArgs.push("--no-restart");
     const exitCode = await spawn(process.execPath, reexecArgs, {
       cwd: appDir,
       env: { ...process.env, [REEXEC_ENV_FLAG]: "1" },
@@ -378,6 +472,41 @@ export async function runUpgrade(args: string[], deps: UpgradeDeps = {}): Promis
     );
   }
 
+  if (noRestart) {
+    console.log("Skipping the service restart (--no-restart). The running server keeps the OLD code until restarted.");
+    return;
+  }
+
+  await ensureServiceRunning({ exec, appDir, refreshService, findStrayPids, stopPid });
+}
+
+interface EnsureServiceDeps {
+  exec: ExecFn;
+  appDir: string;
+  refreshService: (deps: { exec: ExecFn }) => Promise<void>;
+  findStrayPids: FindStrayPidsFn;
+  stopPid: StopPidFn;
+}
+
+/**
+ * Leaves the machine running the version that was just installed, from
+ * whatever state it was in.
+ *
+ * The previous behaviour only handled "systemd unit already active" and
+ * printed "nothing to restart" otherwise -- which is exactly wrong for the
+ * common case of a server started by hand: something IS serving, on the code
+ * we just replaced, and saying "nothing to restart" reads as "you are done"
+ * when the upgrade has in fact not taken effect. (Static assets are read from
+ * disk per request, so the web UI silently updates while the server-side code
+ * stays stale -- a split state that is worse than either half.)
+ *
+ * Note this runs in the re-exec'd child, which loaded the freshly-installed
+ * upgrade.ts (see runUpgrade), so this logic applies during the very upgrade
+ * that ships it rather than only from the next one onward.
+ */
+async function ensureServiceRunning(deps: EnsureServiceDeps): Promise<void> {
+  const { exec, appDir, refreshService, findStrayPids, stopPid } = deps;
+
   if (await isServiceActive(exec)) {
     // Re-write the systemd unit before restarting, not just restart in
     // place -- what ExecStart needs to look like can change between
@@ -398,7 +527,35 @@ export async function runUpgrade(args: string[], deps: UpgradeDeps = {}): Promis
       console.warn(`Could not restart the service automatically: ${messageOf(error)}`);
       console.warn(`Restart it yourself: systemctl --user restart ${SERVICE_NAME}`);
     }
-  } else {
-    console.log("tmux-web service is not currently running -- nothing to restart.");
+    return;
+  }
+
+  // systemd is not running it. Stop anything started by hand first: it holds
+  // the configured port, so leaving it up would make the service start fail
+  // with EADDRINUSE, and it is running the code being replaced either way.
+  const strays = await findStrayPids(appDir, process.pid);
+  for (const pid of strays) {
+    console.log(`Stopping tmux-web running outside systemd (pid ${pid})...`);
+    try {
+      await stopPid(pid);
+    } catch (error) {
+      console.warn(`Could not stop pid ${pid}: ${messageOf(error)}`);
+    }
+  }
+
+  // installService writes/refreshes the unit, daemon-reloads, and does
+  // `enable --now` -- which starts it. One call covers both "unit missing"
+  // and "unit present but inactive".
+  console.log("Installing/refreshing the systemd service and starting it...");
+  try {
+    await refreshService({ exec });
+    console.log("tmux-web is now running under systemd.");
+  } catch (error) {
+    console.warn(`Could not start tmux-web under systemd: ${messageOf(error)}`);
+    if (strays.length > 0) {
+      console.warn(
+        `The process that was serving before is stopped. Start it again with: systemctl --user start ${SERVICE_NAME}`,
+      );
+    }
   }
 }

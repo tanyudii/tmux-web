@@ -127,8 +127,28 @@ Code and runtime data live in two deliberately separate places:
   graceful-degrade path, it never aborts the upgrade.
 - `runUpgrade()` -- wires the above together, resolves `--tag`/`--app-dir`,
   re-execs into the freshly-installed code (see the re-exec section below)
-  before downloading the web build and restarting the systemd `--user`
-  service if it was already running.
+  before downloading the web build and handing off to `ensureServiceRunning()`
+  below.
+- `ensureServiceRunning()` -- the last step, and the one that decides whether
+  the upgrade actually took effect. It used to handle only "systemd unit
+  already active" and print "tmux-web service is not currently running --
+  nothing to restart" otherwise. That was wrong for the common case of a
+  server started by hand (`tmuxweb start` in a terminal): something IS
+  serving, on the code that was just replaced, and the message reads as "you
+  are done" when nothing has changed. Worse, it produced a split state --
+  static assets are read from disk per request, so the web UI silently
+  updated to the new bundle while the server-side code stayed stale. Now:
+  if the unit is active, refresh + restart as before; otherwise stop any
+  tmux-web started outside systemd, then `refreshService()` (installService
+  writes/refreshes the unit and does `enable --now`, so one call covers both
+  "unit missing" and "unit present but inactive"). `--no-restart` opts out
+  and is forwarded to the re-exec child, which is what actually reaches this
+  step. Stray processes are matched on their cmdline containing
+  `<appDir>/bin/tmuxweb.ts` plus `start` -- deliberately NOT on "whoever
+  holds the configured port", which would identify an unrelated program as
+  ours and kill it. Because this runs in the re-exec child (which loaded the
+  freshly-installed upgrade.ts), the behavior applies during the very upgrade
+  that ships it, not only from the next one onward.
 
 `src/cli/service-command.ts`'s `resolveBinPath()` and `src/cli/version.ts`'s
 `readPackageVersion()` both resolve paths relative to their own
