@@ -28,6 +28,15 @@ export interface VisualViewportLike {
 }
 
 export interface AppHeightDeps {
+  /**
+   * Whether something is focused that could summon a keyboard. Defaults to
+   * "the active element is an input, textarea or contenteditable".
+   */
+  isTextEntryFocused?: () => boolean;
+  /** Subscribes to focus changes; returns an unsubscribe. */
+  onFocusChange?: (listener: () => void) => () => void;
+  /** Schedules the settle re-read. Injectable so tests need no timers. */
+  scheduleSettle?: (run: () => void) => void;
   /** Defaults to `window.visualViewport`; null disables the keyboard-aware path. */
   viewport?: VisualViewportLike | null;
   /** Fallback height source when there is no visualViewport. */
@@ -39,6 +48,39 @@ export interface AppHeightDeps {
 }
 
 export const APP_HEIGHT_PROPERTY = "--app-height";
+
+/** Long enough to outlast iOS's keyboard/accessory-bar transition. */
+const SETTLE_DELAY_MS = 300;
+
+// iPadOS keeps reporting a shrunken visual viewport after a keyboard or
+// accessory bar has gone, and the value oscillates: measured on a real iPad
+// with a hardware keyboard attached and NOTHING focused, the reported overlap
+// flipped between 158px and 71px on its own. Sizing the shell from that left a
+// strip of dead space below the UI -- the gap this guard exists to stop.
+//
+// Nothing can cover the page while nothing is focused, so in that state the
+// layout viewport is the truth and the visual viewport is simply stale.
+function defaultIsTextEntryFocused(): boolean {
+  if (typeof document === "undefined") return false;
+  const el = document.activeElement;
+  if (!el) return false;
+  const tag = el.tagName;
+  // xterm.js keeps a hidden <textarea> focused whenever the terminal has focus,
+  // so the terminal screen counts as focused -- correctly, since that is exactly
+  // when a keyboard is up over it. Verified live: tapping the terminal makes
+  // document.activeElement a TEXTAREA.
+  if (tag === "INPUT" || tag === "TEXTAREA") return true;
+  return (el as HTMLElement).isContentEditable === true;
+}
+
+function defaultFocusChange(listener: () => void): () => void {
+  document.addEventListener("focusin", listener);
+  document.addEventListener("focusout", listener);
+  return () => {
+    document.removeEventListener("focusin", listener);
+    document.removeEventListener("focusout", listener);
+  };
+}
 
 function defaultWindowResize(listener: () => void): () => void {
   window.addEventListener("resize", listener);
@@ -62,12 +104,39 @@ export function attachAppHeight(deps: AppHeightDeps = {}): () => void {
   const onWindowResize = deps.onWindowResize ?? defaultWindowResize;
   if (!target) return () => {};
 
+  const isTextEntryFocused = deps.isTextEntryFocused ?? defaultIsTextEntryFocused;
+  const onFocusChange = deps.onFocusChange ?? defaultFocusChange;
+  const scheduleSettle = deps.scheduleSettle ?? ((run: () => void) => setTimeout(run, SETTLE_DELAY_MS));
+  let settleScheduled = false;
+
+  const measure = (): number => {
+    const layout = fallbackHeight();
+    if (!viewport) return layout;
+    // Only trust the visual viewport while something is focused -- see
+    // defaultIsTextEntryFocused's note on the iPad oscillation.
+    if (!isTextEntryFocused()) return layout;
+    return viewport.height;
+  };
+
   const apply = (): void => {
-    const height = viewport ? viewport.height : fallbackHeight();
+    const height = measure();
     // Guard against 0/NaN: some browsers report a transient 0 mid-rotation, and
     // committing that would collapse the whole shell for a frame.
     if (!Number.isFinite(height) || height <= 0) return;
     target.style.setProperty(APP_HEIGHT_PROPERTY, `${Math.round(height)}px`);
+  };
+
+  // Applied twice: once now so the layout reacts immediately, once after the
+  // transition has settled, because the first value iOS reports mid-animation
+  // is often not the one it ends on (the 158-then-71 oscillation above).
+  const applyAndSettle = (): void => {
+    apply();
+    if (settleScheduled) return;
+    settleScheduled = true;
+    scheduleSettle(() => {
+      settleScheduled = false;
+      apply();
+    });
   };
 
   apply();
@@ -75,13 +144,15 @@ export function attachAppHeight(deps: AppHeightDeps = {}): () => void {
   // `scroll` matters as much as `resize`: iOS shifts the visual viewport when
   // it scrolls a focused field into view above the keyboard, and that arrives
   // as a visualViewport scroll rather than a resize.
-  viewport?.addEventListener("resize", apply);
-  viewport?.addEventListener("scroll", apply);
-  const detachWindow = onWindowResize(apply);
+  viewport?.addEventListener("resize", applyAndSettle);
+  viewport?.addEventListener("scroll", applyAndSettle);
+  const detachWindow = onWindowResize(applyAndSettle);
+  const detachFocus = onFocusChange(applyAndSettle);
 
   return () => {
-    viewport?.removeEventListener("resize", apply);
-    viewport?.removeEventListener("scroll", apply);
+    viewport?.removeEventListener("resize", applyAndSettle);
+    viewport?.removeEventListener("scroll", applyAndSettle);
     detachWindow();
+    detachFocus();
   };
 }

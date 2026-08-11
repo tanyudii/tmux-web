@@ -24,7 +24,7 @@ function fakeTarget() {
 describe("attachAppHeight", () => {
   it("publishes the visual viewport height immediately", () => {
     const target = fakeTarget();
-    attachAppHeight({ viewport: fakeViewport(812), target, onWindowResize: () => () => {} });
+    attachAppHeight({ viewport: fakeViewport(812), target, onWindowResize: () => () => {}, onFocusChange: () => () => {}, scheduleSettle: () => {}, isTextEntryFocused: () => true });
 
     expect(target.props[APP_HEIGHT_PROPERTY]).toBe("812px");
   });
@@ -34,7 +34,7 @@ describe("attachAppHeight", () => {
   it("follows the viewport shrinking when the keyboard opens", () => {
     const target = fakeTarget();
     const viewport = fakeViewport(812);
-    attachAppHeight({ viewport, target, onWindowResize: () => () => {} });
+    attachAppHeight({ viewport, target, onWindowResize: () => () => {}, onFocusChange: () => () => {}, scheduleSettle: () => {}, isTextEntryFocused: () => true });
 
     viewport.height = 476; // keyboard up
     viewport.emit("resize");
@@ -47,7 +47,7 @@ describe("attachAppHeight", () => {
   it("also updates on a visual viewport scroll", () => {
     const target = fakeTarget();
     const viewport = fakeViewport(812);
-    attachAppHeight({ viewport, target, onWindowResize: () => () => {} });
+    attachAppHeight({ viewport, target, onWindowResize: () => () => {}, onFocusChange: () => () => {}, scheduleSettle: () => {}, isTextEntryFocused: () => true });
 
     viewport.height = 500;
     viewport.emit("scroll");
@@ -60,7 +60,7 @@ describe("attachAppHeight", () => {
   // custom properties but not dvh units, collapsing the shell to height:auto.
   it("falls back to the window height when there is no visual viewport", () => {
     const target = fakeTarget();
-    attachAppHeight({ viewport: null, fallbackHeight: () => 640, target, onWindowResize: () => () => {} });
+    attachAppHeight({ viewport: null, fallbackHeight: () => 640, target, onWindowResize: () => () => {}, onFocusChange: () => () => {}, scheduleSettle: () => {}, isTextEntryFocused: () => true });
 
     expect(target.props[APP_HEIGHT_PROPERTY]).toBe("640px");
   });
@@ -70,7 +70,7 @@ describe("attachAppHeight", () => {
   it("ignores a non-positive height rather than committing it", () => {
     const target = fakeTarget();
     const viewport = fakeViewport(812);
-    attachAppHeight({ viewport, target, onWindowResize: () => () => {} });
+    attachAppHeight({ viewport, target, onWindowResize: () => () => {}, onFocusChange: () => () => {}, scheduleSettle: () => {}, isTextEntryFocused: () => true });
 
     viewport.height = 0;
     viewport.emit("resize");
@@ -78,16 +78,74 @@ describe("attachAppHeight", () => {
     expect(target.props[APP_HEIGHT_PROPERTY]).toBe("812px");
   });
 
+  // Measured on a real iPad with a hardware keyboard and NOTHING focused: the
+  // reported overlap oscillated between 158px and 71px on its own, so the shell
+  // kept shrinking below the visible area and left a strip of dead space. With
+  // nothing focused there is no keyboard and no accessory bar to hide behind,
+  // so the layout viewport is the truth.
+  it("ignores a stale shrunken viewport while nothing is focused", () => {
+    const target = fakeTarget();
+    const viewport = fakeViewport(866); // iPadOS still claiming 158px is covered
+    attachAppHeight({
+      viewport, target, fallbackHeight: () => 1024,
+      isTextEntryFocused: () => false,
+      onWindowResize: () => () => {}, onFocusChange: () => () => {}, scheduleSettle: () => {},
+    });
+
+    expect(target.props[APP_HEIGHT_PROPERTY]).toBe("1024px");
+  });
+
+  it("shrinks again as soon as a field takes focus", () => {
+    const target = fakeTarget();
+    const viewport = fakeViewport(545);
+    let focused = false;
+    let notify = () => {};
+    attachAppHeight({
+      viewport, target, fallbackHeight: () => 1024,
+      isTextEntryFocused: () => focused,
+      onFocusChange: (l) => { notify = l; return () => {}; },
+      onWindowResize: () => () => {}, scheduleSettle: () => {},
+    });
+    expect(target.props[APP_HEIGHT_PROPERTY]).toBe("1024px");
+
+    focused = true;
+    notify();
+
+    expect(target.props[APP_HEIGHT_PROPERTY]).toBe("545px");
+  });
+
+  // iOS's first value mid-transition is often not the one it settles on.
+  it("re-reads once after the transition settles", () => {
+    const target = fakeTarget();
+    const viewport = fakeViewport(866);
+    let settle = () => {};
+    attachAppHeight({
+      viewport, target, isTextEntryFocused: () => true,
+      scheduleSettle: (run) => { settle = run; },
+      onWindowResize: () => () => {}, onFocusChange: () => () => {},
+    });
+
+    viewport.emit("resize");
+    expect(target.props[APP_HEIGHT_PROPERTY]).toBe("866px");
+
+    viewport.height = 953; // what iPadOS actually ends on
+    settle();
+
+    expect(target.props[APP_HEIGHT_PROPERTY]).toBe("953px");
+  });
+
   it("removes every listener it added on cleanup", () => {
     const target = fakeTarget();
     const viewport = fakeViewport(812);
     const detachWindow = vi.fn();
-    const detach = attachAppHeight({ viewport, target, onWindowResize: () => detachWindow });
+    const detachFocus = vi.fn();
+    const detach = attachAppHeight({ viewport, target, onWindowResize: () => detachWindow, onFocusChange: () => detachFocus, scheduleSettle: () => {}, isTextEntryFocused: () => true });
 
     expect(viewport.listenerCount()).toBe(2);
     detach();
 
     expect(viewport.listenerCount()).toBe(0);
     expect(detachWindow).toHaveBeenCalledOnce();
+    expect(detachFocus).toHaveBeenCalledOnce();
   });
 });
