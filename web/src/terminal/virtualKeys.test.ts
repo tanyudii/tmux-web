@@ -36,6 +36,30 @@ describe("pressVirtualKey", () => {
     expect(events[0].code).toBe("ArrowDown");
   });
 
+  // keyCode/which are the whole reason this module dispatches an event
+  // instead of writing bytes: xterm's key evaluation reads the legacy
+  // keyCode, so dropping it yields a button that looks fine and does
+  // nothing. They are also the two fields the `as KeyboardEventInit` cast in
+  // the implementation stops TypeScript from checking, which leaves this
+  // assertion as the only guard on them.
+  it("carries the legacy keyCode and which that xterm actually reads", () => {
+    pressVirtualKey(container, "ArrowUp");
+    pressVirtualKey(container, "ArrowDown");
+    pressVirtualKey(container, "ArrowLeft");
+    pressVirtualKey(container, "ArrowRight");
+    pressVirtualKey(container, "Enter");
+    pressVirtualKey(container, "ShiftTab");
+
+    expect(events.map((e) => [e.key, e.keyCode, e.which])).toEqual([
+      ["ArrowUp", 38, 38],
+      ["ArrowDown", 40, 40],
+      ["ArrowLeft", 37, 37],
+      ["ArrowRight", 39, 39],
+      ["Enter", 13, 13],
+      ["Tab", 9, 9],
+    ]);
+  });
+
   it("sets the shift modifier for Shift+Tab and not for the arrows", () => {
     pressVirtualKey(container, "ShiftTab");
     pressVirtualKey(container, "ArrowLeft");

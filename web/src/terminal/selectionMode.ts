@@ -30,15 +30,74 @@ export function applySelectionMode(container: HTMLElement, isSelecting: boolean)
 
 /**
  * The browser-native selection currently sitting inside `container`, or null
- * when there is none (or when it lies entirely outside the terminal -- e.g.
- * the user selected something in a dialog while the mode was still on).
+ * when none of it does (e.g. the user selected something in a dialog while
+ * the mode was still on).
+ *
+ * A selection that only PARTLY overlaps the terminal is clipped to the part
+ * inside it rather than taken whole. This is not hypothetical on a phone: the
+ * quick-keys bar sits directly below the terminal, so dragging a selection
+ * handle past the bottom edge extends the selection into the bar's own button
+ * labels. Testing `container.contains(anchorNode)` alone -- as this did
+ * originally -- passes such a selection straight through, and the user's
+ * clipboard silently gains "CopyClearDone" on the end of their command output.
+ *
+ * NOTE this NARROWS the live selection as a side effect when clipping applies
+ * (see the body for why that is required, not merely convenient).
+ *
+ * The rendered-text half of that reasoning cannot be unit tested here: jsdom
+ * implements Selection.toString() as plain Range.toString(), so both include
+ * non-rendered <style> text and the distinction this function depends on does
+ * not exist under jsdom. Verified in a real browser instead -- see the
+ * live-verification note in CLAUDE.md for why that is the standard here.
  */
 export function readContainerSelection(container: HTMLElement): string | null {
   const selection = window.getSelection();
   if (!selection || selection.rangeCount === 0 || selection.isCollapsed) return null;
-  const anchor = selection.anchorNode;
-  if (anchor === null || !container.contains(anchor)) return null;
+
+  const clipped = clipRangeToContainer(selection.getRangeAt(0), container);
+  if (clipped === null || clipped.collapsed) return null;
+
+  // Narrow the LIVE selection to the clipped range and read it back through
+  // Selection rather than returning `clipped.toString()` directly. Two
+  // reasons, the first found the hard way in a browser:
+  //
+  //  1. Range.toString() concatenates every text node between its endpoints,
+  //     including ones that are never rendered. xterm injects <style>
+  //     elements inside this container, so a clipped range that reaches past
+  //     the rows picked up raw CSS ("...ider.active { background: #ffffff80 }")
+  //     and put it on the clipboard. Selection.toString() is defined in terms
+  //     of rendered text and skips them.
+  //  2. The highlight the user is looking at then matches what was actually
+  //     copied, instead of silently copying less than what looks selected.
+  selection.removeAllRanges();
+  selection.addRange(clipped);
   return selection.toString();
+}
+
+/**
+ * Narrows `range` so neither end lies outside `container`, or returns null
+ * when the two do not overlap at all.
+ *
+ * Only range 0 is considered. Multi-range selections are a Firefox-only
+ * capability (Chrome and Safari collapse to a single range), and this whole
+ * module exists for a touch gesture on mobile Safari.
+ */
+function clipRangeToContainer(range: Range, container: HTMLElement): Range | null {
+  const bounds = container.ownerDocument.createRange();
+  bounds.selectNodeContents(container);
+
+  // Entirely before or entirely after the container -- no overlap to clip to.
+  if (range.compareBoundaryPoints(Range.END_TO_START, bounds) >= 0) return null;
+  if (range.compareBoundaryPoints(Range.START_TO_END, bounds) <= 0) return null;
+
+  const clipped = range.cloneRange();
+  if (clipped.compareBoundaryPoints(Range.START_TO_START, bounds) < 0) {
+    clipped.setStart(bounds.startContainer, bounds.startOffset);
+  }
+  if (clipped.compareBoundaryPoints(Range.END_TO_END, bounds) > 0) {
+    clipped.setEnd(bounds.endContainer, bounds.endOffset);
+  }
+  return clipped;
 }
 
 /** Drops the current selection, so "Clear" visibly does something and Done leaves no stray highlight. */

@@ -6,9 +6,17 @@
 //
 // It also carries the mobile clipboard controls and the on-screen arrow pad,
 // because a phone has no Cmd+C/Cmd+V and no arrow keys to reach the desktop
-// paths in terminal/keydownHandlers.ts. Both are optional props: this same
-// component is rendered by the desktop pane (hidden by the media query above
-// rather than unmounted), which has a real keyboard and needs neither.
+// paths in terminal/keydownHandlers.ts.
+//
+// Those two clusters are optional props, but NOT because a desktop caller
+// omits them: TerminalScreen is the only thing that renders this bar at all
+// (App.tsx routes desktop to WebShellPage, a separate tree that never mounts
+// TerminalScreen, and WebMainPane deliberately has no quick-keys bar), and it
+// always supplies every handler. The media query above still matters -- it
+// hides the bar when TerminalScreen itself is shown at >=600px, e.g. a phone
+// in landscape -- but the optionality is currently unused flexibility rather
+// than a live desktop/mobile distinction. Worth collapsing into a single
+// required `mode` prop if this grows a fourth mode.
 //
 // THREE mutually exclusive modes share the one row, rather than stacking
 // rows: vertical space on a phone belongs to the terminal, and a second bar

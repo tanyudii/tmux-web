@@ -212,9 +212,16 @@
  * and top border spanning the full width down to the physical screen edge. */
 .tw-quick-keys {
   display: flex;
-  /* 4px, not 6: normal mode holds eight controls, and 8 * 44px + 7 * 6px
-     overshoots the 370px of usable width on a 390px phone -- the gap is what
-     has to give if every control is to stay a real touch target. */
+  /* 4px, not 6. Normal mode holds eight controls in the 370px of usable width
+     a 390px phone leaves (390 minus this rule's own 2 x 10px padding), and a
+     44 x 44px touch target for all eight does not fit at ANY gap:
+     8 * 44 = 352px leaves only 18px for seven gaps. Tightening the gap alone
+     is therefore not enough either -- 8 * 44 + 7 * 4 = 380px still overshoots.
+     What actually fits is a smaller gap AND a 42px floor on the keys
+     (8 * 42 + 7 * 4 = 364px, see .tw-quick-keys__key below): 42 x 44px, a
+     deliberate 2px under Apple's 44 x 44 guidance, traded for keeping all
+     eight controls reachable without a second row stealing terminal height.
+     Measured live at 390px: 42, 42, 42, 42, 42, 42, 48, 42. */
   gap: 4px;
   padding: 6px 10px calc(6px + var(--safe-bottom));
   border-top: 1px solid var(--border-subtle);
@@ -317,15 +324,18 @@
 
 /* `flex: 1 1 auto` rather than a flat `flex: 1`: normal mode now carries
  * EIGHT controls (five control keys, the arrow toggle, Select, Paste). Split
- * into equal eighths that is ~41px each at a 390px viewport, which clips the
- * word "Select" and drops below the 44px touch target. Sizing from content
- * lets the short labels (^C, ^B, ⇅) give their slack to the word-labelled
- * ones, and flex-grow still fills the row. min-width keeps the narrow glyph
- * buttons finger-sized rather than letting them shrink to their glyph. */
+ * into equal eighths every button gets the same 42.75px at a 390px viewport,
+ * which is too narrow for the word "Select" and clips it. Sizing from content
+ * instead lets the short labels (^C, ^B, ⇅) hand their slack to the
+ * word-labelled ones -- measured live, Select ends up at 48px while the rest
+ * sit at the 42px floor -- and flex-grow still fills the row. min-width keeps
+ * the narrow glyph buttons finger-sized rather than letting them shrink to
+ * fit their glyph. */
 .tw-quick-keys__key {
   flex: 1 1 auto;
-  /* Floor chosen against the real constraint: 8 * 42 + 7 * 4 = 364px, which
-     fits 370px with slack for flex-grow to spend. Measured live at 390px. */
+  /* 42px, not 44: see the .tw-quick-keys gap comment above for why eight
+     44px-wide controls cannot fit 370px at any gap. 8 * 42 + 7 * 4 = 364px,
+     which fits with 6px of slack for flex-grow to spend. */
   min-width: 42px;
   padding: 0 4px;
   height: var(--quick-keys-height);
