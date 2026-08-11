@@ -24,6 +24,14 @@ export interface TerminalLike {
   hasSelection(): boolean;
   getSelection(): string;
   clearSelection(): void;
+  // Mobile paste (PasteSheet) routes through xterm's own paste() rather
+  // than pushing the text straight down the socket as input. xterm is what
+  // knows whether the running app has requested bracketed-paste mode, and
+  // wraps the payload in \x1b[200~ ... \x1b[201~ accordingly -- without
+  // that, a multi-line paste into a shell executes every line the instant
+  // it arrives instead of landing as one editable block. It also
+  // normalizes \r\n / \n to \r, which is what a terminal expects.
+  paste(data: string): void;
 }
 
 export interface FitAddonLike {

@@ -212,7 +212,10 @@
  * and top border spanning the full width down to the physical screen edge. */
 .tw-quick-keys {
   display: flex;
-  gap: 6px;
+  /* 4px, not 6: normal mode holds eight controls, and 8 * 44px + 7 * 6px
+     overshoots the 370px of usable width on a 390px phone -- the gap is what
+     has to give if every control is to stay a real touch target. */
+  gap: 4px;
   padding: 6px 10px calc(6px + var(--safe-bottom));
   border-top: 1px solid var(--border-subtle);
   background: var(--bg-surface);
@@ -224,8 +227,107 @@
   }
 }
 
+/* ---------- Paste sheet ---------- */
+
+.tw-paste-sheet__label {
+  display: block;
+  margin-bottom: var(--space-2);
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+}
+
+/* font-size must stay at 16px or larger: below that, iOS Safari zooms the
+   whole viewport when the field takes focus, and since this sheet autofocuses
+   on mount the terminal behind it would visibly lurch every time the user
+   opens Paste. */
+.tw-paste-sheet__input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: var(--space-3);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  background: var(--bg-raised);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 16px;
+  line-height: 1.4;
+  resize: vertical;
+}
+
+.tw-paste-sheet__hint {
+  margin: var(--space-2) 0 0;
+  color: var(--text-tertiary);
+  font-size: var(--text-sm);
+}
+
+/* Mobile "select text" mode (terminal/selectionMode.ts).
+ *
+ * xterm.css ships `user-select: none` on `.xterm` itself (its own rule, at
+ * single-class specificity) which is what makes a browser-native selection
+ * over the rows come back empty. Measured live against real @xterm/xterm in
+ * Chromium: with the rule in force, selecting the whole `.xterm-rows`
+ * subtree yields ""; with this override the identical selection yields the
+ * real row text. The two-class selector below is what clears xterm's own
+ * rule -- do not weaken it to a single class.
+ *
+ * -webkit-touch-callout is what lets iOS show its Copy/Look Up callout on a
+ * long press; WebKit suppresses it by default inside a page that has
+ * declared the region unselectable. */
+.tw-terminal--selecting .xterm,
+.tw-terminal--selecting .xterm .xterm-screen,
+.tw-terminal--selecting .xterm .xterm-rows {
+  user-select: text;
+  -webkit-user-select: text;
+  -webkit-touch-callout: default;
+}
+
+/* The mode is only reachable from the mobile quick-keys bar, but the cursor
+   hint costs nothing and makes the state legible when debugging on desktop. */
+.tw-terminal--selecting {
+  cursor: text;
+}
+
+/* Contextual row shown while selection mode is active. Same height and
+   safe-area treatment as the key row it replaces, so toggling the mode never
+   changes how much vertical space the terminal gets -- a reflow mid-selection
+   would move the text out from under the user's finger. */
+.tw-quick-keys--selecting .tw-quick-keys__key {
+  font-family: var(--font-sans);
+  font-size: var(--text-sm);
+}
+
+.tw-quick-keys__key--primary {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* Arrow glyphs render small and thin in the mono face used for the control
+   keys; the sans face at a larger size keeps them legible at thumb distance. */
+.tw-quick-keys__key--glyph {
+  font-family: var(--font-sans);
+  font-size: 15px;
+  line-height: 1;
+}
+
+.tw-quick-keys__key[aria-pressed="true"] {
+  border-color: var(--accent);
+  background: var(--accent-fill);
+  color: var(--accent);
+}
+
+/* `flex: 1 1 auto` rather than a flat `flex: 1`: normal mode now carries
+ * EIGHT controls (five control keys, the arrow toggle, Select, Paste). Split
+ * into equal eighths that is ~41px each at a 390px viewport, which clips the
+ * word "Select" and drops below the 44px touch target. Sizing from content
+ * lets the short labels (^C, ^B, ⇅) give their slack to the word-labelled
+ * ones, and flex-grow still fills the row. min-width keeps the narrow glyph
+ * buttons finger-sized rather than letting them shrink to their glyph. */
 .tw-quick-keys__key {
-  flex: 1;
+  flex: 1 1 auto;
+  /* Floor chosen against the real constraint: 8 * 42 + 7 * 4 = 364px, which
+     fits 370px with slack for flex-grow to spend. Measured live at 390px. */
+  min-width: 42px;
+  padding: 0 4px;
   height: var(--quick-keys-height);
   border: 1px solid var(--border-default);
   border-radius: var(--radius-sm);

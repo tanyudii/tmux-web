@@ -30,6 +30,7 @@ function fakeTerminal(overrides: Partial<TerminalLike> = {}): TerminalLike {
     hasSelection: vi.fn().mockReturnValue(false),
     getSelection: vi.fn().mockReturnValue(""),
     clearSelection: vi.fn(),
+    paste: vi.fn(),
     // Test-only escape hatches to fire the captured callbacks -- not part
     // of TerminalLike, so cast at the call site in tests.
     __fireData: (data: string) => onDataCallback?.(data),

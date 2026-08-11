@@ -23,7 +23,7 @@
 // connected app and threads it down as `props.pushStore`.
 import { createMemo, createSignal, onCleanup, Show } from "solid-js";
 import { ConfirmDialog, ConnectionBanner, ErrorBanner, IconButton, NavBar } from "../ui";
-import { TerminalView } from "../terminal/TerminalView";
+import { TerminalView, type TerminalHandle } from "../terminal/TerminalView";
 import type { FitAddonLike, SearchAddonLike, TerminalLike } from "../terminal/types";
 import { createTerminalStore } from "../stores/terminalStore";
 import { createChangesStore } from "../stores/changesStore";
@@ -38,6 +38,7 @@ import { ChangesDialog } from "./ChangesDialog";
 import { EnvFileEditorDialog } from "./EnvFileEditorDialog";
 import { EnvironmentMenu } from "./EnvironmentMenu";
 import { LogsDialog } from "./LogsDialog";
+import { PasteSheet } from "./PasteSheet";
 import { PushNotificationToggle } from "./PushNotificationToggle";
 import { QuickKeysBar } from "./QuickKeysBar";
 
@@ -97,6 +98,12 @@ export function TerminalScreen(props: TerminalScreenProps) {
 
   const [isChangesOpen, setChangesOpen] = createSignal(false);
   const [environmentMenuOpen, setEnvironmentMenuOpen] = createSignal(false);
+  const [isSelecting, setSelecting] = createSignal(false);
+  const [isArrowMode, setArrowMode] = createSignal(false);
+  const [isPasteOpen, setPasteOpen] = createSignal(false);
+  // TerminalView hands this over on mount; it is the only route to xterm's
+  // own paste()/selection APIs from up here.
+  const [terminalHandle, setTerminalHandle] = createSignal<TerminalHandle | null>(null);
   const [envEditorStore, setEnvEditorStore] = createSignal<EnvFileEditorStore | null>(null);
   const [logsStore, setLogsStore] = createSignal<LogsStore | null>(null);
 
@@ -112,6 +119,25 @@ export function TerminalScreen(props: TerminalScreenProps) {
   function handleViewLogs(service: string): void {
     ensureLogsStore();
     environment.showLogs(service);
+  }
+
+  // Leaving selection mode drops any leftover highlight, so the terminal
+  // does not come back with a stale-looking selection painted over live
+  // output the next time tmux repaints under it.
+  function handleToggleSelecting(next: boolean): void {
+    setSelecting(next);
+    // The two modes compete for the same row and for the same touch gesture,
+    // so entering one leaves the other.
+    if (next) setArrowMode(false);
+    if (!next) terminalHandle()?.clearSelection();
+  }
+
+  // Entering arrow mode also drops any live selection: selection mode hands
+  // the drag to the browser, and leaving a highlight painted over the pane
+  // while the user starts navigating a menu just looks like a stuck artifact.
+  function handleToggleArrows(next: boolean): void {
+    setArrowMode(next);
+    if (next && isSelecting()) handleToggleSelecting(false);
   }
 
   function handleEditConfig(): void {
@@ -137,6 +163,7 @@ export function TerminalScreen(props: TerminalScreenProps) {
   // `isVisible` kdoc, same click-swallowing bug class CLAUDE.md flags.
   const terminalVisible = () =>
     !isChangesOpen() &&
+    !isPasteOpen() &&
     !environmentMenuOpen() &&
     !environment.state.isShowingStopConfirm &&
     envEditorStore() === null &&
@@ -192,8 +219,12 @@ export function TerminalScreen(props: TerminalScreenProps) {
           onInput={terminal.onInput}
           onBell={terminal.onBell}
           onResize={terminal.onResize}
-          onReady={terminal.onReady}
+          onReady={(handle) => {
+            setTerminalHandle(() => handle);
+            terminal.onReady(handle);
+          }}
           isVisible={terminalVisible()}
+          isSelecting={isSelecting()}
           onScroll={terminal.onScroll}
           captureSelection={() => props.api.getPasteBuffer(props.projectId, props.sessionName).catch(() => null)}
           createTerminal={props.createTerminal}
@@ -201,7 +232,21 @@ export function TerminalScreen(props: TerminalScreenProps) {
           createSearchAddon={props.createSearchAddon}
         />
       </div>
-      <QuickKeysBar onKeyTap={terminal.onInput} />
+      <QuickKeysBar
+        onKeyTap={terminal.onInput}
+        isSelecting={isSelecting()}
+        onToggleSelecting={handleToggleSelecting}
+        onCopy={() => void terminalHandle()?.copySelection()}
+        onClearSelection={() => terminalHandle()?.clearSelection()}
+        onPaste={() => setPasteOpen(true)}
+        isArrowMode={isArrowMode()}
+        onToggleArrows={handleToggleArrows}
+        onPressKey={(name) => terminalHandle()?.pressKey(name)}
+      />
+
+      <Show when={isPasteOpen()}>
+        <PasteSheet onSend={(text) => terminalHandle()?.paste(text)} onDismiss={() => setPasteOpen(false)} />
+      </Show>
 
       <Show when={isChangesOpen()}>
         <ChangesDialog store={changes} onClose={() => setChangesOpen(false)} />

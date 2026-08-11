@@ -18,18 +18,28 @@
 export interface TouchScrollHandlers {
   onStart: () => void;
   onDrag: (deltaY: number) => void;
+  // Read fresh on every event (not captured once at attach time) so the
+  // caller can flip selection mode on and off without detaching listeners.
+  // While it returns false this module gets out of the way entirely --
+  // crucially including the preventDefault, which is what iOS's own
+  // long-press selection and drag handles need in order to work at all.
+  // Defaults to always-enabled when omitted.
+  isEnabled?: () => boolean;
 }
 
 export function attachTouchScroll(container: HTMLElement, handlers: TouchScrollHandlers): () => void {
   let lastY = 0;
+  const isEnabled = (): boolean => handlers.isEnabled?.() ?? true;
 
   const onTouchStart = (event: TouchEvent): void => {
+    if (!isEnabled()) return;
     if (event.touches.length !== 1) return;
     lastY = event.touches[0].clientY;
     handlers.onStart();
   };
 
   const onTouchMove = (event: TouchEvent): void => {
+    if (!isEnabled()) return;
     if (event.touches.length !== 1) return;
     const y = event.touches[0].clientY;
     const delta = y - lastY;

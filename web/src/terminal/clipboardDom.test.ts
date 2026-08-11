@@ -59,6 +59,53 @@ describe("copyTextToClipboard", () => {
 
     expect(document.querySelectorAll("textarea").length).toBe(0);
   });
+
+  // iOS Safari ignores textarea.select() on a programmatically inserted
+  // field: the copy silently produces an empty clipboard. The documented
+  // workaround is contentEditable + readOnly + an explicit
+  // setSelectionRange, so assert on the actual attributes/calls rather than
+  // just "execCommand was called" -- the latter passes either way, which is
+  // exactly how this class of bug ships unnoticed.
+  it("prepares the scratch textarea the way iOS Safari requires", async () => {
+    Object.defineProperty(navigator, "clipboard", { value: undefined, configurable: true });
+    let observed: { contentEditable: string; readOnly: boolean; selectionRange: [number, number] | null } | null = null;
+    document.execCommand = vi.fn().mockImplementation(() => {
+      const scratch = document.querySelector("textarea") as HTMLTextAreaElement;
+      observed = {
+        contentEditable: scratch.contentEditable,
+        readOnly: scratch.readOnly,
+        selectionRange: [scratch.selectionStart, scratch.selectionEnd],
+      };
+      return true;
+    });
+
+    await copyTextToClipboard("hello");
+
+    expect(observed).not.toBeNull();
+    expect(observed!.contentEditable).toBe("true");
+    expect(observed!.readOnly).toBe(true);
+    expect(observed!.selectionRange).toEqual([0, "hello".length]);
+  });
+
+  it("restores the caller's existing selection after copying", async () => {
+    Object.defineProperty(navigator, "clipboard", { value: undefined, configurable: true });
+    document.execCommand = vi.fn().mockReturnValue(true);
+    const host = document.createElement("div");
+    host.textContent = "terminal row text";
+    document.body.appendChild(host);
+    const range = document.createRange();
+    range.selectNodeContents(host);
+    window.getSelection()?.removeAllRanges();
+    window.getSelection()?.addRange(range);
+
+    await copyTextToClipboard("hello");
+
+    // Without an explicit restore, the scratch textarea's own selection wins
+    // and the user's terminal selection visibly vanishes the instant they
+    // tap Copy -- looks like the app cleared their work.
+    expect(window.getSelection()?.toString()).toBe("terminal row text");
+    host.remove();
+  });
 });
 
 describe("showCopyToast / hideCopyToast", () => {
