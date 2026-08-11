@@ -77,7 +77,19 @@ export function ConfirmDialog(props: ConfirmDialogProps) {
     // `finally` rather than `then`: on failure the dialog usually stays open to
     // show the error, and leaving it stuck in a permanent loading state would
     // make the retry unreachable.
-    void result.finally(() => setConfirming(false));
+    //
+    // The trailing `catch` is load-bearing, not defensive noise: `.finally()`
+    // re-throws whatever it was chained onto, so `void result.finally(...)`
+    // left a rejected promise with no handler -- an unhandled rejection on
+    // every failed delete. Caught by CI (vitest fails the run on an unhandled
+    // error even when every test passes), not by the assertions.
+    //
+    // Swallowing is correct here rather than lazy: reporting is the caller's
+    // job and already happens -- the stores put the message in
+    // state.errorMessage, which the screen renders.
+    void result
+      .finally(() => setConfirming(false))
+      .catch(() => {});
   }
 
   return (
