@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { execFile as execFileCb, execFileSync } from "node:child_process";
+import { execFile as execFileCb, execFileSync, spawn as spawnProcess } from "node:child_process";
 import { promisify } from "node:util";
 import { mkdir, mkdtemp, lstat, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -96,6 +96,10 @@ test("runUpgrade clones fresh when appDir is not an existing git repo", async ()
     isReexecChild: true,
     mkdirRecursive: noopMkdir,
     mkdtemp: noopMkdtemp,
+    // Stubbed: the inactive branch now installs+starts the service,
+    // which would really write a unit file into $HOME from a unit test.
+    refreshService: async () => {},
+    findStrayPids: async () => [],
   });
 
   assert.deepEqual(calls, [
@@ -130,6 +134,10 @@ test("runUpgrade installs the explicitly requested tag without calling git ls-re
     isReexecChild: true,
     mkdirRecursive: noopMkdir,
     mkdtemp: noopMkdtemp,
+    // Stubbed: the inactive branch now installs+starts the service,
+    // which would really write a unit file into $HOME from a unit test.
+    refreshService: async () => {},
+    findStrayPids: async () => [],
   });
 
   assert.deepEqual(calls, [
@@ -161,7 +169,15 @@ test("runUpgrade resolves the latest tag when --tag is omitted", async () => {
     }),
   );
 
-  await runUpgrade([], { exec, appDir, isReexecChild: true, mkdirRecursive: noopMkdir, mkdtemp: noopMkdtemp });
+  await runUpgrade([], {
+    exec,
+    appDir,
+    isReexecChild: true,
+    mkdirRecursive: noopMkdir,
+    mkdtemp: noopMkdtemp,
+    refreshService: async () => {},
+    findStrayPids: async () => [],
+  });
 
   assert.deepEqual(calls, [
     "git ls-remote --sort=-v:refname --tags git@github.com:tanyudii/tmux-web",
@@ -198,6 +214,10 @@ test("runUpgrade fetches and checks out the tag when appDir is already a matchin
     isReexecChild: true,
     mkdirRecursive: noopMkdir,
     mkdtemp: noopMkdtemp,
+    // Stubbed: the inactive branch now installs+starts the service,
+    // which would really write a unit file into $HOME from a unit test.
+    refreshService: async () => {},
+    findStrayPids: async () => [],
   });
 
   assert.ok(!calls.some((c) => c.includes("clone --branch")), "must not re-clone an existing matching checkout");
@@ -235,6 +255,10 @@ test("runUpgrade treats an origin remote with a trailing .git as matching (no re
     isReexecChild: true,
     mkdirRecursive: noopMkdir,
     mkdtemp: noopMkdtemp,
+    // Stubbed: the inactive branch now installs+starts the service,
+    // which would really write a unit file into $HOME from a unit test.
+    refreshService: async () => {},
+    findStrayPids: async () => [],
   });
 
   assert.ok(
@@ -364,7 +388,7 @@ test("runUpgrade refreshes the systemd unit and restarts when the service was ac
   ]);
 });
 
-test("runUpgrade does not refresh the systemd unit when the service is not active", async () => {
+test("runUpgrade takes over and starts the service when the unit is installed but inactive", async () => {
   const appDir = "/existing/app/dir";
   const { exec } = recordingExec(
     withWebBuildOk({
@@ -390,9 +414,125 @@ test("runUpgrade does not refresh the systemd unit when the service is not activ
     isReexecChild: true,
     mkdirRecursive: noopMkdir,
     mkdtemp: noopMkdtemp,
+    findStrayPids: async () => [],
   });
 
-  assert.equal(refreshServiceCalled, false);
+  // installService both writes/refreshes the unit AND does `enable --now`,
+  // so this one call is what leaves the machine running the new code. The
+  // previous behaviour printed "nothing to restart" here and left the old
+  // server serving -- see ensureServiceRunning's doc comment.
+  assert.equal(refreshServiceCalled, true);
+});
+
+test("runUpgrade stops a server started outside systemd before starting the service", async () => {
+  const appDir = "/existing/app/dir";
+  const { exec } = recordingExec(
+    withWebBuildOk({
+      git: (args) => {
+        if (args.includes("rev-parse")) return { stdout: "true", stderr: "" };
+        if (args.includes("get-url")) return { stdout: "git@github.com:tanyudii/tmux-web\n", stderr: "" };
+        return { stdout: "", stderr: "" };
+      },
+      npm: () => ({ stdout: "", stderr: "" }),
+      systemctl: (args) =>
+        args.includes("is-active") ? { stdout: "inactive", stderr: "" } : { stdout: "", stderr: "" },
+    }),
+  );
+  const order: string[] = [];
+  const stopped: number[] = [];
+
+  await runUpgrade(["--tag", "v1.0.0"], {
+    exec,
+    appDir,
+    isReexecChild: true,
+    mkdirRecursive: noopMkdir,
+    mkdtemp: noopMkdtemp,
+    findStrayPids: async () => [4242],
+    stopPid: async (pid) => {
+      order.push("stop");
+      stopped.push(pid);
+    },
+    refreshService: async () => {
+      order.push("refresh");
+    },
+  });
+
+  assert.deepEqual(stopped, [4242]);
+  // Order matters: the stray still holds the configured port, so starting
+  // the service first would fail with EADDRINUSE.
+  assert.deepEqual(order, ["stop", "refresh"]);
+});
+
+test("runUpgrade leaves an already-active service to the plain restart path, without scanning for strays", async () => {
+  const appDir = "/existing/app/dir";
+  const { exec, calls } = recordingExec(
+    withWebBuildOk({
+      git: (args) => {
+        if (args.includes("rev-parse")) return { stdout: "true", stderr: "" };
+        if (args.includes("get-url")) return { stdout: "git@github.com:tanyudii/tmux-web\n", stderr: "" };
+        return { stdout: "", stderr: "" };
+      },
+      npm: () => ({ stdout: "", stderr: "" }),
+      systemctl: (args) =>
+        args.includes("is-active") ? { stdout: "active", stderr: "" } : { stdout: "", stderr: "" },
+    }),
+  );
+  let scanned = false;
+
+  await runUpgrade(["--tag", "v1.0.0"], {
+    exec,
+    appDir,
+    isReexecChild: true,
+    mkdirRecursive: noopMkdir,
+    mkdtemp: noopMkdtemp,
+    refreshService: async () => {},
+    findStrayPids: async () => {
+      scanned = true;
+      return [];
+    },
+  });
+
+  // Killing by cmdline while systemd owns the process would shoot the
+  // service's own MainPID; the active branch must never reach that code.
+  assert.equal(scanned, false);
+  assert.ok(calls.includes("systemctl --user restart tmux-web"));
+});
+
+test("runUpgrade --no-restart touches neither the stray process nor the service", async () => {
+  const appDir = "/existing/app/dir";
+  const { exec, calls } = recordingExec(
+    withWebBuildOk({
+      git: (args) => {
+        if (args.includes("rev-parse")) return { stdout: "true", stderr: "" };
+        if (args.includes("get-url")) return { stdout: "git@github.com:tanyudii/tmux-web\n", stderr: "" };
+        return { stdout: "", stderr: "" };
+      },
+      npm: () => ({ stdout: "", stderr: "" }),
+      systemctl: () => ({ stdout: "", stderr: "" }),
+    }),
+  );
+  let touched = false;
+
+  await runUpgrade(["--tag", "v1.0.0", "--no-restart"], {
+    exec,
+    appDir,
+    isReexecChild: true,
+    mkdirRecursive: noopMkdir,
+    mkdtemp: noopMkdtemp,
+    refreshService: async () => {
+      touched = true;
+    },
+    findStrayPids: async () => {
+      touched = true;
+      return [];
+    },
+    stopPid: async () => {
+      touched = true;
+    },
+  });
+
+  assert.equal(touched, false);
+  assert.ok(!calls.some((call) => call.startsWith("systemctl")));
 });
 
 test("runUpgrade still restarts the service when refreshing the systemd unit fails", async () => {
@@ -454,6 +594,10 @@ test("runUpgrade honors an explicit --app-dir over the default", async () => {
     isReexecChild: true,
     mkdirRecursive: noopMkdir,
     mkdtemp: noopMkdtemp,
+    // Stubbed: the inactive branch now installs+starts the service,
+    // which would really write a unit file into $HOME from a unit test.
+    refreshService: async () => {},
+    findStrayPids: async () => [],
   });
 
   assert.deepEqual(calls, [
@@ -680,6 +824,10 @@ test("runUpgrade skips the re-exec and finishes the upgrade directly when isReex
     isReexecChild: true,
     mkdirRecursive: noopMkdir,
     mkdtemp: noopMkdtemp,
+    // Stubbed: the inactive branch now installs+starts the service,
+    // which would really write a unit file into $HOME from a unit test.
+    refreshService: async () => {},
+    findStrayPids: async () => [],
   });
 
   assert.ok(calls.includes("gh release download v1.0.0 --repo tanyudii/tmux-web --pattern web-dist.tar.gz --dir " +
@@ -849,3 +997,74 @@ test(
     }
   },
 );
+
+
+// Real-process coverage for the two helpers where a mock would happily pass
+// while the real thing does nothing -- the same reasoning that gave
+// defaultSpawn its own real-process tests. Discovery reads /proc and killing
+// is a real signal; neither is provable with a stub.
+test("real process integration: defaultFindStrayPids finds a tmux-web server by its cmdline and ignores anything else", async () => {
+  const { defaultFindStrayPids } = await import("./upgrade.ts");
+  const appDir = await mkdtemp(join(tmpdir(), "tmux-web-stray-"));
+  const binDir = join(appDir, "bin");
+  await mkdir(binDir, { recursive: true });
+  // A stand-in for the real entrypoint: the only thing that matters is that
+  // the child's cmdline contains <appDir>/bin/tmuxweb.ts and `start`.
+  const entry = join(binDir, "tmuxweb.ts");
+  await writeFile(entry, "setInterval(() => {}, 1000);\n");
+
+  const server = spawnProcess(process.execPath, [entry, "start"], { stdio: "ignore" });
+  const decoy = spawnProcess(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
+  try {
+    await new Promise((resolve) => setTimeout(resolve, 300));
+
+    const found = await defaultFindStrayPids(appDir, process.pid);
+
+    assert.ok(found.includes(server.pid as number), `expected to find the server pid ${server.pid}, got ${found}`);
+    assert.ok(!found.includes(decoy.pid as number), "an unrelated node process must not be matched");
+
+    // Exercise the self-exclusion with a pid that WOULD otherwise match --
+    // passing process.pid proves nothing, since the test runner's own
+    // cmdline never contains the needle. Mutation-checked: dropping the
+    // `pid === selfPid` guard fails this assertion and nothing else.
+    const excludingItself = await defaultFindStrayPids(appDir, server.pid as number);
+    assert.ok(
+      !excludingItself.includes(server.pid as number),
+      "a matching process must be skipped when it IS the caller",
+    );
+  } finally {
+    server.kill("SIGKILL");
+    decoy.kill("SIGKILL");
+    await rm(appDir, { recursive: true, force: true });
+  }
+});
+
+test("real process integration: defaultStopPid actually terminates the process and waits for it to go", async () => {
+  const { defaultStopPid } = await import("./upgrade.ts");
+  const child = spawnProcess(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
+  await new Promise((resolve) => setTimeout(resolve, 200));
+
+  const isAlive = (): boolean => {
+    try {
+      process.kill(child.pid as number, 0);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  assert.equal(isAlive(), true, "precondition: the child should be running");
+
+  await defaultStopPid(child.pid as number);
+
+  // The point of the helper is that it RETURNS only once the process is gone
+  // -- returning early would let the service start race a still-bound port.
+  assert.equal(isAlive(), false);
+});
+
+test("real process integration: defaultStopPid is a no-op for a pid that is already gone", async () => {
+  const { defaultStopPid } = await import("./upgrade.ts");
+  const child = spawnProcess(process.execPath, ["-e", ""], { stdio: "ignore" });
+  await new Promise((resolve) => child.on("exit", resolve));
+
+  await assert.doesNotReject(() => defaultStopPid(child.pid as number));
+});
