@@ -1,7 +1,14 @@
 # ADR 0003: Navigation — official Navigation Compose Multiplatform
 
 ## Status
-Accepted. No spike needed — resolved directly from research.
+**Superseded** by [ADR 0004](0004-solidjs-pwa-migration.md) — `kmp/` was
+deleted in Phase 10 of the web rebuild once the SolidJS PWA reached full
+feature parity. The PWA uses `@solidjs/router` (see `web/src/App.tsx`) --
+the equivalent official routing library for its own framework, playing the
+same structural role `navigation-compose` played here, just on the new
+stack. Kept here as historical record of the Compose-specific evaluation.
+
+Originally: Accepted. No spike needed — resolved directly from research.
 
 ## Context
 The plan's original Phase 0 scope included a spike to confirm whether

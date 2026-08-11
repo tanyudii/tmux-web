@@ -375,6 +375,32 @@ function cacheControlFor(filePath: string): string {
   return CONTENT_HASHED_FILENAME.test(basename) ? "public, max-age=31536000, immutable" : "no-cache";
 }
 
+// Paths the SPA fallback below must never claim. A typo'd or removed API route
+// has to keep answering `{"error":"Not found"}` as JSON -- handing an API
+// client a 200 with an HTML page instead turns a clear 404 into a JSON parse
+// error at the call site, which is a far worse thing to debug. `/ws` is
+// upgraded in main.ts before this handler ever runs, but is listed so the rule
+// stays true if that ever changes.
+const SPA_RESERVED_PREFIXES = ["/api/", "/internal/", "/ws"];
+
+// Is this a browser navigating to a client-side route (as opposed to fetching
+// an asset)?
+//
+// The discriminator is the Accept header rather than "does the path look like a
+// file". A document navigation sends `Accept: text/html,...`; scripts,
+// stylesheets, images and fetch/XHR send `*/*` or a specific type, none of
+// which contain `text/html`. That distinction matters: the obvious heuristic --
+// treating any path without a file extension as a route -- would break on a
+// tmux session slug containing a dot, and would also answer a genuinely missing
+// `/assets/<hash>.js` with an HTML page, which the browser then fails to parse
+// as JavaScript and reports as a syntax error pointing at `<`, hiding the real
+// "file is missing" cause.
+function isSpaNavigation(req: IncomingMessage, path: string): boolean {
+  if (req.method !== "GET") return false;
+  if (SPA_RESERVED_PREFIXES.some((prefix) => path === prefix || path.startsWith(prefix))) return false;
+  return (req.headers.accept ?? "").includes("text/html");
+}
+
 async function serveStatic(publicDir: string, urlPath: string, res: ServerResponse): Promise<boolean> {
   const relativePath = urlPath === "/" ? "/index.html" : urlPath;
   // Strip any leading ../ segments so a crafted path can't escape publicDir.
@@ -1072,6 +1098,20 @@ export function createServer(deps: ServerDeps): Server {
 
       if (deps.publicDir && req.method === "GET") {
         if (await serveStatic(deps.publicDir, path, res)) return;
+
+        // SPA history fallback. The PWA's router (@solidjs/router) runs in
+        // history mode, so routes like /projects/<id>/sessions/<slug> exist only
+        // in the client -- nothing on disk matches them. Following a link works
+        // because the router intercepts it without a server round-trip, but
+        // reloading, deep-linking or restoring a tab asks the server for that
+        // path directly, and it answered `{"error":"Not found"}`: a bare 404 on
+        // every refresh inside a session.
+        //
+        // Serving index.html lets the client boot and route to the path itself.
+        // This is a genuine gap rather than a regression in behaviour -- the
+        // KMP client it replaced had no URL-addressable routes to break -- so
+        // there is no client-side fix short of switching to hash URLs.
+        if (isSpaNavigation(req, path) && (await serveStatic(deps.publicDir, "/index.html", res))) return;
       }
 
       return sendJson(res, 404, { error: "Not found" });

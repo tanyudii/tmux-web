@@ -1463,6 +1463,84 @@ test("returns 404 for a nonexistent static file under publicDir", async () => {
   }
 });
 
+// --- SPA history fallback ---
+//
+// The PWA routes client-side, so /projects/<id>/sessions/<slug> matches no file
+// on disk. Following a link works (the router intercepts it), but RELOADING on
+// that URL asks the server for it directly -- which used to answer
+// `{"error":"Not found"}`, i.e. a 404 on every refresh inside a session.
+//
+// Note these tests must set `Accept: text/html` explicitly: Node's fetch()
+// defaults to `*/*`, which is exactly what the fallback is designed NOT to
+// treat as a navigation. That default is also why the pre-existing static tests
+// above keep their 404s unchanged.
+const navigationHeaders = { Accept: "text/html,application/xhtml+xml" };
+
+test("serves index.html for a client-side route so a browser refresh does not 404", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tmux-web-public-"));
+  await writeFile(join(dir, "index.html"), "<html>app</html>");
+  try {
+    await withServer(makeDeps({ publicDir: dir }), async (baseUrl) => {
+      const res = await fetch(`${baseUrl}/projects/demo-1a2b3c/sessions/feature-x`, {
+        headers: navigationHeaders,
+      });
+      assert.equal(res.status, 200);
+      assert.equal(await res.text(), "<html>app</html>");
+    });
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+// Handing an API client HTML instead of a 404 turns a clear error into a JSON
+// parse failure at the call site.
+test("does not serve index.html for unknown /api or /internal paths", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tmux-web-public-"));
+  await writeFile(join(dir, "index.html"), "<html>app</html>");
+  try {
+    await withServer(makeDeps({ publicDir: dir }), async (baseUrl) => {
+      for (const path of ["/api/nope", "/internal/nope", "/ws"]) {
+        const res = await fetch(`${baseUrl}${path}`, { headers: navigationHeaders });
+        assert.equal(res.status, 404, `${path} should stay a 404`);
+        assert.deepEqual(await res.json(), { error: "Not found" }, `${path} should stay JSON`);
+      }
+    });
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+// A missing asset must stay a 404. Answering HTML makes the browser report a
+// syntax error pointing at `<`, hiding the real "file is missing" cause.
+test("does not serve index.html for a missing asset request", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tmux-web-public-"));
+  await writeFile(join(dir, "index.html"), "<html>app</html>");
+  try {
+    await withServer(makeDeps({ publicDir: dir }), async (baseUrl) => {
+      const res = await fetch(`${baseUrl}/assets/deadbeefdeadbeef.js`, { headers: { Accept: "*/*" } });
+      assert.equal(res.status, 404);
+    });
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("does not serve index.html for a non-GET request to a client-side route", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "tmux-web-public-"));
+  await writeFile(join(dir, "index.html"), "<html>app</html>");
+  try {
+    await withServer(makeDeps({ publicDir: dir }), async (baseUrl) => {
+      const res = await fetch(`${baseUrl}/projects/demo-1a2b3c/sessions/feature-x`, {
+        method: "POST",
+        headers: navigationHeaders,
+      });
+      assert.equal(res.status, 404);
+    });
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 // A KMP Kotlin/Wasm build's `WebAssembly.instantiateStreaming()` requires the
 // server to answer with `Content-Type: application/wasm` -- browsers reject
 // (or silently fall back to the slower non-streaming path for) a `.wasm`

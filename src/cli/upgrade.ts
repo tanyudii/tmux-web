@@ -61,7 +61,7 @@ const SERVICE_NAME = "tmux-web";
 // the download to one release, so the asset itself doesn't need the version
 // baked into its filename. Must match what release.yml's "Package the web
 // build for the release" step produces.
-const WEB_BUILD_ASSET_NAME = "kmp-web.tar.gz";
+const WEB_BUILD_ASSET_NAME = "web-dist.tar.gz";
 
 function messageOf(error: unknown): string {
   const stderr = (error as { stderr?: string })?.stderr;
@@ -249,7 +249,7 @@ export async function npmInstallAndLink(exec: ExecFn, appDir: string): Promise<v
   }
 }
 
-// Downloads this tag's prebuilt KMP web (wasmJs) bundle from a GitHub
+// Downloads this tag's prebuilt SolidJS PWA web client bundle from a GitHub
 // Release asset (built + attached by release.yml) and extracts it into the
 // exact path src/main.ts's DEFAULT_WEB_BUILD_DIR reads from. That path is
 // duplicated here rather than imported from main.ts on purpose -- main.ts
@@ -273,7 +273,7 @@ export async function downloadWebBuild(
   mkdtempFn: (prefix: string) => Promise<string> = (prefix) => mkdtemp(join(tmpdir(), prefix)),
   rmRecursiveFn: (path: string) => Promise<unknown> = (path) => rm(path, { recursive: true, force: true }),
 ): Promise<void> {
-  const downloadDir = await mkdtempFn("tmux-web-kmp-web-");
+  const downloadDir = await mkdtempFn("tmux-web-web-dist-");
   try {
     try {
       await exec("gh", [
@@ -296,7 +296,7 @@ export async function downloadWebBuild(
       );
     }
 
-    const targetDir = join(appDir, "kmp", "composeApp", "build", "dist", "wasmJs", "productionExecutable");
+    const targetDir = join(appDir, "web", "dist");
     await mkdirRecursive(targetDir);
 
     try {

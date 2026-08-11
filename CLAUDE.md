@@ -2,33 +2,53 @@
 
 Guidance for Claude Code (or any future contributor) working in this repo.
 
-## Mandatory: verify KMP web UI changes live before reporting them done
+## Mandatory: verify Web UI changes live before reporting them done
 
-Explicit standing instruction from the repo owner (2026-07-15), after a
-`RenameWindowDialog` change shipped without live verification and left the
-app completely stuck (couldn't type or click anything, required a page
-refresh to recover) the first time it was actually used.
+Explicit standing instruction from the repo owner (2026-07-15), originally
+issued after a Compose Multiplatform (`kmp/`) `RenameWindowDialog` change
+shipped without live verification and left that app completely stuck
+(couldn't type or click anything, required a page refresh to recover) the
+first time it was actually used. The rule carried over unchanged when the
+web client was rebuilt as this SolidJS PWA (`web/`) and `kmp/` was deleted
+in Phase 10 (see `docs/adr/0004-solidjs-pwa-migration.md`) -- "the
+toolchain says green" was never sufficient evidence for a real-DOM UI
+change, regardless of which framework sits on top of the DOM.
 
-**Compile + detekt + unit tests passing is not sufficient evidence that a
-Compose Multiplatform Web UI change works.** This codebase has already hit
-multiple bugs that only exist at runtime in a real browser and are
-invisible to the Kotlin/Gradle toolchain: the `instanceof XtermTerminal`
-JS-interop naming mismatch, the `fitAddon.fit()` 0x0 layout race, the
-silently-dropped resize-before-WebSocket-open bug, and native interop DOM
-views (xterm.js) always painting over -- or, per this incident, potentially
-still capturing focus/clicks despite -- Compose `Popup`/`Dialog` content.
-None of these were catchable by `./gradlew build`.
+**Typecheck (`tsc --noEmit`) + `vitest run` passing is not sufficient
+evidence that a web UI change works.** jsdom (this project's unit test
+environment) cannot run real `@xterm/xterm` at all -- `new
+Terminal().open(div)` throws `this._parentWindow.matchMedia is not a
+function` under jsdom (see `web/src/terminal/TerminalView.tsx`'s header
+comment) -- so every terminal-hosting test injects a fake `TerminalLike`
+instead of the real library. That means layout/focus/paint bugs in the
+*real* xterm.js are structurally invisible to the whole test suite, no
+matter how green it is. This class of bug is not hypothetical: the KMP
+predecessor hit the `instanceof XtermTerminal` JS-interop naming mismatch,
+the `fitAddon.fit()` 0x0 layout race (container measured before the
+browser's own layout pass settled), the silently-dropped
+resize-before-WebSocket-open bug, and native DOM views (xterm.js) either
+painting over or capturing focus/clicks meant for other UI on top of them
+-- none of them catchable by a build/typecheck/test pass. The 0x0 fit race
+and the resize-before-open bug are now fixed *in this codebase*
+(`TerminalView.tsx`'s deferred `requestAnimationFrame` + `ResizeObserver`
+fit; `api/terminalSocket.ts`'s queue+coalesce), but the underlying risk
+class -- real DOM/layout timing that a test double can't reproduce -- is
+evergreen for any new UI-affecting change, not just terminal code.
 
 Before telling the user a UI-affecting change (new dialog, new interactive
-control, layout change, anything touching `PlatformTerminalView`'s
-`isVisible` or focus) is done:
+control, layout change, anything touching `TerminalView.tsx`'s
+`isVisible` prop or focus) is done:
 
-1. Rebuild the wasmJs bundle (`./gradlew :composeApp:wasmJsBrowserDistribution`).
-2. Drive it with a real headless Chromium against the running dev instance
-   (see the `run` skill / prior session transcripts for the Playwright +
-   cached-Chromium-binary setup used so far -- `playwright-core` pointed at
-   `~/.cache/ms-playwright/chromium-*/chrome-linux64/chrome`, since this
-   sandbox has no `wasmJsTest`-compatible Chrome for Karma).
+1. Build the PWA (`npm run build` in `web/`, or run the Vite dev server for
+   faster iteration).
+2. Drive it with a real headless Chromium against a running server instance
+   (see prior session transcripts for the pattern used throughout this
+   repo's history -- `playwright-core` pointed at
+   `~/.cache/ms-playwright/chromium-*/chrome-linux64/chrome`, launched via
+   `launchPersistentContext` with a real disk-backed profile rather than
+   `browser.newContext()` when the feature touches the Push API, which
+   Chromium hard-blocks in incognito-style contexts -- see
+   `docs/adr/0004-solidjs-pwa-migration.md` for that finding).
 3. Actually interact with the new thing the way a user would -- click it,
    type into it, screenshot it -- not just load the page and confirm no
    console errors. A dialog that renders but can't be typed into or
@@ -97,12 +117,11 @@ Code and runtime data live in two deliberately separate places:
   upgrade).
 - `npmInstallAndLink()` -- `npm ci --omit=dev` then `npm link`, both run
   with `cwd` set to the app dir.
-- `downloadWebBuild()` -- downloads the target tag's prebuilt KMP web
-  (wasmJs) bundle from a GitHub Release asset via the `gh` CLI (auth is
+- `downloadWebBuild()` -- downloads the target tag's prebuilt web (PWA)
+  bundle from a GitHub Release asset via the `gh` CLI (auth is
   `gh`'s problem, not this codebase's -- see README's "Requirements on the
-  host machine") and extracts it to
-  `<appDir>/kmp/composeApp/build/dist/wasmJs/productionExecutable`, the
-  exact path `src/main.ts`'s `DEFAULT_WEB_BUILD_DIR` reads from. Failure
+  host machine") and extracts it to `<appDir>/web/dist`, the exact path
+  `src/main.ts`'s `DEFAULT_WEB_BUILD_DIR` reads from. Failure
   here is non-fatal (same pattern as `refreshService` below) -- it warns
   and leaves the server running API-only via `web-build.ts`'s existing
   graceful-degrade path, it never aborts the upgrade.
@@ -130,7 +149,9 @@ the systemd unit, it used the **already-loaded, in-memory** version of
 `tmuxweb upgrade` invocation started, NOT the newly-installed version that
 was just written to disk. Node doesn't hot-reload a module that's already
 imported, even though the file on disk changed underneath it. The exact
-same gotcha applied to `downloadWebBuild()` (added for the KMP web bundle):
+same gotcha applied to `downloadWebBuild()` (added back when it downloaded
+the KMP wasmJs web bundle; it downloads this SolidJS PWA's bundle today,
+same function, same mechanism, just a different tag's release asset):
 the first `tmuxweb upgrade` run after that feature shipped cloned the new
 `upgrade.ts` to disk but kept executing the OLD in-memory code, so
 `downloadWebBuild()` never actually got called that run.
@@ -247,38 +268,47 @@ match the existing v1.x convention.
 To cut a release by hand instead (e.g. the workflow is broken): bump the three
 version fields, commit `chore: release vX.Y.Z`, `git tag vX.Y.Z`, push both.
 
-The Release workflow also builds the KMP web (wasmJs) production bundle
-(`./gradlew :composeApp:wasmJsBrowserDistribution` in `kmp/`, same JDK
-21/Gradle setup as `kmp-ci.yml`), tars it as `kmp-web.tar.gz`, and attaches
-it to the GitHub Release for the new tag via `gh release create` -- this is
-what `tmuxweb upgrade`'s `downloadWebBuild()` fetches on the server (see
-"The actual install/upgrade architecture" above). The build runs *before*
-the version bump/commit/tag/push step, so a broken `kmp/` fails the
-workflow cleanly with nothing pushed to `main` and no tag created, rather
-than leaving a dangling released-looking tag with no working web UI asset.
-This build is intentionally **not** re-run through `kmp-ci.yml`'s
-`detekt`/`wasmJsTest`/`koverVerify` gate -- it trusts `main`'s already-green
-`kmp-ci.yml` run (which runs on every push touching `kmp/**`) plus the
-implicit smoke test that a broken `kmp/` fails `wasmJsBrowserDistribution`
-outright rather than shipping silently.
+The Release workflow also builds the SolidJS PWA web client's production
+bundle (`npm ci && npm run build` in `web/`), tars it as `web-dist.tar.gz`,
+and attaches it to the GitHub Release for the new tag via `gh release
+create` -- this is what `tmuxweb upgrade`'s `downloadWebBuild()` fetches on
+the server (see "The actual install/upgrade architecture" above). The build
+runs *before* the version bump/commit/tag/push step, so a broken `web/`
+fails the workflow cleanly with nothing pushed to `main` and no tag
+created, rather than leaving a dangling released-looking tag with no
+working web UI asset. This build is intentionally **not** re-run through
+`web-ci.yml`'s typecheck/test gate -- it trusts `main`'s already-green
+`web-ci.yml` run (which runs on every push touching `web/**`) plus the
+implicit smoke test that a broken `web/` fails `vite build` outright
+rather than shipping silently.
 
-## Clipboard paste into Web text fields is impossible on insecure origins -- not a Compose bug, not fixable in-app
+(The KMP client that previously lived under `kmp/` -- both its wasmJs web
+target and its native iOS SwiftUI app -- was deleted entirely in Phase 10
+of the web rebuild, once this SolidJS PWA reached full feature parity with
+it; see `docs/adr/0004-solidjs-pwa-migration.md` for why and
+`.claude/plans/rebuild-web-ios-kmp.plan.md` for the phase-by-phase history.
+`kmp-ci.yml` was removed in the same change. Only this SolidJS PWA bundle
+is built and attached to releases now.)
+
+## Clipboard paste into Web text fields is impossible on insecure origins -- not an app bug, not fixable in-app
 
 Investigated live (headless Chromium, real Ctrl+V/right-click/`execCommand`
 round trips, not guesswork) after a report that the Connect screen's Access
 token field "can't paste". The obvious suspects were both wrong: it is not
-a secure-context issue *specific to Ctrl+V being unwired* (an earlier draft
-of this investigation concluded that, then had to retract it -- see below),
-and it is not a Compose Multiplatform Web bug at all.
+a secure-context issue *specific to Ctrl+V being unwired*, and it is not a
+framework bug (originally ruled out for Compose Multiplatform Web; the
+underlying platform restriction below is unrelated to any UI framework and
+applies identically to this SolidJS PWA, which is why this finding carried
+over unchanged when `kmp/` was deleted in Phase 10).
 
 **What actually happens, confirmed live:**
 - On a secure origin (`https://`, or `http://localhost`/`127.0.0.1`)
-  Ctrl+V paste, and right-click "Paste" from Compose's own context menu,
-  both work correctly -- including replacing an active selection. An
+  Ctrl+V paste, and right-click "Paste" from the browser's own context
+  menu, both work correctly -- including replacing an active selection. An
   earlier pass of this same investigation used Playwright to fire
   `Ctrl+A` immediately followed by `Ctrl+V` with zero delay between the
   two key events and saw the paste silently no-op, and wrongly concluded
-  Ctrl+V wasn't wired to Compose's paste action at all. That's a
+  Ctrl+V wasn't wired to the paste action at all. That's a
   synthetic-automation artifact, not a real bug: no human keyboard user
   produces true 0ms between two chorded shortcuts. Re-running the exact
   same sequence with a realistic ~80ms gap between the two key presses
@@ -288,31 +318,30 @@ and it is not a Compose Multiplatform Web bug at all.
 - On an insecure origin (plain HTTP on anything other than
   localhost/127.0.0.1 -- e.g. this project's own recommended
   WireGuard/Tailscale-tunnel deployment, see the README and
-  `XtermJs.kt`'s `copyTextToClipboard` comment) paste is **completely
-  unavailable, full stop**: `navigator.clipboard` does not exist on
-  `window` at all, Compose's own context menu omits the "Paste" item
-  entirely (only "Select all" remains -- Compose itself detects this and
-  adapts), and the legacy `document.execCommand("paste")` fallback
-  returns `false` (blocked by the browser; unlike `execCommand("copy")`,
-  which browsers still allow and which is why the terminal's own
-  Cmd+C-to-clipboard feature works fine on the same insecure origins).
-  There is no JS-level workaround for reading the clipboard on paste here
-  -- this is a hard browser platform restriction, identical in spirit to
-  why `navigator.clipboard.writeText` needs a secure context for the
-  terminal's copy feature, just on the read side instead of write.
+  `web/src/terminal/clipboardDom.ts`'s `copyTextToClipboard` comment) paste
+  is **completely unavailable, full stop**: `navigator.clipboard` does not
+  exist on `window` at all, the browser's own context menu omits the
+  "Paste" item entirely, and the legacy `document.execCommand("paste")`
+  fallback returns `false` (blocked by the browser; unlike
+  `execCommand("copy")`, which browsers still allow and which is why the
+  terminal's own Cmd+C-to-clipboard feature works fine on the same
+  insecure origins). There is no JS-level workaround for reading the
+  clipboard on paste here -- this is a hard browser platform restriction,
+  identical in spirit to why `navigator.clipboard.writeText` needs a
+  secure context for the terminal's copy feature, just on the read side
+  instead of write.
 
 **What shipped instead of a paste "fix" (because there is no code fix for
-the real-world case):** `domain/SecureContext.kt`'s `isSecureContext()`
-expect/actual (wasmJs actual reads `window.isSecureContext`; jvm/ios
-actuals return `true`, since neither has this restriction) feeds
-`ConnectionSettingsUiState.pasteRestricted`, which `SettingsScreen.kt`
-surfaces as a helper hint under the Access token field on insecure
-origins: "Clipboard paste isn't available on this connection (needs
-HTTPS or localhost) -- type the token instead." Separately (and
-independent of the paste investigation), `domain/DefaultServerUrl.kt`'s
-`defaultServerUrl()` expect/actual prefills the Server URL field from
-`window.location.origin` on wasmJs (null/unchanged on jvm/ios) -- since
-`src/main.ts` always serves the API and this Compose bundle from the same
-origin, this removes the *need* to type or paste the Server URL at all,
-leaving only the Access token as something that must be typed by hand on
-an insecure-origin deployment.
+the real-world case):** `web/src/stores/connectionSettingsStore.ts`'s
+`isSecureContext()` dep (defaults to reading `window.isSecureContext`,
+injectable for tests) feeds that store's `pasteRestricted()`, which
+`web/src/screens/ConnectScreen.tsx`'s `pasteRestrictedHelper()` surfaces as
+a helper hint under the Access token field on insecure origins: "Clipboard
+paste isn't available on this connection (needs HTTPS or localhost) --
+type the token instead." Separately (and independent of the paste
+investigation), that same store's `defaultServerUrl()` dep prefills the
+Server URL field from `window.location.origin` -- since `src/main.ts`
+always serves the API and this PWA's bundle from the same origin, this
+removes the *need* to type or paste the Server URL at all, leaving only
+the Access token as something that must be typed by hand on an
+insecure-origin deployment.

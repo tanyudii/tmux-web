@@ -1,0 +1,222 @@
+/*
+ * Design tokens -- ported 1:1 from the KMP theme package
+ * (kmp/.../ui/theme/TmuxColor.kt, TmuxSpacing.kt, TmuxType.kt, TmuxMotion.kt),
+ * which itself ports a `tokens/*.css` design handoff that never landed in
+ * this repo. This file is now the source of truth for the PWA; the KMP
+ * theme package is deleted in Phase 10 once this file's fidelity has been
+ * verified live (see CLAUDE.md's mandatory-live-verification rule).
+ *
+ * Dark, terminal-first -- one deliberate theme, not a light/dark pair (same
+ * call the Kotlin theme made), so this is a flat :root, not a media-query
+ * pair.
+ *
+ * Two token groups were deliberately dropped rather than ported: iOS/Android
+ * native chrome dimensions (`ios-nav-bar-height`, `android-app-bar-height`,
+ * `android-fab-size`) have no meaning in a web layout.
+ */
+:root {
+  color-scheme: dark;
+
+  /* Base palette -- cool near-black surface ramp. */
+  --gray-950: #0b0e14;
+  --gray-900: #10141c;
+  --gray-850: #151a23;
+  --gray-800: #1b212c;
+  --gray-750: #222936;
+  --gray-700: #2b3341;
+  --gray-600: #3a4353;
+  --gray-500: #4d5768;
+  --gray-400: #6b7688;
+  --gray-300: #9aa4b6;
+  --gray-200: #c4cbd8;
+  --gray-100: #e6e9ef;
+  --gray-050: #f4f6fa;
+
+  /* Brand accent -- terminal green. */
+  --green-400: #55e3a3;
+  --green-500: #3ecf8e;
+  --green-600: #2fb377;
+  --green-700: #248a5c;
+  --green-glow: rgb(62 207 142 / 14%);
+
+  /* Semantic hues. */
+  --red-500: #f4685f;
+  --red-600: #d8483f;
+  --red-glow: rgb(244 104 95 / 13%);
+  --amber-500: #e2b04a;
+  --amber-600: #c8963a;
+  --amber-glow: rgb(226 176 74 / 13%);
+  --blue-500: #5aa9f0;
+  --blue-600: #3f8fdb;
+  --blue-glow: rgb(90 169 240 / 13%);
+  --violet-500: #a78bfa;
+  --violet-glow: rgb(167 139 250 / 13%);
+
+  /* Danger-variant one-off tints -- no dedicated token upstream either. */
+  --danger-hover-bg: #f77d75;
+  --danger-content-on-danger: #2b0a08;
+
+  /* Surfaces. */
+  --bg-app: var(--gray-950);
+  --bg-surface: var(--gray-900);
+  --bg-raised: var(--gray-850);
+  --bg-card: var(--gray-800);
+  --bg-overlay: var(--gray-750);
+  --bg-hover: rgb(255 255 255 / 4%);
+  --bg-active: rgb(255 255 255 / 7%);
+  --bg-terminal: #080a0f;
+  --scrim: rgb(6 8 12 / 66%);
+
+  /* Borders. */
+  --border-subtle: var(--gray-800);
+  --border-default: var(--gray-700);
+  --border-strong: var(--gray-600);
+  --border-focus: var(--green-500);
+
+  /* Text. */
+  --text-primary: var(--gray-100);
+  --text-secondary: var(--gray-300);
+  --text-tertiary: var(--gray-400);
+  --text-disabled: var(--gray-500);
+  --text-on-accent: #06210f;
+  --text-link: var(--blue-500);
+
+  /* Interactive accent. */
+  --accent: var(--green-500);
+  --accent-hover: var(--green-400);
+  --accent-press: var(--green-600);
+  --accent-fill: var(--green-glow);
+
+  /* Status -- connection. */
+  --status-connected: var(--green-500);
+  --status-disconnected: var(--red-500);
+  --status-reconnecting: var(--amber-500);
+  --status-attached: var(--violet-500);
+  --status-idle: var(--gray-400);
+
+  /* Status -- git diff. */
+  --git-staged: var(--green-500);
+  --git-unstaged: var(--amber-500);
+  --git-untracked: var(--blue-500);
+  --git-added: var(--green-500);
+  --git-added-bg: rgb(62 207 142 / 10%);
+  --git-removed: var(--red-500);
+  --git-removed-bg: rgb(244 104 95 / 10%);
+
+  /* Spacing -- 4px-ish base grid. */
+  --space-0: 0;
+  --space-1: 2px;
+  --space-2: 4px;
+  --space-3: 8px;
+  --space-4: 12px;
+  --space-5: 16px;
+  --space-6: 20px;
+  --space-7: 24px;
+  --space-8: 32px;
+  --space-9: 40px;
+  --space-10: 48px;
+  --space-12: 64px;
+
+  --gap-inline: var(--space-3);
+  --pad-control: var(--space-4);
+  --pad-card: var(--space-5);
+  --pad-screen: var(--space-5);
+  --row-height: 56px;
+  --touch-target: 44px;
+
+  /* iOS safe-area insets, named once so call sites read as intent rather
+   * than as a raw env() incantation, and so the `0px` fallback lives in
+   * exactly one place.
+   *
+   * The fallback matters more than it looks: `env(safe-area-inset-*)` with
+   * no fallback resolves to an EMPTY token on browsers that don't support
+   * it, which makes any `calc()` containing it invalid at computed-value
+   * time -- so a padding written as `calc(6px + env(safe-area-inset-bottom))`
+   * silently drops to zero (or to the property's initial value) on those
+   * browsers instead of degrading to the 6px. Always going through these
+   * variables keeps every call site safe from that.
+   *
+   * Non-zero only where the OS actually reserves space: on iPhone with
+   * `viewport-fit=cover` that is ~59px top / ~34px bottom in portrait
+   * (Dynamic Island + home indicator), and one non-zero side in landscape.
+   * Everywhere else -- desktop browsers, Android, iOS in a plain
+   * non-cover viewport -- all four resolve to 0px and nothing shifts. */
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-right: env(safe-area-inset-right, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-left: env(safe-area-inset-left, 0px);
+
+  /* Web-shell layout (Phase 7). */
+  --web-sidebar-width: 260px;
+  --web-sidebar-collapsed-width: 56px;
+  --web-topbar-height: 48px;
+  --quick-keys-height: 44px;
+
+  /* Corner radius. */
+  --radius-xs: 3px;
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+  --radius-full: 999px;
+
+  /*
+   * Fonts -- the design handoff's intended families are IBM Plex Sans (UI)
+   * and IBM Plex Mono (terminal/paths/counts), Google-Fonts-CDN-loaded. The
+   * KMP app never bundled them (system-font fallback only); this PWA can't
+   * rely on a CDN either -- it must keep working offline once installed
+   * (Phase 8's service worker), and a CDN `@import`/`<link>` would silently
+   * fail offline. Every UI string reads through --font-sans/--font-mono, so
+   * self-hosting the two IBM Plex weights later (woff2 under public/fonts/)
+   * is a one-line change here, not a call-site hunt.
+   */
+  --font-sans:
+    -apple-system, BlinkMacSystemFont, "Segoe UI", "IBM Plex Sans", Roboto,
+    sans-serif;
+  --font-mono:
+    ui-monospace, SFMono-Regular, "IBM Plex Mono", Menlo, Consolas, monospace;
+
+  /* UI scale, 11px -> 38px. */
+  --text-2xs: 11px;
+  --text-xs: 12px;
+  --text-sm: 13px;
+  --text-base: 15px;
+  --text-md: 17px;
+  --text-lg: 20px;
+  --text-xl: 24px;
+  --text-2xl: 30px;
+  --text-3xl: 38px;
+
+  /* Terminal/mono scale, 11px -> 16px. */
+  --mono-xs: 11px;
+  --mono-sm: 12px;
+  --mono-base: 13px;
+  --mono-md: 14px;
+  --mono-lg: 16px;
+
+  --weight-regular: 400;
+  --weight-medium: 500;
+  --weight-semibold: 600;
+  --weight-bold: 700;
+
+  /* Letter spacing, in em to match the source tokens directly. */
+  --tracking-tight: -0.01em;
+  --tracking-normal: 0em;
+  --tracking-wide: 0.02em;
+  --tracking-caps: 0.06em;
+
+  /* Line-height ratios -- multiply by font size at the call site. */
+  --leading-tight: 1.2;
+  --leading-snug: 1.35;
+  --leading-normal: 1.5;
+  --leading-terminal: 1.45;
+
+  /* Motion. */
+  --duration-fast: 120ms;
+  --duration-base: 200ms;
+  --duration-slow: 320ms;
+  --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+  --ease-emphasized: cubic-bezier(0.3, 0, 0, 1);
+  --ease-ios: cubic-bezier(0.32, 0.72, 0, 1);
+  --ease-out: cubic-bezier(0, 0, 0.2, 1);
+}

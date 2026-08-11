@@ -7,6 +7,7 @@ import {
   attachPtyToSocket,
   type PtyLike,
   type SocketLike,
+  SESSION_ENDED_CLOSE_CODE,
 } from "./pty-bridge.ts";
 import { createSession, killSession } from "./tmux.ts";
 
@@ -75,6 +76,11 @@ class FakePty implements PtyLike {
   written: string[] = [];
   resizes: Array<{ cols: number; rows: number }> = [];
   killed = false;
+  // Simulates the real node-pty behavior this test suite exists to guard
+  // against: once the underlying fd is dead (session killed, process gone),
+  // resize()/write() throw synchronously (real error: `Error: ioctl(2)
+  // failed, EBADF`) instead of silently no-opping.
+  throwOnUse = false;
 
   onData(cb: (data: string) => void): void {
     this.dataCallback = cb;
@@ -83,9 +89,11 @@ class FakePty implements PtyLike {
     this.exitCallback = cb;
   }
   write(data: string): void {
+    if (this.throwOnUse) throw new Error("ioctl(2) failed, EBADF");
     this.written.push(data);
   }
   resize(cols: number, rows: number): void {
+    if (this.throwOnUse) throw new Error("ioctl(2) failed, EBADF");
     this.resizes.push({ cols, rows });
   }
   kill(): void {
@@ -104,14 +112,17 @@ class FakeSocket implements SocketLike {
   OPEN = 1;
   sent: string[] = [];
   closed = false;
+  /** undefined = closed with no code, i.e. an ordinary close the client retries. */
+  closedWithCode: number | undefined = undefined;
   private messageListeners: Array<(data: unknown) => void> = [];
   private closeListeners: Array<() => void> = [];
 
   send(data: string): void {
     this.sent.push(data);
   }
-  close(): void {
+  close(code?: number): void {
     this.closed = true;
+    this.closedWithCode = code;
     this.readyState = 3;
   }
   on(event: "message" | "close", listener: (data?: unknown) => void): void {
@@ -178,6 +189,42 @@ test("attachPtyToSocket resizes the pty on resize messages", () => {
   socket.emitMessage(JSON.stringify({ type: "resize", cols: 120, rows: 50 }));
 
   assert.deepEqual(fakePty.resizes, [{ cols: 120, rows: 50 }]);
+});
+
+// Root-caused live: closing a session's last tmux window kills the whole
+// session, which tears down the attached pty's underlying fd. A resize/
+// input WS message already in flight at that moment (e.g. a ResizeObserver
+// firing off a layout shift) then throws synchronously calling
+// term.resize()/term.write() on the dead fd -- a real crash observed as
+// `Error: ioctl(2) failed, EBADF`, uncaught inside this module's own `ws.on
+// ("message", ...)` handler, which took down the entire server process (not
+// just the one session) since Node has no default recovery from an
+// uncaught synchronous throw inside an event handler.
+test("attachPtyToSocket does not crash when a resize message arrives after the pty has already exited (no onExit race)", () => {
+  const fakePty = new FakePty();
+  const socket = new FakeSocket();
+
+  attachPtyToSocket(socket, "main", 80, 24, () => fakePty);
+  fakePty.emitExit(); // pty exits (session killed) -- onExit fires, flips the alive flag
+  fakePty.throwOnUse = true; // and the real pty would now throw on any further use
+
+  assert.doesNotThrow(() => socket.emitMessage(JSON.stringify({ type: "resize", cols: 120, rows: 50 })));
+  assert.deepEqual(fakePty.resizes, [], "the dead pty is never actually called once known-exited");
+});
+
+test("attachPtyToSocket does not crash when resize/write throw synchronously even before onExit has fired (the exact race that crashed the real server)", () => {
+  const fakePty = new FakePty();
+  const socket = new FakeSocket();
+  // No emitExit() here -- this reproduces the narrower, actually-observed
+  // race: the fd is already dead at the OS level, but this module hasn't
+  // been told yet (onExit is itself async/event-driven), so the flag-based
+  // short-circuit above doesn't help and the try/catch must.
+  fakePty.throwOnUse = true;
+
+  attachPtyToSocket(socket, "main", 80, 24, () => fakePty);
+
+  assert.doesNotThrow(() => socket.emitMessage(JSON.stringify({ type: "resize", cols: 120, rows: 50 })));
+  assert.doesNotThrow(() => socket.emitMessage(JSON.stringify({ type: "input", data: "ls\n" })));
 });
 
 test("attachPtyToSocket dispatches scroll messages to scrollPaneFn with the session name", async () => {
@@ -276,12 +323,17 @@ test("attachPtyToSocket kills the pty when the socket closes (detach, not sessio
   assert.equal(fakePty.killed, true);
 });
 
-test("attachPtyToSocket closes the socket when the pty exits", () => {
+// Now async: the exit handler asks tmux whether the session survived before
+// deciding which close code to use, so the assertion has to let that settle.
+// The stub also keeps this test off the real `tmux list-sessions` the default
+// would otherwise shell out to.
+test("attachPtyToSocket closes the socket when the pty exits", async () => {
   const fakePty = new FakePty();
   const socket = new FakeSocket();
 
-  attachPtyToSocket(socket, "main", 80, 24, () => fakePty);
+  attachPtyToSocket(socket, "main", 80, 24, () => fakePty, undefined, undefined, async () => true);
   fakePty.emitExit();
+  await new Promise((resolve) => setImmediate(resolve));
 
   assert.equal(socket.closed, true);
 });
@@ -457,3 +509,46 @@ test(
     }
   },
 );
+
+// Closing a session's last tmux window makes tmux destroy the session, so the
+// client must be told to stop reconnecting. A DETACH also ends the pty but
+// leaves the session alive -- reconnecting is right there -- so the two cannot
+// be distinguished by the pty exiting alone.
+test("closes with SESSION_ENDED_CLOSE_CODE when the tmux session is gone after the pty exits", async () => {
+  const ws = new FakeSocket();
+  const term = new FakePty();
+  attachPtyToSocket(ws as never, "proj__gone", 80, 24, () => term, undefined, undefined, async () => false);
+
+  term.emitExit();
+  await new Promise((r) => setImmediate(r));
+
+  assert.equal(ws.closedWithCode, SESSION_ENDED_CLOSE_CODE);
+});
+
+test("closes plainly (so the client still reconnects) when the session survives the pty exiting", async () => {
+  const ws = new FakeSocket();
+  const term = new FakePty();
+  attachPtyToSocket(ws as never, "proj__detached", 80, 24, () => term, undefined, undefined, async () => true);
+
+  term.emitExit();
+  await new Promise((r) => setImmediate(r));
+
+  assert.equal(ws.closedWithCode, undefined);
+  assert.equal(ws.closed, true);
+});
+
+// A lookup failure must not leave the socket hanging open; falling back to a
+// plain close preserves the previous behaviour.
+test("falls back to a plain close when the session lookup fails", async () => {
+  const ws = new FakeSocket();
+  const term = new FakePty();
+  attachPtyToSocket(ws as never, "proj__x", 80, 24, () => term, undefined, undefined, async () => {
+    throw new Error("tmux unavailable");
+  });
+
+  term.emitExit();
+  await new Promise((r) => setImmediate(r));
+
+  assert.equal(ws.closed, true);
+  assert.equal(ws.closedWithCode, undefined);
+});

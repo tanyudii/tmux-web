@@ -103,8 +103,8 @@ test("runUpgrade clones fresh when appDir is not an existing git repo", async ()
     `git clone --branch v1.0.0 --depth 1 git@github.com:tanyudii/tmux-web ${appDir}`,
     `npm ci --omit=dev (cwd=${appDir})`,
     `npm link (cwd=${appDir})`,
-    `gh release download v1.0.0 --repo tanyudii/tmux-web --pattern kmp-web.tar.gz --dir ${FAKE_DOWNLOAD_DIR} --clobber`,
-    `tar -xzf ${FAKE_DOWNLOAD_DIR}/kmp-web.tar.gz -C ${appDir}/kmp/composeApp/build/dist/wasmJs/productionExecutable`,
+    `gh release download v1.0.0 --repo tanyudii/tmux-web --pattern web-dist.tar.gz --dir ${FAKE_DOWNLOAD_DIR} --clobber`,
+    `tar -xzf ${FAKE_DOWNLOAD_DIR}/web-dist.tar.gz -C ${appDir}/web/dist`,
     "systemctl --user is-active tmux-web",
   ]);
 });
@@ -139,8 +139,8 @@ test("runUpgrade installs the explicitly requested tag without calling git ls-re
     `git -C ${appDir} checkout --force v1.0.0`,
     `npm ci --omit=dev (cwd=${appDir})`,
     `npm link (cwd=${appDir})`,
-    `gh release download v1.0.0 --repo tanyudii/tmux-web --pattern kmp-web.tar.gz --dir ${FAKE_DOWNLOAD_DIR} --clobber`,
-    `tar -xzf ${FAKE_DOWNLOAD_DIR}/kmp-web.tar.gz -C ${appDir}/kmp/composeApp/build/dist/wasmJs/productionExecutable`,
+    `gh release download v1.0.0 --repo tanyudii/tmux-web --pattern web-dist.tar.gz --dir ${FAKE_DOWNLOAD_DIR} --clobber`,
+    `tar -xzf ${FAKE_DOWNLOAD_DIR}/web-dist.tar.gz -C ${appDir}/web/dist`,
     "systemctl --user is-active tmux-web",
   ]);
 });
@@ -171,8 +171,8 @@ test("runUpgrade resolves the latest tag when --tag is omitted", async () => {
     `git -C ${appDir} checkout --force v1.3.0`,
     `npm ci --omit=dev (cwd=${appDir})`,
     `npm link (cwd=${appDir})`,
-    `gh release download v1.3.0 --repo tanyudii/tmux-web --pattern kmp-web.tar.gz --dir ${FAKE_DOWNLOAD_DIR} --clobber`,
-    `tar -xzf ${FAKE_DOWNLOAD_DIR}/kmp-web.tar.gz -C ${appDir}/kmp/composeApp/build/dist/wasmJs/productionExecutable`,
+    `gh release download v1.3.0 --repo tanyudii/tmux-web --pattern web-dist.tar.gz --dir ${FAKE_DOWNLOAD_DIR} --clobber`,
+    `tar -xzf ${FAKE_DOWNLOAD_DIR}/web-dist.tar.gz -C ${appDir}/web/dist`,
     "systemctl --user is-active tmux-web",
   ]);
 });
@@ -208,8 +208,8 @@ test("runUpgrade fetches and checks out the tag when appDir is already a matchin
     `git -C ${appDir} checkout --force v2.0.0`,
     `npm ci --omit=dev (cwd=${appDir})`,
     `npm link (cwd=${appDir})`,
-    `gh release download v2.0.0 --repo tanyudii/tmux-web --pattern kmp-web.tar.gz --dir ${FAKE_DOWNLOAD_DIR} --clobber`,
-    `tar -xzf ${FAKE_DOWNLOAD_DIR}/kmp-web.tar.gz -C ${appDir}/kmp/composeApp/build/dist/wasmJs/productionExecutable`,
+    `gh release download v2.0.0 --repo tanyudii/tmux-web --pattern web-dist.tar.gz --dir ${FAKE_DOWNLOAD_DIR} --clobber`,
+    `tar -xzf ${FAKE_DOWNLOAD_DIR}/web-dist.tar.gz -C ${appDir}/web/dist`,
     "systemctl --user is-active tmux-web",
   ]);
 });
@@ -248,8 +248,8 @@ test("runUpgrade treats an origin remote with a trailing .git as matching (no re
     `git -C ${appDir} checkout --force v1.0.0`,
     `npm ci --omit=dev (cwd=${appDir})`,
     `npm link (cwd=${appDir})`,
-    `gh release download v1.0.0 --repo tanyudii/tmux-web --pattern kmp-web.tar.gz --dir ${FAKE_DOWNLOAD_DIR} --clobber`,
-    `tar -xzf ${FAKE_DOWNLOAD_DIR}/kmp-web.tar.gz -C ${appDir}/kmp/composeApp/build/dist/wasmJs/productionExecutable`,
+    `gh release download v1.0.0 --repo tanyudii/tmux-web --pattern web-dist.tar.gz --dir ${FAKE_DOWNLOAD_DIR} --clobber`,
+    `tar -xzf ${FAKE_DOWNLOAD_DIR}/web-dist.tar.gz -C ${appDir}/web/dist`,
     "systemctl --user is-active tmux-web",
   ]);
 });
@@ -357,8 +357,8 @@ test("runUpgrade refreshes the systemd unit and restarts when the service was ac
     `git -C ${appDir} checkout --force v1.0.0`,
     `npm ci --omit=dev (cwd=${appDir})`,
     `npm link (cwd=${appDir})`,
-    `gh release download v1.0.0 --repo tanyudii/tmux-web --pattern kmp-web.tar.gz --dir ${FAKE_DOWNLOAD_DIR} --clobber`,
-    `tar -xzf ${FAKE_DOWNLOAD_DIR}/kmp-web.tar.gz -C ${appDir}/kmp/composeApp/build/dist/wasmJs/productionExecutable`,
+    `gh release download v1.0.0 --repo tanyudii/tmux-web --pattern web-dist.tar.gz --dir ${FAKE_DOWNLOAD_DIR} --clobber`,
+    `tar -xzf ${FAKE_DOWNLOAD_DIR}/web-dist.tar.gz -C ${appDir}/web/dist`,
     "systemctl --user is-active tmux-web",
     "systemctl --user restart tmux-web",
   ]);
@@ -461,15 +461,15 @@ test("runUpgrade honors an explicit --app-dir over the default", async () => {
     `git clone --branch v1.0.0 --depth 1 git@github.com:tanyudii/tmux-web ${customAppDir}`,
     `npm ci --omit=dev (cwd=${customAppDir})`,
     `npm link (cwd=${customAppDir})`,
-    `gh release download v1.0.0 --repo tanyudii/tmux-web --pattern kmp-web.tar.gz --dir ${FAKE_DOWNLOAD_DIR} --clobber`,
-    `tar -xzf ${FAKE_DOWNLOAD_DIR}/kmp-web.tar.gz -C ${customAppDir}/kmp/composeApp/build/dist/wasmJs/productionExecutable`,
+    `gh release download v1.0.0 --repo tanyudii/tmux-web --pattern web-dist.tar.gz --dir ${FAKE_DOWNLOAD_DIR} --clobber`,
+    `tar -xzf ${FAKE_DOWNLOAD_DIR}/web-dist.tar.gz -C ${customAppDir}/web/dist`,
     "systemctl --user is-active tmux-web",
   ]);
 });
 
-test("downloadWebBuild downloads the release asset and extracts it into the app dir's wasmJs output path", async () => {
+test("downloadWebBuild downloads the release asset and extracts it into the app dir's web dist path", async () => {
   const appDir = "/existing/app/dir";
-  const targetDir = join(appDir, "kmp", "composeApp", "build", "dist", "wasmJs", "productionExecutable");
+  const targetDir = join(appDir, "web", "dist");
   const { exec, calls } = recordingExec({
     gh: () => ({ stdout: "", stderr: "" }),
     tar: () => ({ stdout: "", stderr: "" }),
@@ -492,8 +492,8 @@ test("downloadWebBuild downloads the release asset and extracts it into the app 
   );
 
   assert.deepEqual(calls, [
-    `gh release download v1.4.0 --repo tanyudii/tmux-web --pattern kmp-web.tar.gz --dir ${FAKE_DOWNLOAD_DIR} --clobber`,
-    `tar -xzf ${FAKE_DOWNLOAD_DIR}/kmp-web.tar.gz -C ${targetDir}`,
+    `gh release download v1.4.0 --repo tanyudii/tmux-web --pattern web-dist.tar.gz --dir ${FAKE_DOWNLOAD_DIR} --clobber`,
+    `tar -xzf ${FAKE_DOWNLOAD_DIR}/web-dist.tar.gz -C ${targetDir}`,
   ]);
   assert.deepEqual(mkdirCalls, [targetDir]);
   assert.deepEqual(rmCalls, [FAKE_DOWNLOAD_DIR]);
@@ -682,7 +682,7 @@ test("runUpgrade skips the re-exec and finishes the upgrade directly when isReex
     mkdtemp: noopMkdtemp,
   });
 
-  assert.ok(calls.includes("gh release download v1.0.0 --repo tanyudii/tmux-web --pattern kmp-web.tar.gz --dir " +
+  assert.ok(calls.includes("gh release download v1.0.0 --repo tanyudii/tmux-web --pattern web-dist.tar.gz --dir " +
     `${FAKE_DOWNLOAD_DIR} --clobber`));
 });
 
@@ -824,14 +824,14 @@ test(
     const appDir = join(parentPath, "app");
     try {
       await writeFile(join(fixtureSrcDir, "index.html"), "<html>fake web ui</html>");
-      const tarPath = join(fixtureTarDir, "kmp-web.tar.gz");
+      const tarPath = join(fixtureTarDir, "web-dist.tar.gz");
       await execFileAsync("tar", ["-czf", tarPath, "-C", fixtureSrcDir, "."]);
 
       const exec: ExecFn = async (file, args, options) => {
         if (file === "gh") {
           const dirFlagIndex = args.indexOf("--dir");
           const downloadDir = args[dirFlagIndex + 1];
-          await execFileAsync("cp", [tarPath, join(downloadDir, "kmp-web.tar.gz")]);
+          await execFileAsync("cp", [tarPath, join(downloadDir, "web-dist.tar.gz")]);
           return { stdout: "", stderr: "" };
         }
         return defaultExec(file, args, options);
@@ -839,7 +839,7 @@ test(
 
       await downloadWebBuild(exec, appDir, "v9.9.9", "tanyudii/tmux-web");
 
-      const targetDir = join(appDir, "kmp", "composeApp", "build", "dist", "wasmJs", "productionExecutable");
+      const targetDir = join(appDir, "web", "dist");
       assert.equal(await readFile(join(targetDir, "index.html"), "utf-8"), "<html>fake web ui</html>");
       assert.equal(resolveWebBuildDir(targetDir), targetDir);
     } finally {
