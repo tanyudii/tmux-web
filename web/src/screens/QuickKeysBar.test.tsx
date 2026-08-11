@@ -115,9 +115,10 @@ describe("QuickKeysBar clipboard controls", () => {
     expect(screen.getByRole("button", { name: "Done" })).toHaveAttribute("aria-pressed", "true");
   });
 
-  // The desktop pane renders this component too (it is hidden by a CSS media
-  // query, not unmounted), and it has its own keyboard-driven copy/paste. It
-  // must keep working with no clipboard props wired at all.
+  // No production caller omits these today (see QuickKeysBar.tsx's header --
+  // TerminalScreen is the only render site and always wires them). This pins
+  // the graceful-degradation behaviour anyway, so adding a caller that omits
+  // them renders a smaller bar rather than crashing on an undefined handler.
   it("renders only the control keys when no clipboard handlers are provided", () => {
     render(() => <QuickKeysBar onKeyTap={vi.fn()} />);
 

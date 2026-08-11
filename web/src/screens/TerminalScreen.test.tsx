@@ -593,3 +593,75 @@ describe("TerminalScreen arrow keys", () => {
     expect(container.classList.contains("tw-terminal--selecting")).toBe(false);
   });
 });
+
+// Regression guard for a test that used to pass for the wrong reason: the
+// originals asserted only that the `tw-terminal--selecting` CSS class went
+// away, which is driven by the isSelecting signal and happens whether or not
+// clearSelection() is ever called. Mutation-checked: deleting the
+// `terminalHandle()?.clearSelection()` call in TerminalScreen makes the test
+// below fail, and left the old class-only assertions green.
+describe("TerminalScreen leaving selection mode", () => {
+  afterEach(() => {
+    window.getSelection()?.removeAllRanges();
+    cleanup();
+  });
+
+  function renderWithSelectableTerminal() {
+    const terminalWithText = () => ({
+      ...fakeTerminal(),
+      open: (container: HTMLElement) => {
+        const row = document.createElement("div");
+        row.textContent = "selected terminal text";
+        container.appendChild(row);
+      },
+    });
+    render(() => (
+      <TerminalScreen
+        api={fakeApi() as never}
+        baseUrl="https://tmux.example.com"
+        token="tok"
+        projectId="proj"
+        sessionFullName="proj__build"
+        sessionName="build"
+        projectName="my-project"
+        onBack={vi.fn()}
+        pushStore={fakePushStore()}
+        createSocket={() => fakeSocket() as never}
+        createTerminal={terminalWithText}
+        createFitAddon={fakeFitAddon}
+        createSearchAddon={fakeSearchAddon}
+      />
+    ));
+    return document.querySelector(".tw-terminal-screen__view > div") as HTMLElement;
+  }
+
+  function selectTerminalContents(container: HTMLElement): void {
+    const range = document.createRange();
+    range.selectNodeContents(container);
+    const selection = window.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+  }
+
+  it("Done drops the live DOM selection, not just the CSS class", () => {
+    const container = renderWithSelectableTerminal();
+    fireEvent.click(screen.getByRole("button", { name: "Select" }));
+    selectTerminalContents(container);
+    expect(window.getSelection()?.toString()).toContain("selected terminal text");
+
+    fireEvent.click(screen.getByRole("button", { name: "Done" }));
+
+    expect(window.getSelection()?.toString()).toBe("");
+  });
+
+  it("switching to arrow mode drops the live DOM selection too", () => {
+    const container = renderWithSelectableTerminal();
+    fireEvent.click(screen.getByRole("button", { name: "Select" }));
+    selectTerminalContents(container);
+
+    fireEvent.click(screen.getByRole("button", { name: "Done" }));
+    fireEvent.click(screen.getByRole("button", { name: "Arrow keys" }));
+
+    expect(window.getSelection()?.toString()).toBe("");
+  });
+});
