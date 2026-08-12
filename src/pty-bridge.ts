@@ -181,7 +181,19 @@ export function attachPtyToSocket(
   // scroll-up" -- used only to decide whether the next keystroke needs a
   // cancel first, so a stray false positive just costs one harmless no-op
   // cancel call rather than a wrong read of real tmux state on every key.
-  let possiblyInCopyMode = false;
+  //
+  // Starts TRUE, not false: this flag is per-socket, but copy-mode lives in
+  // tmux and outlives any one socket. A reconnect (terminalStore's backoff,
+  // a manual Retry, or the staleness probe) therefore used to attach with
+  // the flag reset to false while tmux was still in copy-mode from a
+  // scroll-up before the drop -- and copy-mode's own keytable swallows
+  // keystrokes, so the terminal stayed frozen with no way out but a page
+  // refresh. Assuming copy-mode until proven otherwise costs exactly one
+  // `getPaneMode` lookup on the first keystroke of a connection
+  // (cancelCopyMode is already a no-op when the pane is not in a mode --
+  // see tmux.ts), and cannot disturb an unrelated tmux client, since it
+  // only runs when this socket's user actually types.
+  let possiblyInCopyMode = true;
   // While a cancel is in flight, EVERY input message must wait for it --
   // not just the one that triggered it. A user typing fast sends one "input"
   // WS message per keystroke; only gating the first keystroke on the cancel

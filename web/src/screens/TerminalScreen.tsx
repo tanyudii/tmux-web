@@ -226,7 +226,6 @@ export function TerminalScreen(props: TerminalScreenProps) {
           isVisible={terminalVisible()}
           isSelecting={isSelecting()}
           onScroll={terminal.onScroll}
-          captureSelection={() => props.api.getPasteBuffer(props.projectId, props.sessionName).catch(() => null)}
           createTerminal={props.createTerminal}
           createFitAddon={props.createFitAddon}
           createSearchAddon={props.createSearchAddon}

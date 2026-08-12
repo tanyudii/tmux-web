@@ -18,16 +18,25 @@
 // defaults this to true on macOS, which replaces an existing multi-line
 // selection with a single word on right-click.
 //
-// macOptionClickForcesSelection is deliberately left at its default
-// (false): a plain drag (with or without Option/Alt on Mac, Shift
-// elsewhere) is left to fall through to tmux's own mouse-reporting when
-// tmux.conf has `mouse on`, entering tmux's native copy-mode -- which
-// already auto-scrolls correctly at the pane edges, unlike xterm.js's own
-// local-selection auto-scroll, which drives a local scrollback buffer that
-// stays effectively empty in this app (see touchScroll.ts). Instead,
-// Option-drag is tracked separately (optionDrag.ts) purely to know when to
-// relay tmux's own resulting paste buffer to the real OS clipboard on
-// Cmd+C (see keydownHandlers.ts).
+// macOptionClickForcesSelection: TRUE, so an Option/Alt-drag always makes a
+// real local xterm selection even while the running app has mouse reporting
+// on.
+//
+// It used to be left at its default (false) on the assumption that the drag
+// would fall through to tmux's own mouse-reporting and land in tmux's
+// copy-mode, whose resulting paste buffer was then relayed to the clipboard
+// on Cmd+C. That assumption only holds with `mouse on` in tmux.conf --
+// and tmux's default is `mouse off`, which this project never changes.
+// Traced live: with mouse off tmux receives no mouse events at all, so its
+// `MouseDragEnd1Pane -> copy-pipe-and-cancel` binding never runs and no new
+// paste buffer is ever produced. Cmd+C then relayed whatever STALE buffer
+// happened to be lying around from some earlier, unrelated copy -- silently
+// putting the wrong text on the clipboard, which is worse than copying
+// nothing. Forcing a local selection makes the copy come from what the user
+// actually highlighted, with no dependency on the user's tmux config.
+//
+// (Shift-drag already bypasses mouse reporting in xterm.js by convention,
+// so it produces a local selection without needing this option.)
 import { FitAddon } from "@xterm/addon-fit";
 import { SearchAddon } from "@xterm/addon-search";
 import { Terminal } from "@xterm/xterm";
@@ -45,6 +54,10 @@ export function createXtermTerminal(): TerminalLike {
     // this app was already routing bell handling exclusively through it
     // (bellFeedback.ts), so there is nothing left to silence.
     rightClickSelectsWord: false,
+    // See the header comment: without this an Option/Alt-drag produces no
+    // local selection while an app has mouse reporting on, and Cmd+C fell
+    // back to a stale tmux paste buffer.
+    macOptionClickForcesSelection: true,
     // Reclaims the terminal's full width and removes xterm's own scrollbar.
     //
     // Measured live at a 393px-wide iPhone viewport: `.xterm-screen` rendered

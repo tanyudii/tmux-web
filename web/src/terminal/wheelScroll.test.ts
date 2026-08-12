@@ -90,4 +90,64 @@ describe("attachWheelScroll", () => {
 
     expect(onWheel).not.toHaveBeenCalled();
   });
+
+  // A full-screen app that turned mouse tracking on (Claude Code, htop,
+  // mouse-enabled vim) scrolls its OWN view from wheel escapes. Hijacking
+  // the wheel there sent it to tmux copy-mode instead -- and such a pane is
+  // on the alternate screen with zero scrollback, so copy-mode had nothing
+  // to scroll and merely froze the pane. The event must pass through
+  // completely untouched so xterm.js can emit the mouse escape.
+  it("leaves the wheel entirely alone while the app has mouse tracking on", () => {
+    const container = document.createElement("div");
+    const onWheel = vi.fn();
+    attachWheelScroll(container, { onWheel, isEnabled: () => false });
+
+    const event = wheel({ deltaY: 90 });
+    container.dispatchEvent(event);
+
+    expect(onWheel).not.toHaveBeenCalled();
+    expect(event.defaultPrevented).toBe(false);
+  });
+
+  it("still hijacks the wheel while the app has mouse tracking off", () => {
+    const container = document.createElement("div");
+    const onWheel = vi.fn();
+    attachWheelScroll(container, { onWheel, isEnabled: () => true });
+
+    const event = wheel({ deltaY: 90 });
+    container.dispatchEvent(event);
+
+    expect(onWheel).toHaveBeenCalledWith(90);
+    expect(event.defaultPrevented).toBe(true);
+  });
+
+  // Zoom must never reach the app or the browser, mouse tracking or not --
+  // otherwise the whole page zooms on a trackpad pinch.
+  it("still swallows Ctrl+wheel even while the app has mouse tracking on", () => {
+    const container = document.createElement("div");
+    const onWheel = vi.fn();
+    attachWheelScroll(container, { onWheel, isEnabled: () => false });
+
+    const event = wheel({ deltaY: 90, ctrlKey: true });
+    container.dispatchEvent(event);
+
+    expect(onWheel).not.toHaveBeenCalled();
+    expect(event.defaultPrevented).toBe(true);
+  });
+
+  it("re-reads the mouse-tracking state on every wheel event", () => {
+    const container = document.createElement("div");
+    const onWheel = vi.fn();
+    let enabled = false;
+    attachWheelScroll(container, { onWheel, isEnabled: () => enabled });
+
+    container.dispatchEvent(wheel({ deltaY: 90 }));
+    expect(onWheel).not.toHaveBeenCalled();
+
+    // The user quits the TUI: tracking goes off, hijacking must resume
+    // without re-attaching anything.
+    enabled = true;
+    container.dispatchEvent(wheel({ deltaY: 90 }));
+    expect(onWheel).toHaveBeenCalledWith(90);
+  });
 });

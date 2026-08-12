@@ -17,7 +17,11 @@
 // is not ours to interpret.
 export interface TouchScrollHandlers {
   onStart: () => void;
-  onDrag: (deltaY: number) => void;
+  // The touch position is passed alongside the delta because an app running
+  // with mouse tracking on needs the gesture delivered as a wheel event at a
+  // real cell coordinate (see syntheticWheel.ts) -- a raw delta alone cannot
+  // be turned into one.
+  onDrag: (deltaY: number, point: { clientX: number; clientY: number }) => void;
   // Read fresh on every event (not captured once at attach time) so the
   // caller can flip selection mode on and off without detaching listeners.
   // While it returns false this module gets out of the way entirely --
@@ -41,10 +45,11 @@ export function attachTouchScroll(container: HTMLElement, handlers: TouchScrollH
   const onTouchMove = (event: TouchEvent): void => {
     if (!isEnabled()) return;
     if (event.touches.length !== 1) return;
-    const y = event.touches[0].clientY;
+    const touch = event.touches[0];
+    const y = touch.clientY;
     const delta = y - lastY;
     lastY = y;
-    if (delta !== 0) handlers.onDrag(delta);
+    if (delta !== 0) handlers.onDrag(delta, { clientX: touch.clientX, clientY: touch.clientY });
     event.preventDefault();
   };
 

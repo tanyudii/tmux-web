@@ -1,10 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { attachTouchScroll } from "./touchScroll";
 
-function touchEvent(type: string, clientY: number, touchCount = 1): Event {
+function touchEvent(type: string, clientY: number, touchCount = 1, clientX = 7): Event {
   const event = new Event(type, { cancelable: type === "touchmove" });
   Object.defineProperty(event, "touches", {
-    value: Array.from({ length: touchCount }, () => ({ clientY })),
+    value: Array.from({ length: touchCount }, () => ({ clientX, clientY })),
   });
   return event;
 }
@@ -12,7 +12,7 @@ function touchEvent(type: string, clientY: number, touchCount = 1): Event {
 describe("attachTouchScroll", () => {
   let container: HTMLDivElement;
   let onStart: Mock<() => void>;
-  let onDrag: Mock<(deltaY: number) => void>;
+  let onDrag: Mock<(deltaY: number, point: { clientX: number; clientY: number }) => void>;
   let detach: () => void;
 
   beforeEach(() => {
@@ -42,7 +42,7 @@ describe("attachTouchScroll", () => {
     container.dispatchEvent(touchEvent("touchstart", 100));
     container.dispatchEvent(touchEvent("touchmove", 130));
 
-    expect(onDrag).toHaveBeenCalledWith(30);
+    expect(onDrag).toHaveBeenCalledWith(30, { clientX: 7, clientY: 130 });
   });
 
   it("accumulates from the last reported position, not the original start", () => {
@@ -50,7 +50,7 @@ describe("attachTouchScroll", () => {
     container.dispatchEvent(touchEvent("touchmove", 130));
     container.dispatchEvent(touchEvent("touchmove", 110));
 
-    expect(onDrag).toHaveBeenLastCalledWith(-20);
+    expect(onDrag).toHaveBeenLastCalledWith(-20, { clientX: 7, clientY: 110 });
   });
 
   it("does not call onDrag when the finger hasn't moved", () => {
@@ -93,7 +93,7 @@ describe("attachTouchScroll", () => {
 describe("attachTouchScroll with an isEnabled guard", () => {
   let container: HTMLDivElement;
   let onStart: Mock<() => void>;
-  let onDrag: Mock<(deltaY: number) => void>;
+  let onDrag: Mock<(deltaY: number, point: { clientX: number; clientY: number }) => void>;
   let enabled: boolean;
   let detach: () => void;
 
@@ -139,13 +139,13 @@ describe("attachTouchScroll with an isEnabled guard", () => {
     container.dispatchEvent(touchEvent("touchstart", 100));
     container.dispatchEvent(touchEvent("touchmove", 130));
 
-    expect(onDrag).toHaveBeenCalledExactlyOnceWith(30);
+    expect(onDrag).toHaveBeenCalledExactlyOnceWith(30, { clientX: 7, clientY: 130 });
   });
 
   it("still scrolls normally while enabled", () => {
     container.dispatchEvent(touchEvent("touchstart", 100));
     container.dispatchEvent(touchEvent("touchmove", 130));
 
-    expect(onDrag).toHaveBeenCalledWith(30);
+    expect(onDrag).toHaveBeenCalledWith(30, { clientX: 7, clientY: 130 });
   });
 });
