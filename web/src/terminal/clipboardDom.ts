@@ -45,6 +45,21 @@ function copyViaExecCommand(text: string): boolean {
   document.body.appendChild(scratch);
 
   const restoreSelection = captureSelection();
+  // The scratch field MUST take focus first. execCommand("copy") copies the
+  // selection of the focused editable element, and in this app that element
+  // is xterm.js's own hidden textarea -- whose selection is empty. Without
+  // this focus() the browser dutifully copied that emptiness, returned TRUE,
+  // and the UI showed "Copied" while the clipboard still held whatever was
+  // there before. Reproduced live on an insecure origin (plain http to a LAN
+  // IP), which is the only path this function runs on, since
+  // navigator.clipboard does not exist there at all.
+  //
+  // Focus is handed back afterwards: xterm's textarea is what receives
+  // keystrokes, so leaving focus on a removed scratch element would swallow
+  // the next thing the user types.
+  const previouslyFocused = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  scratch.focus({ preventScroll: true });
+
   const selection = window.getSelection();
   const scratchRange = document.createRange();
   scratchRange.selectNodeContents(scratch);
@@ -60,6 +75,7 @@ function copyViaExecCommand(text: string): boolean {
   }
   scratch.remove();
   restoreSelection();
+  previouslyFocused?.focus({ preventScroll: true });
   return copied;
 }
 

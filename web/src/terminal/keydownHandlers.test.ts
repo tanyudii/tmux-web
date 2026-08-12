@@ -14,6 +14,8 @@ function fakeTerminal(overrides: Partial<TerminalLike> = {}): TerminalLike {
   return {
     cols: 80,
     rows: 24,
+    modes: { mouseTrackingMode: "none" as const },
+    parser: { registerOscHandler: vi.fn() },
     options: { fontSize: 14 },
     open: vi.fn(),
     write: vi.fn(),
@@ -58,7 +60,7 @@ describe("attachTerminalKeydownListeners", () => {
     const searchAddon = fakeSearchAddon();
     attachTerminalKeydownListeners(
       container,
-      { terminal: () => terminal, searchAddon: () => searchAddon, fontSize: () => 14, takeCapturedSelectionText: () => null },
+      { terminal: () => terminal, searchAddon: () => searchAddon, fontSize: () => 14},
       { onZoomApplied: vi.fn() },
     );
 
@@ -72,7 +74,7 @@ describe("attachTerminalKeydownListeners", () => {
     const terminal = fakeTerminal({ hasSelection: vi.fn().mockReturnValue(true), getSelection: vi.fn().mockReturnValue("selected text") });
     attachTerminalKeydownListeners(
       container,
-      { terminal: () => terminal, searchAddon: () => null, fontSize: () => 14, takeCapturedSelectionText: () => null },
+      { terminal: () => terminal, searchAddon: () => null, fontSize: () => 14},
       { onZoomApplied: vi.fn() },
     );
 
@@ -84,27 +86,12 @@ describe("attachTerminalKeydownListeners", () => {
     expect(terminal.focus).toHaveBeenCalled();
   });
 
-  it("falls back to the captured Option-drag selection when xterm has no local selection", async () => {
-    vi.spyOn(clipboardDom, "copyTextToClipboard").mockResolvedValue(true);
-    const terminal = fakeTerminal({ hasSelection: vi.fn().mockReturnValue(false) });
-    attachTerminalKeydownListeners(
-      container,
-      { terminal: () => terminal, searchAddon: () => null, fontSize: () => 14, takeCapturedSelectionText: () => "captured text" },
-      { onZoomApplied: vi.fn() },
-    );
-
-    container.dispatchEvent(keydown("c", { metaKey: true }));
-    await Promise.resolve();
-
-    expect(clipboardDom.copyTextToClipboard).toHaveBeenCalledWith("captured text");
-  });
-
   it("shows a no-selection hint for Cmd+C with nothing to copy, without claiming the event", () => {
     const showToast = vi.spyOn(clipboardDom, "showCopyToast");
     const terminal = fakeTerminal({ hasSelection: vi.fn().mockReturnValue(false) });
     attachTerminalKeydownListeners(
       container,
-      { terminal: () => terminal, searchAddon: () => null, fontSize: () => 14, takeCapturedSelectionText: () => null },
+      { terminal: () => terminal, searchAddon: () => null, fontSize: () => 14},
       { onZoomApplied: vi.fn() },
     );
 
@@ -119,7 +106,7 @@ describe("attachTerminalKeydownListeners", () => {
     const terminal = fakeTerminal({ hasSelection: vi.fn().mockReturnValue(false) });
     attachTerminalKeydownListeners(
       container,
-      { terminal: () => terminal, searchAddon: () => null, fontSize: () => 14, takeCapturedSelectionText: () => null },
+      { terminal: () => terminal, searchAddon: () => null, fontSize: () => 14},
       { onZoomApplied: vi.fn() },
     );
 
@@ -134,7 +121,7 @@ describe("attachTerminalKeydownListeners", () => {
     const terminal = fakeTerminal();
     attachTerminalKeydownListeners(
       container,
-      { terminal: () => terminal, searchAddon: () => null, fontSize: () => 14, takeCapturedSelectionText: () => null },
+      { terminal: () => terminal, searchAddon: () => null, fontSize: () => 14},
       { onZoomApplied },
     );
 
@@ -150,7 +137,7 @@ describe("attachTerminalKeydownListeners", () => {
     const onZoomApplied = vi.fn();
     attachTerminalKeydownListeners(
       container,
-      { terminal: () => null, searchAddon: () => null, fontSize: () => 14, takeCapturedSelectionText: () => null },
+      { terminal: () => null, searchAddon: () => null, fontSize: () => 14},
       { onZoomApplied },
     );
 
@@ -164,7 +151,7 @@ describe("attachTerminalKeydownListeners", () => {
     const terminal = fakeTerminal();
     const detach = attachTerminalKeydownListeners(
       container,
-      { terminal: () => terminal, searchAddon: () => null, fontSize: () => 14, takeCapturedSelectionText: () => null },
+      { terminal: () => terminal, searchAddon: () => null, fontSize: () => 14},
       { onZoomApplied },
     );
 

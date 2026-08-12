@@ -5,9 +5,24 @@
 // and cannot run under jsdom (confirmed empirically while building Phase 4;
 // `new Terminal().open(div)` throws "this._parentWindow.matchMedia is not a
 // function" under vitest's jsdom environment).
+/**
+ * Mouse-tracking mode the *foreground application* has asked for, as xterm.js
+ * reports it (`CSI ? 9/1000/1002/1003 h`). tmux runs with `mouse off` by
+ * default and this project never changes that, so tmux passes the inner
+ * pane app's mouse-mode escapes straight through to this terminal -- which
+ * makes this the one reliable client-side signal for "the running app wants
+ * the wheel itself". See wheelScroll.ts for what depends on it.
+ */
+export type MouseTrackingMode = "none" | "x10" | "vt200" | "drag" | "any";
+
 export interface TerminalLike {
   readonly cols: number;
   readonly rows: number;
+  readonly modes: { readonly mouseTrackingMode: MouseTrackingMode };
+  // OSC handler registration -- used for OSC 52 (clipboard set) so a copy
+  // performed INSIDE the running app reaches the system clipboard instead
+  // of being parsed and dropped. See osc52.ts.
+  readonly parser: { registerOscHandler(ident: number, handler: (data: string) => boolean): void };
   // xterm.js exposes font size as a mutable property on `.options`, not a
   // setter method -- matches terminal.options.fontSize = size in
   // kmp/.../terminal/XtermJs.kt's setFontSize.

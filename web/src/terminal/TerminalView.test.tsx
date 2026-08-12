@@ -1,6 +1,6 @@
 import { cleanup, render } from "@solidjs/testing-library";
 import { createSignal } from "solid-js";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { TerminalView } from "./TerminalView";
 import type { FitAddonLike, SearchAddonLike, TerminalLike } from "./types";
 
@@ -14,6 +14,8 @@ function fakeTerminal(overrides: Partial<TerminalLike> = {}): TerminalLike {
   return {
     cols: 80,
     rows: 24,
+    modes: { mouseTrackingMode: "none" as const },
+    parser: { registerOscHandler: vi.fn() },
     options: { fontSize: 14 },
     open: vi.fn(),
     write: vi.fn(),
@@ -69,7 +71,6 @@ describe("TerminalView", () => {
         onReady={onReady}
         isVisible={true}
         onScroll={vi.fn()}
-        captureSelection={() => Promise.resolve(null)}
         createTerminal={() => terminal}
         createFitAddon={fakeFitAddon}
         createSearchAddon={fakeSearchAddon}
@@ -97,7 +98,6 @@ describe("TerminalView", () => {
         onReady={vi.fn()}
         isVisible={true}
         onScroll={vi.fn()}
-        captureSelection={() => Promise.resolve(null)}
         createTerminal={() => terminal}
         createFitAddon={fakeFitAddon}
         createSearchAddon={fakeSearchAddon}
@@ -107,6 +107,55 @@ describe("TerminalView", () => {
     terminal.__fireData("ls -la\r");
 
     expect(onInput).toHaveBeenCalledWith("ls -la\r");
+  });
+
+  // Copying from inside a full-screen app (Claude Code, vim) arrives as
+  // OSC 52. xterm.js parses it but has no handler of its own, so without
+  // this registration the copy was silently dropped -- see osc52.ts.
+  it("registers an OSC 52 handler so an in-app copy can reach the clipboard", () => {
+    const terminal = fakeTerminal();
+
+    render(() => (
+      <TerminalView
+        onInput={vi.fn()}
+        onBell={vi.fn()}
+        onResize={vi.fn()}
+        onReady={vi.fn()}
+        isVisible={true}
+        onScroll={vi.fn()}
+        createTerminal={() => terminal}
+        createFitAddon={fakeFitAddon}
+        createSearchAddon={fakeSearchAddon}
+      />
+    ));
+
+    expect(terminal.parser.registerOscHandler).toHaveBeenCalledWith(52, expect.any(Function));
+  });
+
+  // Returning false would let xterm fall through to its default handling and
+  // log the sequence as unhandled; a clipboard READ must still be refused
+  // (osc52.ts returns null for it) without answering.
+  it("claims every OSC 52 sequence, including a refused clipboard read", () => {
+    const terminal = fakeTerminal();
+
+    render(() => (
+      <TerminalView
+        onInput={vi.fn()}
+        onBell={vi.fn()}
+        onResize={vi.fn()}
+        onReady={vi.fn()}
+        isVisible={true}
+        onScroll={vi.fn()}
+        createTerminal={() => terminal}
+        createFitAddon={fakeFitAddon}
+        createSearchAddon={fakeSearchAddon}
+      />
+    ));
+
+    const handler = (terminal.parser.registerOscHandler as unknown as Mock).mock.calls[0][1] as (data: string) => boolean;
+
+    expect(handler("c;?")).toBe(true);
+    expect(handler(`c;${btoa("hi")}`)).toBe(true);
   });
 
   it("forwards the raw bell event without deciding whether to alert (that's the screen's job)", () => {
@@ -121,7 +170,6 @@ describe("TerminalView", () => {
         onReady={vi.fn()}
         isVisible={true}
         onScroll={vi.fn()}
-        captureSelection={() => Promise.resolve(null)}
         createTerminal={() => terminal}
         createFitAddon={fakeFitAddon}
         createSearchAddon={fakeSearchAddon}
@@ -145,7 +193,6 @@ describe("TerminalView", () => {
         onReady={vi.fn()}
         isVisible={true}
         onScroll={vi.fn()}
-        captureSelection={() => Promise.resolve(null)}
         createTerminal={() => terminal}
         createFitAddon={fakeFitAddon}
         createSearchAddon={fakeSearchAddon}
@@ -171,7 +218,6 @@ describe("TerminalView", () => {
         onReady={vi.fn()}
         isVisible={isVisible()}
         onScroll={vi.fn()}
-        captureSelection={() => Promise.resolve(null)}
         createTerminal={() => terminal}
         createFitAddon={fakeFitAddon}
         createSearchAddon={fakeSearchAddon}
@@ -202,7 +248,6 @@ describe("TerminalView", () => {
         onReady={vi.fn()}
         isVisible={true}
         onScroll={onScroll}
-        captureSelection={() => Promise.resolve(null)}
         createTerminal={() => terminal}
         createFitAddon={fakeFitAddon}
         createSearchAddon={fakeSearchAddon}
@@ -231,7 +276,6 @@ describe("TerminalView", () => {
         onReady={vi.fn()}
         isVisible={true}
         onScroll={onScroll}
-        captureSelection={() => Promise.resolve(null)}
         createTerminal={() => terminal}
         createFitAddon={fakeFitAddon}
         createSearchAddon={fakeSearchAddon}
@@ -259,7 +303,6 @@ describe("TerminalView", () => {
         onReady={vi.fn()}
         isVisible={isVisible()}
         onScroll={vi.fn()}
-        captureSelection={() => Promise.resolve(null)}
         createTerminal={() => terminal}
         createFitAddon={fakeFitAddon}
         createSearchAddon={fakeSearchAddon}
@@ -287,7 +330,6 @@ describe("TerminalView", () => {
         onReady={vi.fn()}
         isVisible={true}
         onScroll={vi.fn()}
-        captureSelection={() => Promise.resolve(null)}
         createTerminal={() => terminal}
         createFitAddon={() => fitAddon}
         createSearchAddon={fakeSearchAddon}
@@ -313,7 +355,6 @@ describe("TerminalView", () => {
         onReady={vi.fn()}
         isVisible={true}
         onScroll={onScroll}
-        captureSelection={() => Promise.resolve(null)}
         createTerminal={() => terminal}
         createFitAddon={fakeFitAddon}
         createSearchAddon={fakeSearchAddon}
@@ -344,7 +385,6 @@ describe("TerminalView", () => {
         onReady={vi.fn()}
         isVisible={true}
         onScroll={vi.fn()}
-        captureSelection={() => Promise.resolve(null)}
         createTerminal={() => terminal}
         createFitAddon={fakeFitAddon}
         createSearchAddon={fakeSearchAddon}
@@ -357,32 +397,6 @@ describe("TerminalView", () => {
     expect(root.querySelector(".tmux-search-bar")).not.toBeNull();
   });
 
-  it("captures the selection after an Option-drag ends over the container", async () => {
-    const terminal = fakeTerminal();
-    const captureSelection = vi.fn().mockResolvedValue("tmux paste buffer text");
-    const { container } = render(() => (
-      <TerminalView
-        onInput={vi.fn()}
-        onBell={vi.fn()}
-        onResize={vi.fn()}
-        onReady={vi.fn()}
-        isVisible={true}
-        onScroll={vi.fn()}
-        captureSelection={captureSelection}
-        createTerminal={() => terminal}
-        createFitAddon={fakeFitAddon}
-        createSearchAddon={fakeSearchAddon}
-      />
-    ));
-    void container;
-
-    document.dispatchEvent(new MouseEvent("mousedown", { altKey: true, clientX: 0, clientY: 0 }));
-    document.dispatchEvent(new MouseEvent("mouseup", { clientX: 20, clientY: 20 }));
-    await vi.runOnlyPendingTimersAsync();
-
-    expect(captureSelection).toHaveBeenCalledOnce();
-  });
-
   it("disposes the xterm instance on unmount", () => {
     const terminal = fakeTerminal();
     const { unmount } = render(() => (
@@ -393,7 +407,6 @@ describe("TerminalView", () => {
         onReady={vi.fn()}
         isVisible={true}
         onScroll={vi.fn()}
-        captureSelection={() => Promise.resolve(null)}
         createTerminal={() => terminal}
         createFitAddon={fakeFitAddon}
         createSearchAddon={fakeSearchAddon}

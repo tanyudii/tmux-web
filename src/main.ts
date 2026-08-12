@@ -26,6 +26,7 @@ import {
 import { extractQueryToken, verifyToken } from "./auth.ts";
 import { RateLimiter } from "./rate-limit.ts";
 import { attachPtyToSocket, type SocketLike } from "./pty-bridge.ts";
+import { attachHeartbeat, type HeartbeatSocketLike } from "./ws-heartbeat.ts";
 import {
   loadProjects,
   registerProject as registerProjectImpl,
@@ -373,6 +374,12 @@ export async function main(): Promise<void> {
       }
 
       wss.handleUpgrade(req, socket, head, (ws) => {
+        // Must come before attachPtyToSocket: the heartbeat is what
+        // eventually fires this socket's `close` event when the network path
+        // dies silently, and that event is what kills the pty below. Without
+        // it a half-open connection leaks a `tmux attach-session` forever --
+        // see ws-heartbeat.ts's header.
+        attachHeartbeat(ws as unknown as HeartbeatSocketLike);
         attachPtyToSocket(
           ws as unknown as WebSocket & SocketLike,
           targetSessionName,
@@ -420,6 +427,7 @@ export async function main(): Promise<void> {
         const ctx = await requireEnvContext(project, sessionSlug, sessionEnvDeps);
 
         wss.handleUpgrade(req, socket, head, (ws) => {
+          attachHeartbeat(ws as unknown as HeartbeatSocketLike);
           attachLogsToSocket(ws as unknown as LogSocketLike, ctx, service);
         });
       } catch (error) {

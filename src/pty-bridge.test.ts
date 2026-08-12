@@ -171,12 +171,17 @@ test("attachPtyToSocket does not send to an already-closed socket", () => {
   assert.deepEqual(socket.sent, []);
 });
 
-test("attachPtyToSocket writes input messages from the socket to the pty", () => {
+// Async because the first keystroke of a connection is gated on one
+// copy-mode cancel -- see "cancels copy-mode once on the first input of a
+// connection" below for why that gate exists. cancelCopyModeFn is stubbed
+// so this stays a unit test rather than shelling out to a real tmux.
+test("attachPtyToSocket writes input messages from the socket to the pty", async () => {
   const fakePty = new FakePty();
   const socket = new FakeSocket();
 
-  attachPtyToSocket(socket, "main", 80, 24, () => fakePty);
+  attachPtyToSocket(socket, "main", 80, 24, () => fakePty, undefined, async () => {});
   socket.emitMessage(JSON.stringify({ type: "input", data: "ls\n" }));
+  await new Promise((resolve) => setTimeout(resolve, 0));
 
   assert.deepEqual(fakePty.written, ["ls\n"]);
 });
@@ -287,7 +292,12 @@ test("attachPtyToSocket gates every keystroke typed during a slow cancel, not ju
   assert.deepEqual(fakePty.written, ["e", "c", "h", "o", "\r"], "keystrokes must land in order, after the cancel");
 });
 
-test("attachPtyToSocket does not call cancelCopyModeFn for input when no scroll-up has happened", () => {
+// copy-mode lives in tmux and outlives any single socket, so a reconnect
+// can attach to a pane that is STILL in copy-mode from a scroll-up before
+// the drop -- where the keytable swallows keystrokes and the terminal looks
+// frozen. The first keystroke of every connection therefore asks tmux to
+// cancel; cancelCopyMode is itself a no-op when the pane is not in a mode.
+test("attachPtyToSocket cancels copy-mode once on the first input of a connection", async () => {
   const fakePty = new FakePty();
   const socket = new FakeSocket();
   let cancelCalls = 0;
@@ -297,9 +307,28 @@ test("attachPtyToSocket does not call cancelCopyModeFn for input when no scroll-
 
   attachPtyToSocket(socket, "main", 80, 24, () => fakePty, undefined, cancelCopyModeFn);
   socket.emitMessage(JSON.stringify({ type: "input", data: "ls\n" }));
+  await new Promise((resolve) => setTimeout(resolve, 0));
 
-  assert.equal(cancelCalls, 0);
-  assert.deepEqual(fakePty.written, ["ls\n"]);
+  assert.equal(cancelCalls, 1);
+  assert.deepEqual(fakePty.written, ["ls\n"], "the keystroke must still land, after the cancel");
+});
+
+test("attachPtyToSocket does not re-cancel copy-mode on later input without a new scroll-up", async () => {
+  const fakePty = new FakePty();
+  const socket = new FakeSocket();
+  let cancelCalls = 0;
+  const cancelCopyModeFn = async () => {
+    cancelCalls++;
+  };
+
+  attachPtyToSocket(socket, "main", 80, 24, () => fakePty, undefined, cancelCopyModeFn);
+  for (const ch of ["l", "s", "\n"]) {
+    socket.emitMessage(JSON.stringify({ type: "input", data: ch }));
+  }
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.equal(cancelCalls, 1, "only the first keystroke of the connection pays for a cancel");
+  assert.deepEqual(fakePty.written, ["l", "s", "\n"]);
 });
 
 test("attachPtyToSocket ignores malformed socket messages", () => {

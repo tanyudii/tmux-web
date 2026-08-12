@@ -8,6 +8,8 @@ function fakeTerminal(): TerminalLike {
   return {
     cols: 80,
     rows: 24,
+    modes: { mouseTrackingMode: "none" as const },
+    parser: { registerOscHandler: vi.fn() },
     options: { fontSize: 14 },
     open: vi.fn(),
     write: vi.fn(),

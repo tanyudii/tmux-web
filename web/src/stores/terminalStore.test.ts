@@ -191,4 +191,239 @@ describe("createTerminalStore", () => {
 
     expect(store.state.phase).toBe("reconnecting");
   });
+
+  it("keeps the retry loop alive when connect() throws", async () => {
+    const socket = fakeSocket();
+    socket.connect.mockImplementationOnce(() => {}).mockImplementationOnce(() => {
+      throw new Error("SecurityError");
+    });
+    const store = createTerminalStore({
+      socket,
+      sessionFullName: "proj__a",
+      sessionLabel: "a",
+      wait: () => Promise.resolve(),
+    });
+
+    socket.emit("close", 1006);
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // The throwing attempt must not leave the store stuck with no scheduled
+    // follow-up -- it re-enters the backoff instead.
+    expect(store.state.phase).toBe("reconnecting");
+    expect(socket.connect.mock.calls.length).toBeGreaterThan(2);
+  });
+});
+
+// Drives the watchdog interval and the page-lifecycle events by hand.
+function harness() {
+  const socket = fakeSocket();
+  let tick: (() => void) | null = null;
+  let intervalCleared = false;
+  let visibilityHandler: ((visible: boolean) => void) | null = null;
+  let onlineHandler: (() => void) | null = null;
+  let visibilityDetached = false;
+  let onlineDetached = false;
+  let clock = 1_000_000;
+
+  const store = createTerminalStore({
+    socket,
+    sessionFullName: "proj__a",
+    sessionLabel: "a",
+    now: () => clock,
+    wait: () => Promise.resolve(),
+    setIntervalFn: (callback) => {
+      tick = callback;
+      return "watchdog";
+    },
+    clearIntervalFn: (handle) => {
+      expect(handle).toBe("watchdog");
+      intervalCleared = true;
+    },
+    onVisibilityChange: (handler) => {
+      visibilityHandler = handler;
+      return () => {
+        visibilityDetached = true;
+      };
+    },
+    onOnline: (handler) => {
+      onlineHandler = handler;
+      return () => {
+        onlineDetached = true;
+      };
+    },
+  });
+
+  return {
+    socket,
+    store,
+    advance: (ms: number) => {
+      clock += ms;
+    },
+    fireWatchdog: () => tick?.(),
+    setVisible: (visible: boolean) => visibilityHandler?.(visible),
+    fireOnline: () => onlineHandler?.(),
+    get intervalCleared() {
+      return intervalCleared;
+    },
+    get detached() {
+      return visibilityDetached && onlineDetached;
+    },
+  };
+}
+
+// The server spawns every pty at 80x24 (src/main.ts) and TerminalView only
+// reports a size when it changes -- which it does not across a reconnect,
+// because the view is never remounted. Without replaying the size here the
+// pane silently shrank to 80x24 on every reconnect.
+describe("createTerminalStore size replay", () => {
+  it("replays the last reported size whenever the socket opens", () => {
+    const h = harness();
+
+    h.store.onResize(120, 40);
+    expect(h.socket.sendResize).toHaveBeenCalledWith(120, 40);
+
+    h.socket.sendResize.mockClear();
+    h.socket.emit("open");
+
+    expect(h.socket.sendResize).toHaveBeenCalledWith(120, 40);
+  });
+
+  it("sends no resize on open before any size has been reported", () => {
+    const h = harness();
+
+    h.socket.emit("open");
+
+    expect(h.socket.sendResize).not.toHaveBeenCalled();
+  });
+});
+
+// A half-open socket still reports readyState OPEN, so `close` never fires
+// and the ordinary backoff never starts. These cover the inference that
+// replaces the ping/pong the browser will not give us.
+describe("createTerminalStore staleness watchdog", () => {
+  it("reconnects when a keystroke goes unanswered past the threshold", () => {
+    const h = harness();
+    h.socket.connect.mockClear();
+
+    h.store.onInput("ls");
+    h.advance(6000);
+    h.fireWatchdog();
+
+    expect(h.socket.connect).toHaveBeenCalledWith("proj__a", 0);
+    expect(h.store.state.phase).toBe("reconnecting");
+  });
+
+  it("does not reconnect while the keystroke is still within the threshold", () => {
+    const h = harness();
+    h.socket.connect.mockClear();
+
+    h.store.onInput("ls");
+    h.advance(3000);
+    h.fireWatchdog();
+
+    expect(h.socket.connect).not.toHaveBeenCalled();
+    expect(h.store.state.phase).toBe("connected");
+  });
+
+  it("does not reconnect when the server answered the keystroke", () => {
+    const h = harness();
+    h.socket.connect.mockClear();
+
+    h.store.onInput("ls");
+    h.advance(10);
+    h.socket.emit("data", "ls\r\n");
+    h.advance(60_000);
+    h.fireWatchdog();
+
+    expect(h.socket.connect).not.toHaveBeenCalled();
+  });
+
+  it("leaves an idle session alone no matter how long it stays silent", () => {
+    const h = harness();
+    h.socket.connect.mockClear();
+
+    h.advance(3_600_000);
+    h.fireWatchdog();
+
+    expect(h.socket.connect).not.toHaveBeenCalled();
+  });
+
+  it("does not fire a second probe for the same unanswered keystroke", () => {
+    const h = harness();
+    h.socket.connect.mockClear();
+
+    h.store.onInput("ls");
+    h.advance(6000);
+    h.fireWatchdog();
+    h.socket.connect.mockClear();
+    h.advance(6000);
+    h.fireWatchdog();
+
+    // Still "reconnecting" from the first probe -- the backoff owns it now.
+    expect(h.socket.connect).not.toHaveBeenCalled();
+  });
+});
+
+describe("createTerminalStore resume handling", () => {
+  it("reconnects when the page returns after a long absence", () => {
+    const h = harness();
+    h.socket.connect.mockClear();
+
+    h.setVisible(false);
+    h.advance(120_000);
+    h.setVisible(true);
+
+    expect(h.socket.connect).toHaveBeenCalledWith("proj__a", 0);
+  });
+
+  it("does not reconnect after a brief tab switch", () => {
+    const h = harness();
+    h.socket.connect.mockClear();
+
+    h.setVisible(false);
+    h.advance(1500);
+    h.setVisible(true);
+
+    expect(h.socket.connect).not.toHaveBeenCalled();
+    expect(h.store.state.phase).toBe("connected");
+  });
+
+  it("reconnects when the browser comes back online", () => {
+    const h = harness();
+    h.socket.connect.mockClear();
+
+    h.fireOnline();
+
+    expect(h.socket.connect).toHaveBeenCalledWith("proj__a", 0);
+  });
+
+  it("never reconnects a session tmux has already destroyed", async () => {
+    const h = harness();
+    h.socket.emit("close", SESSION_ENDED_CLOSE_CODE);
+    await Promise.resolve();
+    h.socket.connect.mockClear();
+
+    h.fireOnline();
+    h.setVisible(false);
+    h.advance(120_000);
+    h.setVisible(true);
+
+    expect(h.socket.connect).not.toHaveBeenCalled();
+    expect(h.store.state.phase).toBe("ended");
+  });
+
+  it("stops the watchdog and detaches lifecycle listeners on dispose", () => {
+    const h = harness();
+
+    h.store.dispose();
+
+    expect(h.intervalCleared).toBe(true);
+    expect(h.detached).toBe(true);
+
+    h.socket.connect.mockClear();
+    h.fireOnline();
+    expect(h.socket.connect).not.toHaveBeenCalled();
+  });
 });

@@ -28,7 +28,6 @@ export interface TerminalKeydownState {
   terminal: () => TerminalLike | null;
   searchAddon: () => SearchAddonLike | null;
   fontSize: () => number;
-  takeCapturedSelectionText: () => string | null;
 }
 
 export interface TerminalKeydownCallbacks {
@@ -72,12 +71,16 @@ function performCopy(term: TerminalLike, text: string, container: HTMLElement): 
  * something to copy; with nothing to copy it's left alone so it still sends
  * SIGINT to the shell, matching every other terminal.
  *
- * `takeCapturedSelectionText` is the fallback source when xterm has no
- * local selection of its own: an Option-drag no longer produces one (see
- * optionDrag.ts) -- instead it's relayed from tmux's own paste buffer and
- * cached by the caller right after the drag ends.
+ * The only source of copy text is xterm's OWN selection. There used to be a
+ * fallback that relayed tmux's paste buffer when xterm had no selection,
+ * for Option-drags that fell through to tmux's mouse reporting -- but that
+ * only ever filled a buffer with `mouse on` in tmux.conf, and tmux defaults
+ * to `mouse off`. With mouse off it relayed a STALE buffer from some
+ * earlier copy, putting the wrong text on the clipboard. Option-drag now
+ * makes a real local selection instead (macOptionClickForcesSelection, see
+ * xterm.ts), so there is nothing left to fall back to.
  */
-function handleCopyKeyDown(keyEvent: KeyboardEvent, terminal: TerminalLike | null, state: TerminalKeydownState, container: HTMLElement): void {
+function handleCopyKeyDown(keyEvent: KeyboardEvent, terminal: TerminalLike | null, container: HTMLElement): void {
   const isCopy = isCopyShortcut({
     type: keyEvent.type,
     metaKey: keyEvent.metaKey,
@@ -87,7 +90,7 @@ function handleCopyKeyDown(keyEvent: KeyboardEvent, terminal: TerminalLike | nul
   });
   if (!terminal || !isCopy) return;
 
-  const selectionText = terminal.hasSelection() ? terminal.getSelection() : state.takeCapturedSelectionText();
+  const selectionText = terminal.hasSelection() ? terminal.getSelection() : null;
   if (selectionText !== null) {
     keyEvent.preventDefault();
     keyEvent.stopPropagation();
@@ -138,7 +141,7 @@ export function attachTerminalKeydownListeners(
       keyEvent.stopPropagation();
       return;
     }
-    handleCopyKeyDown(keyEvent, state.terminal(), state, container);
+    handleCopyKeyDown(keyEvent, state.terminal(), container);
   };
 
   const onBubbleKeyDown = (event: Event): void => {

@@ -19,12 +19,13 @@ import type { VirtualKeyName } from "../domain/virtualKeys";
 import { pressVirtualKey } from "./virtualKeys";
 import { accumulateScrollLines } from "../domain/terminalScroll";
 import { attachTerminalKeydownListeners } from "./keydownHandlers";
-import { hideCopyToast } from "./clipboardDom";
+import { copyTextToClipboard, hideCopyToast, showCopyToast } from "./clipboardDom";
 import { applySelectionMode, clearContainerSelection, copySelectionToClipboard } from "./selectionMode";
-import { attachOptionDragCaptureListener } from "./optionDrag";
 import { hideSearchBar } from "./searchBarDom";
 import { attachTouchScroll } from "./touchScroll";
 import { attachWheelScroll } from "./wheelScroll";
+import { dispatchWheelNotches } from "./syntheticWheel";
+import { decodeOsc52, OSC_52_IDENT } from "./osc52";
 import type { FitAddonLike, SearchAddonLike, TerminalLike } from "./types";
 import { createXtermFitAddon, createXtermSearchAddon, createXtermTerminal } from "./xterm";
 import { DEFAULT_FONT_SIZE } from "./zoom";
@@ -68,7 +69,6 @@ export interface TerminalViewProps {
   // selectionMode.ts for why this has to be an explicit mode rather than
   // something always available.
   isSelecting?: boolean;
-  captureSelection: () => Promise<string | null>;
   createTerminal?: () => TerminalLike;
   createFitAddon?: () => FitAddonLike;
   createSearchAddon?: () => SearchAddonLike;
@@ -80,7 +80,6 @@ export function TerminalView(props: TerminalViewProps) {
   let fitAddon: FitAddonLike | null = null;
   let searchAddon: SearchAddonLike | null = null;
   let fontSize = DEFAULT_FONT_SIZE;
-  let capturedSelectionText: string | null = null;
   let lastCols = 0;
   let lastRows = 0;
   let touchScrollCarry = 0;
@@ -89,7 +88,6 @@ export function TerminalView(props: TerminalViewProps) {
   let detachKeydown: (() => void) | undefined;
   let detachTouchScroll: (() => void) | undefined;
   let detachWheelScroll: (() => void) | undefined;
-  let detachOptionDrag: (() => void) | undefined;
 
   const reportResizeIfChanged = (term: TerminalLike): void => {
     if (term.cols !== lastCols || term.rows !== lastRows) {
@@ -118,6 +116,21 @@ export function TerminalView(props: TerminalViewProps) {
     created.open(container);
     created.onData((data) => props.onInput(data));
     created.onBell(() => props.onBell());
+
+    // Copying from inside a full-screen app (Claude Code's own copy, vim's
+    // "+y) reaches the terminal as OSC 52, which xterm.js parses but has no
+    // handler for -- so it was silently dropped and nothing landed on the
+    // clipboard. tmux forwards it here rather than keeping it (its
+    // `set-clipboard` default is `external`), so this is the only place it
+    // can be honoured. Returning true marks the sequence as handled.
+    created.parser.registerOscHandler(OSC_52_IDENT, (payload) => {
+      const text = decodeOsc52(payload);
+      if (text === null) return true;
+      void copyTextToClipboard(text).then((success) => {
+        showCopyToast(container, success ? "Copied" : "Copy failed", success, success ? 1200 : 0);
+      });
+      return true;
+    });
 
     terminal = created;
     fitAddon = addon;
@@ -159,11 +172,6 @@ export function TerminalView(props: TerminalViewProps) {
         terminal: () => terminal,
         searchAddon: () => searchAddon,
         fontSize: () => fontSize,
-        takeCapturedSelectionText: () => {
-          const text = capturedSelectionText;
-          capturedSelectionText = null;
-          return text;
-        },
       },
       {
         onZoomApplied: (nextSize) => {
@@ -174,21 +182,38 @@ export function TerminalView(props: TerminalViewProps) {
       },
     );
 
+    // True while the foreground app asked for mouse events itself -- see
+    // wheelScroll.ts. Such an app draws its own scrollable view and, on the
+    // alternate screen, leaves tmux with no scrollback to offer, so the
+    // gesture has to reach the app instead of tmux copy-mode.
+    const usesAppMouse = (): boolean => terminal !== null && terminal.modes.mouseTrackingMode !== "none";
+
     // Folds a pixel delta (already in accumulateScrollLines' "positive =
-    // down" convention) into whole tmux scroll lines and reports it.
+    // down" convention) into whole scroll lines and hands them to [emit].
     // Touch and wheel keep SEPARATE carry accumulators: a wheel has no
     // gesture-start event to reset on, so sharing one let a leftover
     // sub-line fraction from one input device bias the first line count of
     // the other on a hybrid touchscreen+trackpad machine.
-    const reportScrollPixels = (deltaPx: number, carry: number, setCarry: (next: number) => void): void => {
+    const foldScrollPixels = (
+      deltaPx: number,
+      carry: number,
+      setCarry: (next: number) => void,
+      emit: (lines: number, pixelsPerLine: number) => void,
+    ): void => {
       const rows = terminal?.rows ?? 0;
       const pixelsPerLine = rows > 0 ? container.clientHeight / rows : 0;
       const result = accumulateScrollLines(deltaPx, pixelsPerLine, carry);
       setCarry(result.carry);
-      if (result.lines !== 0) {
-        const direction: ScrollDirection = result.lines < 0 ? "up" : "down";
-        props.onScroll(direction, Math.abs(result.lines));
-      }
+      if (result.lines !== 0) emit(result.lines, pixelsPerLine);
+    };
+
+    const emitTmuxScroll = (lines: number): void => {
+      const direction: ScrollDirection = lines < 0 ? "up" : "down";
+      props.onScroll(direction, Math.abs(lines));
+    };
+
+    const reportScrollPixels = (deltaPx: number, carry: number, setCarry: (next: number) => void): void => {
+      foldScrollPixels(deltaPx, carry, setCarry, (lines) => emitTmuxScroll(lines));
     };
 
     detachTouchScroll = attachTouchScroll(container, {
@@ -201,20 +226,37 @@ export function TerminalView(props: TerminalViewProps) {
       // Dragging DOWN reveals earlier output -- i.e. scrolls UP into
       // history -- so the raw finger delta is negated into
       // accumulateScrollLines' "positive = down" convention.
-      onDrag: (deltaY) => reportScrollPixels(-deltaY, touchScrollCarry, (next) => (touchScrollCarry = next)),
+      //
+      // Unlike the wheel path, simply not intercepting is NOT an option
+      // here: xterm.js does no touch->wheel translation, so letting the
+      // touchmove through would scroll nothing and hand iOS its rubber-band
+      // overscroll back. The gesture is manufactured into real wheel events
+      // instead (syntheticWheel.ts), which xterm then encodes for the app.
+      onDrag: (deltaY, point) =>
+        foldScrollPixels(
+          -deltaY,
+          touchScrollCarry,
+          (next) => (touchScrollCarry = next),
+          (lines, pixelsPerLine) => {
+            if (usesAppMouse()) {
+              const perNotch = lines < 0 ? -pixelsPerLine : pixelsPerLine;
+              // 0 means xterm has not rendered its screen element yet --
+              // fall through rather than swallowing the gesture.
+              if (dispatchWheelNotches(container, Math.abs(lines), perNotch, point) > 0) return;
+            }
+            emitTmuxScroll(lines);
+          },
+        ),
     });
 
     // A wheel's deltaY is already "positive = down", so unlike the touch
     // drag above it needs no negation. See wheelScroll.ts for why this is
-    // handled here at all rather than left to xterm.js/tmux.
+    // handled here at all rather than left to xterm.js/tmux -- and why an
+    // app that turned mouse tracking on is the one case we must NOT take it
+    // from, which is what isEnabled below decides.
     detachWheelScroll = attachWheelScroll(container, {
+      isEnabled: () => (terminal ? terminal.modes.mouseTrackingMode === "none" : true),
       onWheel: (deltaPx) => reportScrollPixels(deltaPx, wheelScrollCarry, (next) => (wheelScrollCarry = next)),
-    });
-
-    detachOptionDrag = attachOptionDragCaptureListener(container, () => {
-      void props.captureSelection().then((text) => {
-        capturedSelectionText = text;
-      });
     });
   });
 
@@ -222,7 +264,6 @@ export function TerminalView(props: TerminalViewProps) {
     detachKeydown?.();
     detachTouchScroll?.();
     detachWheelScroll?.();
-    detachOptionDrag?.();
     resizeObserver?.disconnect();
     terminal?.dispose();
   });

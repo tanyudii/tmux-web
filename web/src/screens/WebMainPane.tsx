@@ -220,7 +220,6 @@ function SessionPane(props: WebMainPaneProps & { project: Project; session: Proj
             onReady={terminal.onReady}
             isVisible={terminalVisible()}
             onScroll={terminal.onScroll}
-            captureSelection={() => props.api.getPasteBuffer(props.projectId, props.session.name).catch(() => null)}
             createTerminal={props.createTerminal}
             createFitAddon={props.createFitAddon}
             createSearchAddon={props.createSearchAddon}
