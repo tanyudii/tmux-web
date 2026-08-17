@@ -19,6 +19,7 @@ export interface EnvironmentMenuProps {
   isBusy: boolean;
   onRun: () => void;
   onStop: () => void;
+  onReload: (rebuild: boolean, service?: string) => void;
   onCancel: () => void;
   onEditConfig: () => void;
   onViewLogs: (service: string) => void;
@@ -85,6 +86,30 @@ function StopIcon() {
   );
 }
 
+function RebuildIcon() {
+  return (
+    <svg width="13" height="13" viewBox="0 0 13 13" fill="none" aria-hidden="true">
+      <path d="M2 8.2l5.4-5.4a1.6 1.6 0 012.3 0l.5.5a1.6 1.6 0 010 2.3L4.8 11" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" />
+      <path d="M4.6 3.6l2 2M7.6 6.6l2 2" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" />
+      <path d="M2 11h3.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" />
+    </svg>
+  );
+}
+
+function ReloadIcon() {
+  return (
+    <svg width="13" height="13" viewBox="0 0 13 13" fill="none" aria-hidden="true">
+      <path
+        d="M11 6.5A4.5 4.5 0 1 1 6.5 2c1.6 0 3 .8 3.8 2"
+        stroke="currentColor"
+        stroke-width="1.2"
+        stroke-linecap="round"
+      />
+      <path d="M10.6 1v3h-3" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round" />
+    </svg>
+  );
+}
+
 function EditIcon() {
   return (
     <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
@@ -116,7 +141,13 @@ function openInNewTab(url: string): void {
   window.open(url, "_blank", "noopener,noreferrer");
 }
 
-function ServiceRow(props: { service: ComposeServiceStatus; openLink?: EnvOpenLink; onOpen: () => void; onViewLogs: () => void }) {
+function ServiceRow(props: {
+  service: ComposeServiceStatus;
+  openLink?: EnvOpenLink;
+  onOpen: () => void;
+  onViewLogs: () => void;
+  onReloadService: (rebuild: boolean) => void;
+}) {
   return (
     <div class="tw-env-menu__service-row">
       <span class="tw-env-menu__dot" data-tone={dotTone(props.service.state)} />
@@ -128,7 +159,19 @@ function ServiceRow(props: { service: ComposeServiceStatus; openLink?: EnvOpenLi
       >
         {props.service.service}
       </button>
-      <IconButton icon={<LogsIcon />} label={`View ${props.service.service} logs`} size="sm" onClick={props.onViewLogs} />
+      <div class="tw-env-menu__action-group">
+        <IconButton
+          icon={<ReloadIcon />}
+          label={`Reload ${props.service.service} (restart only)`}
+          onClick={() => props.onReloadService(false)}
+        />
+        <IconButton
+          icon={<RebuildIcon />}
+          label={`Rebuild ${props.service.service} (rebuild image)`}
+          onClick={() => props.onReloadService(true)}
+        />
+        <IconButton icon={<LogsIcon />} label={`View ${props.service.service} logs`} onClick={props.onViewLogs} />
+      </div>
       <Show when={props.openLink} fallback={<span class="tw-env-menu__service-state">{props.service.state}</span>}>
         <button type="button" class="tw-env-menu__open-link" aria-label={`Open ${props.service.service} in a new tab`} onClick={props.onOpen}>
           <ExternalLinkIcon />
@@ -231,6 +274,10 @@ export function EnvironmentMenu(props: EnvironmentMenuProps) {
                     setOpen(false);
                     props.onViewLogs(service().service);
                   }}
+                  onReloadService={(rebuild) => {
+                    setOpen(false);
+                    props.onReload(rebuild, service().service);
+                  }}
                 />
               )}
             </Index>
@@ -249,6 +296,30 @@ export function EnvironmentMenu(props: EnvironmentMenuProps) {
                 </button>
               )}
             </Index>
+            <button
+              type="button"
+              class="tw-env-menu__reload"
+              aria-label="Reload environment"
+              onClick={() => {
+                setOpen(false);
+                props.onReload(false);
+              }}
+            >
+              <ReloadIcon />
+              <span>Reload</span>
+            </button>
+            <button
+              type="button"
+              class="tw-env-menu__reload"
+              aria-label="Reload and rebuild environment"
+              onClick={() => {
+                setOpen(false);
+                props.onReload(true);
+              }}
+            >
+              <ReloadIcon />
+              <span>Reload w/ rebuild</span>
+            </button>
             <button
               type="button"
               class="tw-env-menu__stop"

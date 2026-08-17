@@ -176,6 +176,7 @@ function SessionPane(props: WebMainPaneProps & { project: Project; session: Proj
             isBusy={environment.state.isBusy}
             onRun={() => void environment.setup()}
             onStop={() => environment.requestStop()}
+            onReload={(rebuild, service) => void environment.reload(rebuild, service)}
             onCancel={() => void environment.cancel()}
             onEditConfig={handleEditConfig}
             onViewLogs={handleViewLogs}

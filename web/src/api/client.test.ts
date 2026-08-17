@@ -239,4 +239,20 @@ describe("createApiClient", () => {
     const [url] = fetchImpl.mock.calls[0];
     expect(url).toBe("http://vpn-host:5309/api/browse");
   });
+
+  // MARK: Env reload
+  test("reloadEnv posts {rebuild} to the env/reload endpoint", async () => {
+    fetchImpl.mockResolvedValue(emptyResponse(202));
+
+    await client().reloadEnv("p1", "my-branch", true);
+    await client().reloadEnv("p1", "my-branch", false, "web");
+
+    const [urlTrue, initTrue] = fetchImpl.mock.calls[0];
+    expect(initTrue.method).toBe("POST");
+    expect(urlTrue).toBe("http://vpn-host:5309/api/projects/p1/sessions/my-branch/env/reload");
+    expect(JSON.parse(fetchImpl.mock.calls[0][1].body)).toEqual({ rebuild: true });
+    expect(JSON.parse(fetchImpl.mock.calls[1][1].body)).toEqual({ rebuild: false, service: "web" });
+    expect(urlTrue).toContain("/env/reload");
+  });
+
 });

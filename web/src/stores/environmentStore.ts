@@ -25,7 +25,7 @@ export interface EnvironmentUiState {
 export interface EnvironmentStoreDeps {
   projectId: string;
   sessionSlug: string;
-  api: Pick<ApiClient, "getEnvStatus" | "startEnv" | "stopEnv" | "cancelEnv">;
+  api: Pick<ApiClient, "getEnvStatus" | "startEnv" | "stopEnv" | "cancelEnv" | "reloadEnv">;
   wait?: (ms: number) => Promise<void>;
 }
 
@@ -93,6 +93,18 @@ export function createEnvironmentStore(deps: EnvironmentStoreDeps) {
     }
   }
 
+  /** Reload = restart containers (rebuild:false) or re-run the full build lifecycle (rebuild:true). */
+  async function reload(rebuild: boolean, service?: string): Promise<void> {
+    setState({ isBusy: true });
+    try {
+      await api.reloadEnv(projectId, sessionSlug, rebuild, service);
+      await refresh();
+    } catch (error) {
+      setState({ errorMessage: toUiMessage(error) });
+    }
+    setState({ isBusy: false });
+  }
+
   function requestStop(): void {
     setState({ isShowingStopConfirm: true });
   }
@@ -134,6 +146,7 @@ export function createEnvironmentStore(deps: EnvironmentStoreDeps) {
     dispose,
     setup,
     cancel,
+    reload,
     requestStop,
     cancelStop,
     stop,

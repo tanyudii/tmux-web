@@ -303,6 +303,19 @@
   font-size: var(--text-sm);
 }
 
+/* Ctrl pad (QuickKeysBar's ctrl mode): eleven ctrl keys plus Done cannot fit
+   one 370px row at any size worth tapping (12 * 42 + 11 * 4 = 548px), so this
+   is the ONE mode allowed to wrap onto a second row. The trade is deliberate:
+   the extra ~48px of terminal height is paid only while the pad is held open,
+   and Done returns it -- a permanent second bar would cost the same height
+   forever, which is why the normal row stays squeezed to one row instead.
+   Wrapping (not a grid) reuses the key floor and gap rules as-is, so the
+   two rows land at 8 + 4 buttons with no mode-specific sizing to keep in
+   sync with the .tw-quick-keys__key comment above. */
+.tw-quick-keys--ctrl {
+  flex-wrap: wrap;
+}
+
 .tw-quick-keys__key--primary {
   border-color: var(--accent);
   color: var(--accent);
@@ -323,14 +336,14 @@
 }
 
 /* `flex: 1 1 auto` rather than a flat `flex: 1`: normal mode now carries
- * EIGHT controls (five control keys, the arrow toggle, Select, Paste). Split
- * into equal eighths every button gets the same 42.75px at a 390px viewport,
- * which is too narrow for the word "Select" and clips it. Sizing from content
- * instead lets the short labels (^C, ^B, ⇅) hand their slack to the
- * word-labelled ones -- measured live, Select ends up at 48px while the rest
- * sit at the 42px floor -- and flex-grow still fills the row. min-width keeps
- * the narrow glyph buttons finger-sized rather than letting them shrink to
- * fit their glyph. */
+ * EIGHT controls (four control keys, the arrow toggle, the ctrl toggle,
+ * Select, Paste). Split into equal eighths every button gets the same
+ * 42.75px at a 390px viewport, which is too narrow for the word "Select"
+ * and clips it. Sizing from content instead lets the short labels (^C, ^B,
+ * ⇅, ^) hand their slack to the word-labelled ones -- measured live, Select
+ * ends up at 48px while the rest sit at the 42px floor -- and flex-grow
+ * still fills the row. min-width keeps the narrow glyph buttons
+ * finger-sized rather than letting them shrink to fit their glyph. */
 .tw-quick-keys__key {
   flex: 1 1 auto;
   /* 42px, not 44: see the .tw-quick-keys gap comment above for why eight

@@ -596,6 +596,101 @@ describe("TerminalScreen arrow keys", () => {
   });
 });
 
+describe("TerminalScreen ctrl pad", () => {
+  afterEach(() => {
+    cleanup();
+  });
+
+  function renderScreen(createSocket: () => unknown = () => fakeSocket()) {
+    render(() => (
+      <TerminalScreen
+        api={fakeApi() as never}
+        baseUrl="https://tmux.example.com"
+        token="tok"
+        projectId="proj"
+        sessionFullName="proj__build"
+        sessionName="build"
+        projectName="my-project"
+        onBack={vi.fn()}
+        pushStore={fakePushStore()}
+        createSocket={createSocket as never}
+        createTerminal={fakeTerminal}
+        createFitAddon={fakeFitAddon}
+        createSearchAddon={fakeSearchAddon}
+      />
+    ));
+  }
+
+  it("swaps the control keys for the ctrl pad when the toggle is tapped", () => {
+    renderScreen();
+
+    fireEvent.click(screen.getByRole("button", { name: "Control keys" }));
+
+    expect(screen.getByRole("button", { name: "^A" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "^Z" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Esc" })).toBeNull();
+    // ^D moved here from the normal row when the ctrl pad took over its slot.
+    expect(screen.getByRole("button", { name: "^D" })).toBeInTheDocument();
+  });
+
+  it("sends a ctrl key's raw byte down the same input path as typing", () => {
+    const socket = fakeSocket();
+    renderScreen(() => socket);
+    fireEvent.click(screen.getByRole("button", { name: "Control keys" }));
+
+    fireEvent.click(screen.getByRole("button", { name: "^A" }));
+
+    expect(socket.sendInput).toHaveBeenCalledWith("\x01");
+  });
+
+  it("leaves ctrl mode on Done", () => {
+    renderScreen();
+    fireEvent.click(screen.getByRole("button", { name: "Control keys" }));
+
+    fireEvent.click(screen.getByRole("button", { name: "Done" }));
+
+    expect(screen.getByRole("button", { name: "^C" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "^A" })).toBeNull();
+  });
+
+  // Same row, same rule as the arrows/selecting pair: entering one mode
+  // must leave the others rather than stacking two rows.
+  it("entering ctrl mode leaves arrow mode", () => {
+    renderScreen();
+    fireEvent.click(screen.getByRole("button", { name: "Arrow keys" }));
+
+    fireEvent.click(screen.getByRole("button", { name: "Done" }));
+    fireEvent.click(screen.getByRole("button", { name: "Control keys" }));
+
+    expect(screen.getByRole("button", { name: "^A" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Up" })).toBeNull();
+  });
+
+  it("entering arrow mode leaves ctrl mode", () => {
+    renderScreen();
+    fireEvent.click(screen.getByRole("button", { name: "Control keys" }));
+    expect(screen.getByRole("button", { name: "^A" })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Done" }));
+    fireEvent.click(screen.getByRole("button", { name: "Arrow keys" }));
+
+    expect(screen.getByRole("button", { name: "Up" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "^A" })).toBeNull();
+  });
+
+  it("entering selection mode leaves ctrl mode", () => {
+    renderScreen();
+    fireEvent.click(screen.getByRole("button", { name: "Control keys" }));
+    expect(screen.getByRole("button", { name: "^A" })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Done" }));
+    fireEvent.click(screen.getByRole("button", { name: "Select" }));
+
+    expect(screen.getByRole("button", { name: "Copy" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "^A" })).toBeNull();
+  });
+});
+
 // Regression guard for a test that used to pass for the wrong reason: the
 // originals asserted only that the `tw-terminal--selecting` CSS class went
 // away, which is driven by the isSelecting signal and happens whether or not

@@ -14,12 +14,16 @@
 /**
  * How long a keystroke may go unanswered before the socket is presumed dead.
  *
- * tmux answers *any* keystroke with a redraw or at least a cursor move, so
- * "the user typed and nothing at all came back" is strong evidence. Held
- * deliberately above a human's patience for a busy TUI (a full-screen app
- * mid-render can be quiet for a beat) because the cost of a false positive
- * is one re-attach and redraw, while the cost of a miss is a terminal the
- * user has to reload the page to recover.
+ * A keystroke carrying printable characters is answered with at least an
+ * echo, so "the user typed and nothing at all came back" is strong evidence.
+ * (Control-only input is NOT such evidence -- tmux sends attached clients
+ * only screen diffs, so a no-op ^C/^A/^E on an idle pane legitimately draws
+ * zero reply bytes. stores/terminalStore.ts therefore only arms this probe
+ * for input matching its PRINTABLE_INPUT regex.) Held deliberately above a
+ * human's patience for a busy TUI (a full-screen app mid-render can be quiet
+ * for a beat) because the cost of a false positive is one re-attach and
+ * redraw, while the cost of a miss is a terminal the user has to reload the
+ * page to recover.
  */
 export const STALE_INPUT_THRESHOLD_MS = 5000;
 

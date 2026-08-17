@@ -91,6 +91,7 @@ function makeDeps(overrides: Partial<ServerDeps> = {}): ServerDeps {
     commitProjectSessionChanges: async () => {},
     getProjectSessionEnvStatus: async () => ({ phase: "unavailable" }),
     startProjectSessionEnv: async () => {},
+    reloadProjectSessionEnv: async () => {},
     stopProjectSessionEnv: async () => {},
     cancelProjectSessionEnv: async () => {},
     listProjectSessionEnvFiles: async () => [],
@@ -2164,5 +2165,91 @@ test("POST /api/projects/:id/sessions returns 400 when startupCommand is not a s
       body: JSON.stringify({ name: "feature-x", startupCommand: 42 }),
     });
     assert.equal(res.status, 400);
+  });
+});
+
+test("POST /api/projects/:id/sessions/:name/env/reload with rebuild=true reloads and rebuilds in the background", async () => {
+  const calls: { slug: string; rebuild: boolean }[] = [];
+  const deps = makeDeps({
+    reloadProjectSessionEnv: async (_project: Project, slug: string, rebuild: boolean) => {
+      calls.push({ slug, rebuild });
+    },
+  });
+  await withServer(deps, async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/projects/${SAMPLE_PROJECT.id}/sessions/feature-x/env/reload`, {
+      method: "POST",
+      headers: { ...authHeaders(), "content-type": "application/json" },
+      body: JSON.stringify({ rebuild: true }),
+    });
+    assert.equal(res.status, 202);
+    assert.deepEqual(calls, [{ slug: "feature-x", rebuild: true }]);
+  });
+});
+
+test("POST /api/projects/:id/sessions/:name/env/reload defaults rebuild to false with no body", async () => {
+  const calls: { slug: string; rebuild: boolean }[] = [];
+  const deps = makeDeps({
+    reloadProjectSessionEnv: async (_project: Project, slug: string, rebuild: boolean) => {
+      calls.push({ slug, rebuild });
+    },
+  });
+  await withServer(deps, async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/projects/${SAMPLE_PROJECT.id}/sessions/feature-x/env/reload`, {
+      method: "POST",
+      headers: authHeaders(),
+    });
+    assert.equal(res.status, 202);
+    assert.deepEqual(calls, [{ slug: "feature-x", rebuild: false }]);
+  });
+});
+
+test("POST /api/projects/:id/sessions/:name/env/reload returns 409 when a lifecycle is already in flight", async () => {
+  const deps = makeDeps({
+    reloadProjectSessionEnv: async () => {
+      throw new EnvAlreadyRunningError("already starting");
+    },
+  });
+  await withServer(deps, async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/projects/${SAMPLE_PROJECT.id}/sessions/feature-x/env/reload`, {
+      method: "POST",
+      headers: authHeaders(),
+    });
+    assert.equal(res.status, 409);
+  });
+});
+
+test("POST /api/projects/:id/sessions/:name/env/reload forwards the service to a per-service reload", async () => {
+  const calls: { slug: string; rebuild: boolean; service?: string }[] = [];
+  const deps = makeDeps({
+    reloadProjectSessionEnv: async (_project: Project, slug: string, rebuild: boolean, service?: string) => {
+      calls.push({ slug, rebuild, service });
+    },
+  });
+  await withServer(deps, async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/projects/${SAMPLE_PROJECT.id}/sessions/feature-x/env/reload`, {
+      method: "POST",
+      headers: { ...authHeaders(), "content-type": "application/json" },
+      body: JSON.stringify({ rebuild: true, service: "web" }),
+    });
+    assert.equal(res.status, 202);
+    assert.deepEqual(calls, [{ slug: "feature-x", rebuild: true, service: "web" }]);
+  });
+});
+
+test("POST /api/projects/:id/sessions/:name/env/reload ignores a non-string service", async () => {
+  const calls: { rebuild: boolean; service?: string }[] = [];
+  const deps = makeDeps({
+    reloadProjectSessionEnv: async (_project: Project, _slug: string, rebuild: boolean, service?: string) => {
+      calls.push({ rebuild, service });
+    },
+  });
+  await withServer(deps, async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/projects/${SAMPLE_PROJECT.id}/sessions/feature-x/env/reload`, {
+      method: "POST",
+      headers: { ...authHeaders(), "content-type": "application/json" },
+      body: JSON.stringify({ rebuild: false, service: 42 }),
+    });
+    assert.equal(res.status, 202);
+    assert.deepEqual(calls, [{ rebuild: false, service: undefined }]);
   });
 });

@@ -12,6 +12,7 @@ function fakeApi(overrides: Record<string, unknown> = {}) {
     startEnv: vi.fn().mockResolvedValue(undefined),
     stopEnv: vi.fn().mockResolvedValue(undefined),
     cancelEnv: vi.fn().mockResolvedValue(undefined),
+    reloadEnv: vi.fn().mockResolvedValue(undefined),
     ...overrides,
   };
 }
@@ -152,4 +153,43 @@ describe("createEnvironmentStore", () => {
 
     expect(store.state.errorMessage).toBeNull();
   });
+});
+
+describe("createEnvironmentStore reload", () => {
+  it("reload(rebuild) calls api.reloadEnv, gates isBusy, and refreshes", async () => {
+    const api = fakeApi({
+      reloadEnv: vi.fn().mockResolvedValue(undefined),
+      getEnvStatus: vi.fn().mockResolvedValue(RUNNING),
+    });
+    const store = createEnvironmentStore({ projectId: "p", sessionSlug: "s", api });
+
+    expect(store.state.isBusy).toBe(false);
+    await store.reload(true);
+
+    expect(api.reloadEnv).toHaveBeenCalledWith("p", "s", true, undefined);
+    expect(store.state.isBusy).toBe(false);
+    expect(store.state.status).toEqual(RUNNING);
+  });
+
+  it("reload surfaces an error message instead of throwing", async () => {
+    const api = fakeApi({
+      reloadEnv: vi.fn().mockRejectedValue(new Error("docker daemon down")),
+    });
+    const store = createEnvironmentStore({ projectId: "p", sessionSlug: "s", api });
+
+    await store.reload(false);
+
+    expect(store.state.errorMessage).toMatch(/docker daemon down/);
+    expect(store.state.isBusy).toBe(false);
+  });
+
+  it("reload with a service forwards it to api.reloadEnv", async () => {
+    const api = fakeApi({ reloadEnv: vi.fn().mockResolvedValue(undefined) });
+    const store = createEnvironmentStore({ projectId: "p", sessionSlug: "s", api });
+
+    await store.reload(true, "api");
+
+    expect(api.reloadEnv).toHaveBeenCalledWith("p", "s", true, "api");
+  });
+
 });

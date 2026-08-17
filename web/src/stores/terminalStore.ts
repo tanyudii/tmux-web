@@ -21,6 +21,16 @@ const RECONNECT_MAX_DELAY_MS = 10000;
  */
 const WATCHDOG_TICK_MS = 2000;
 
+/**
+ * Input that carries at least one printable character. Control-only input
+ * (quick-key ^C/^A/^E, real-keyboard Ctrl combos, bare Esc) is excluded from
+ * arming the staleness watchdog: tmux sends attached clients only screen
+ * diffs, so a keystroke that doesn't change the screen legitimately draws
+ * zero reply bytes, and treating that silence as a dead socket reconnects a
+ * healthy connection (tap ^C on an idle prompt -> "Reconnecting…" 5s later).
+ */
+const PRINTABLE_INPUT = /[^\x00-\x1f\x7f]/;
+
 // "ended" is terminal in both senses: the tmux session no longer exists, so
 // unlike "disconnected" (which a Retry can still recover) there is nothing to
 // reconnect to. Kept separate rather than reusing "disconnected" so the UI can
@@ -217,7 +227,8 @@ export function createTerminalStore(deps: TerminalStoreDeps) {
   }
 
   function onInput(data: string): void {
-    lastInputAt = now();
+    // Only printable input arms the staleness watchdog -- see PRINTABLE_INPUT.
+    if (PRINTABLE_INPUT.test(data)) lastInputAt = now();
     socket.sendInput(data);
   }
 

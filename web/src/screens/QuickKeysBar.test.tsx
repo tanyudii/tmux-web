@@ -8,7 +8,10 @@ describe("QuickKeysBar", () => {
     cleanup();
   });
 
-  it("renders all five quick keys and sends the right raw sequence for each", () => {
+  // ^D lives in the ctrl pad now, not here -- the normal row's eight slots
+  // belong to the keys a phone shell needs on every screen, and ^D (EOF on an
+  // empty prompt) lost its slot to the ctrl pad's own toggle.
+  it("renders the always-visible quick keys and sends the right raw sequence for each", () => {
     const onKeyTap = vi.fn();
     render(() => <QuickKeysBar onKeyTap={onKeyTap} />);
 
@@ -16,13 +19,12 @@ describe("QuickKeysBar", () => {
     fireEvent.click(screen.getByRole("button", { name: "Tab" }));
     fireEvent.click(screen.getByRole("button", { name: "^C" }));
     fireEvent.click(screen.getByRole("button", { name: "^B" }));
-    fireEvent.click(screen.getByRole("button", { name: "^D" }));
 
     expect(onKeyTap).toHaveBeenNthCalledWith(1, "\x1b");
     expect(onKeyTap).toHaveBeenNthCalledWith(2, "\t");
     expect(onKeyTap).toHaveBeenNthCalledWith(3, "\x03");
     expect(onKeyTap).toHaveBeenNthCalledWith(4, "\x02");
-    expect(onKeyTap).toHaveBeenNthCalledWith(5, "\x04");
+    expect(screen.queryByRole("button", { name: "^D" })).toBeNull();
   });
 });
 
@@ -220,5 +222,130 @@ describe("QuickKeysBar arrow mode", () => {
     render(() => <QuickKeysBar onKeyTap={vi.fn()} />);
 
     expect(screen.queryByRole("button", { name: "Arrow keys" })).toBeNull();
+  });
+});
+
+describe("QuickKeysBar ctrl mode", () => {
+  afterEach(() => {
+    cleanup();
+  });
+
+  function renderBar(overrides: Partial<Parameters<typeof QuickKeysBar>[0]> = {}) {
+    const props = {
+      onKeyTap: vi.fn(),
+      isSelecting: false,
+      onToggleSelecting: vi.fn(),
+      onCopy: vi.fn(),
+      onClearSelection: vi.fn(),
+      onPaste: vi.fn(),
+      isArrowMode: false,
+      onToggleArrows: vi.fn(),
+      onPressKey: vi.fn(),
+      isCtrlMode: false,
+      onToggleCtrl: vi.fn(),
+      ...overrides,
+    };
+    render(() => <QuickKeysBar {...props} />);
+    return props;
+  }
+
+  it("offers a ctrl toggle in the normal row", () => {
+    renderBar();
+
+    expect(screen.getByRole("button", { name: "Control keys" })).toBeInTheDocument();
+  });
+
+  it("enters ctrl mode from the toggle", () => {
+    const props = renderBar();
+
+    fireEvent.click(screen.getByRole("button", { name: "Control keys" }));
+
+    expect(props.onToggleCtrl).toHaveBeenCalledExactlyOnceWith(true);
+  });
+
+  it("marks the ctrl toggle aria-pressed=false in the normal row", () => {
+    renderBar();
+
+    expect(screen.getByRole("button", { name: "Control keys" })).toHaveAttribute("aria-pressed", "false");
+  });
+
+  // Same reasoning as arrow mode: a stray Esc/Tab while picking a ctrl key
+  // sends bytes meant for the shell, so the whole row is replaced.
+  it("replaces the control keys with the ctrl pad while in ctrl mode", () => {
+    renderBar({ isCtrlMode: true });
+
+    expect(screen.queryByRole("button", { name: "Esc" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Tab" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Arrow keys" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Select" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Paste" })).toBeNull();
+  });
+
+  it("sends the right raw byte for every key in the ctrl pad", () => {
+    const onKeyTap = vi.fn();
+    renderBar({ isCtrlMode: true, onKeyTap });
+
+    const expected: [string, string][] = [
+      ["^A", "\x01"],
+      ["^B", "\x02"],
+      ["^C", "\x03"],
+      ["^D", "\x04"],
+      ["^E", "\x05"],
+      ["^K", "\x0b"],
+      ["^L", "\x0c"],
+      ["^R", "\x12"],
+      ["^U", "\x15"],
+      ["^W", "\x17"],
+      ["^Z", "\x1a"],
+    ];
+    for (const [label] of expected) {
+      fireEvent.click(screen.getByRole("button", { name: label }));
+    }
+
+    expect(onKeyTap.mock.calls.map(([sequence]) => sequence)).toEqual(expected.map(([, sequence]) => sequence));
+  });
+
+  it("stays in ctrl mode after tapping a ctrl key (unlike the one-shot normal keys)", () => {
+    const props = renderBar({ isCtrlMode: true });
+
+    fireEvent.click(screen.getByRole("button", { name: "^A" }));
+
+    expect(props.onToggleCtrl).not.toHaveBeenCalled();
+  });
+
+  it("leaves ctrl mode from Done", () => {
+    const props = renderBar({ isCtrlMode: true });
+
+    fireEvent.click(screen.getByRole("button", { name: "Done" }));
+
+    expect(props.onToggleCtrl).toHaveBeenCalledExactlyOnceWith(false);
+  });
+
+  it("marks Done aria-pressed=true while in ctrl mode", () => {
+    renderBar({ isCtrlMode: true });
+
+    expect(screen.getByRole("button", { name: "Done" })).toHaveAttribute("aria-pressed", "true");
+  });
+
+  // Selection wins over every other mode, same guard as arrows: two mode
+  // rows stacked on top of each other would leave one unreachable.
+  it("shows the selection controls, not the ctrl pad, when selecting and ctrl flags are both set", () => {
+    renderBar({ isCtrlMode: true, isSelecting: true });
+
+    expect(screen.getByRole("button", { name: "Copy" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "^A" })).toBeNull();
+  });
+
+  it("shows the arrow pad, not the ctrl pad, when both flags are somehow set", () => {
+    renderBar({ isCtrlMode: true, isArrowMode: true });
+
+    expect(screen.getByRole("button", { name: "Up" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "^A" })).toBeNull();
+  });
+
+  it("renders no ctrl toggle when the handler is not wired", () => {
+    render(() => <QuickKeysBar onKeyTap={vi.fn()} />);
+
+    expect(screen.queryByRole("button", { name: "Control keys" })).toBeNull();
   });
 });

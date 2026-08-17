@@ -28,6 +28,7 @@ describe("EnvironmentMenu", () => {
         isBusy={false}
         onRun={noop}
         onStop={noop}
+        onReload={noop}
         onCancel={noop}
         onEditConfig={noop}
         onViewLogs={noop}
@@ -44,6 +45,7 @@ describe("EnvironmentMenu", () => {
         isBusy={false}
         onRun={noop}
         onStop={noop}
+        onReload={noop}
         onCancel={noop}
         onEditConfig={noop}
         onViewLogs={noop}
@@ -62,6 +64,7 @@ describe("EnvironmentMenu", () => {
         isBusy={false}
         onRun={onRun}
         onStop={noop}
+        onReload={noop}
         onCancel={noop}
         onEditConfig={onEditConfig}
         onViewLogs={noop}
@@ -84,6 +87,7 @@ describe("EnvironmentMenu", () => {
         isBusy={false}
         onRun={noop}
         onStop={noop}
+        onReload={noop}
         onCancel={onCancel}
         onEditConfig={noop}
         onViewLogs={noop}
@@ -102,6 +106,7 @@ describe("EnvironmentMenu", () => {
         isBusy={true}
         onRun={noop}
         onStop={noop}
+        onReload={noop}
         onCancel={noop}
         onEditConfig={noop}
         onViewLogs={noop}
@@ -120,6 +125,7 @@ describe("EnvironmentMenu", () => {
         isBusy={false}
         onRun={noop}
         onStop={noop}
+        onReload={noop}
         onCancel={noop}
         onEditConfig={noop}
         onViewLogs={noop}
@@ -147,6 +153,7 @@ describe("EnvironmentMenu", () => {
         isBusy={false}
         onRun={noop}
         onStop={noop}
+        onReload={noop}
         onCancel={noop}
         onEditConfig={noop}
         onViewLogs={onViewLogs}
@@ -168,6 +175,7 @@ describe("EnvironmentMenu", () => {
         isBusy={false}
         onRun={noop}
         onStop={noop}
+        onReload={noop}
         onCancel={noop}
         onEditConfig={noop}
         onViewLogs={noop}
@@ -189,6 +197,7 @@ describe("EnvironmentMenu", () => {
         isBusy={false}
         onRun={noop}
         onStop={onStop}
+        onReload={noop}
         onCancel={noop}
         onEditConfig={noop}
         onViewLogs={noop}
@@ -211,6 +220,7 @@ describe("EnvironmentMenu", () => {
           isBusy={false}
           onRun={noop}
           onStop={noop}
+        onReload={noop}
           onCancel={noop}
           onEditConfig={noop}
           onViewLogs={noop}
@@ -224,4 +234,56 @@ describe("EnvironmentMenu", () => {
 
     expect(screen.queryByText("Server running")).toBeNull();
   });
+
+  it("running: dropdown offers Reload and Reload with rebuild, wiring onReload(rebuild)", async () => {
+    const onReload = vi.fn();
+    render(() => (
+      <EnvironmentMenu
+        status={{ phase: "running", services: [{ service: "web", state: "running" }] }}
+        isBusy={false}
+        onRun={noop}
+        onStop={noop}
+        onReload={onReload}
+        onCancel={noop}
+        onEditConfig={noop}
+        onViewLogs={noop}
+      />
+    ));
+
+    fireEvent.click(document.querySelector(".tw-env-menu__toggle") as HTMLButtonElement);
+
+    fireEvent.click(screen.getByRole("button", { name: /reload environment/i }));
+    expect(onReload).toHaveBeenNthCalledWith(1, false);
+
+    // Clicking a menu item closes the dropdown -- reopen for the second one.
+    fireEvent.click(document.querySelector(".tw-env-menu__toggle") as HTMLButtonElement);
+    fireEvent.click(screen.getByRole("button", { name: /reload and rebuild/i }));
+    expect(onReload).toHaveBeenNthCalledWith(2, true);
+  });
+
+
+  it("running: per-service reload/rebuild buttons wire onReload with the service name", () => {
+    const onReload = vi.fn();
+    render(() => (
+      <EnvironmentMenu
+        status={{ phase: "running", services: [{ service: "api", state: "running" }] }}
+        isBusy={false}
+        onRun={noop}
+        onStop={noop}
+        onReload={onReload}
+        onCancel={noop}
+        onEditConfig={noop}
+        onViewLogs={noop}
+      />
+    ));
+
+    fireEvent.click(document.querySelector(".tw-env-menu__toggle") as HTMLButtonElement);
+    fireEvent.click(screen.getByRole("button", { name: /Reload api \(restart only\)/i }));
+    expect(onReload).toHaveBeenCalledWith(false, "api");
+
+    fireEvent.click(document.querySelector(".tw-env-menu__toggle") as HTMLButtonElement);
+    fireEvent.click(screen.getByRole("button", { name: /Rebuild api \(rebuild image\)/i }));
+    expect(onReload).toHaveBeenCalledWith(true, "api");
+  });
+
 });
