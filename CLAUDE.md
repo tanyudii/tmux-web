@@ -205,6 +205,32 @@ reliably single-invocation. This is the same one-time bootstrap gap any
 self-updating CLI has for a fix to its own update mechanism -- there's no
 way to retroactively patch code that hasn't been fetched yet.
 
+## The systemd unit must use `KillMode=process`, or every restart kills all tmux sessions
+
+tmux-web talks to the user's tmux over the default socket; the tmux *server*
+gets daemonized by the first session tmux-web creates. Daemonizing escapes
+the parent *process*, but never the cgroup -- so that tmux server ends up
+living inside `tmux-web.service`'s cgroup (verified live: the server process
+spawned by `tmux new-session -d` sits at
+`.../user@1000.service/app.slice/tmux-web.service`). systemd's default
+`KillMode=control-group` then SIGTERMs every process in the cgroup on
+`systemctl --user restart tmux-web` -- which `tmuxweb upgrade`'s
+`ensureServiceRunning()` does -- and the tmux server exits on SIGTERM,
+taking every user session with it. That was the "all my sessions vanished
+after upgrade" bug.
+
+`buildUnit()` therefore sets `KillMode=process`: only the node process dies,
+the tmux server (and all sessions) survives restarts, stops, and
+crash-restarts -- which is the point, sessions belong to the user, not to
+tmux-web. Verified live with a throwaway unit + a dedicated `tmux -L` socket:
+control-group kill mode destroyed the session on restart, `KillMode=process`
+did not. Because `ensureServiceRunning()` refreshes the unit file *before*
+restarting (and the refresh runs in the re-exec child running the new code),
+the fix takes effect on the very upgrade that ships it -- no extra bootstrap
+gap beyond the re-exec one. Consequence to be aware of: `systemctl --user
+disable --now tmux-web` no longer terminates the tmux server either; that is
+deliberate. Do not "clean this up" back to the default kill mode.
+
 ## Testing this mechanism
 
 `src/cli/upgrade.test.ts` has both fully-mocked unit tests (exec calls
