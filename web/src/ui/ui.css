@@ -1593,6 +1593,28 @@
   padding: 6px 12px;
 }
 
+/* The row's three icon actions (reload / rebuild / logs) render as ONE
+   joined segmented control rather than three floating buttons -- on a phone
+   width the loose trio read as clutter and crowded the state text. */
+.tw-env-menu__action-group {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.tw-env-menu__action-group .tw-icon-button {
+  width: 30px;
+  height: 28px;
+  border-radius: 0;
+}
+
+.tw-env-menu__action-group .tw-icon-button + .tw-icon-button {
+  border-left: 1px solid var(--border-subtle);
+}
+
 .tw-env-menu__service-name {
   flex: 1;
   min-width: 0;
@@ -1653,6 +1675,7 @@
   background: var(--bg-hover);
 }
 
+.tw-env-menu__reload,
 .tw-env-menu__stop {
   display: flex;
   align-items: center;
@@ -1671,6 +1694,7 @@
   cursor: pointer;
 }
 
+.tw-env-menu__reload:hover,
 .tw-env-menu__stop:hover {
   background: var(--bg-hover);
 }

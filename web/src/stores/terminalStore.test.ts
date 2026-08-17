@@ -315,6 +315,23 @@ describe("createTerminalStore staleness watchdog", () => {
     expect(h.store.state.phase).toBe("reconnecting");
   });
 
+  // Root-caused live: tmux sends attached clients only screen diffs, so a
+  // keystroke that doesn't change the screen (quick-key ^C/^A/^E on an idle
+  // prompt, ^C into a TUI that swallows it) legitimately draws ZERO reply
+  // bytes. Arming the watchdog on that silence tore down healthy sockets:
+  // tap ^C on an idle pane -> "Reconnecting…" banner 5s later.
+  it("does not arm the watchdog for control-only input that legitimately draws no reply", () => {
+    const h = harness();
+    h.socket.connect.mockClear();
+
+    h.store.onInput("\x03");
+    h.advance(60_000);
+    h.fireWatchdog();
+
+    expect(h.socket.connect).not.toHaveBeenCalled();
+    expect(h.store.state.phase).toBe("connected");
+  });
+
   it("does not reconnect while the keystroke is still within the threshold", () => {
     const h = harness();
     h.socket.connect.mockClear();

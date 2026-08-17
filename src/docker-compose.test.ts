@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   composeUp,
   composeDown,
+  composeRestart,
   composePs,
   composePort,
   composeLogsArgs,
@@ -301,4 +302,54 @@ test("checkPortCollisions never calls `docker ps` when the compose file pins no 
   await checkPortCollisions(ctx, fakeExec);
 
   assert.equal(psCalled, false);
+});
+
+test("composeRestart runs docker compose restart with the right project scoping", async () => {
+  const calls: { file: string; args: string[] }[] = [];
+  const fakeExec = async (file: string, args: string[]) => {
+    calls.push({ file, args });
+    return { stdout: "", stderr: "" };
+  };
+
+  await composeRestart(ctx, fakeExec);
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].file, "docker");
+  assert.deepEqual(calls[0].args, [...baseArgs(), "restart"]);
+});
+
+test("composeRestart wraps exec failures in DockerComposeError", async () => {
+  const fakeExec = async () => {
+    throw Object.assign(new Error("boom"), { stderr: "cannot restart" });
+  };
+
+  await assert.rejects(() => composeRestart(ctx, fakeExec), (error: unknown) => {
+    assert.ok(error instanceof DockerComposeError);
+    assert.match((error as Error).message, /cannot restart/);
+    return true;
+  });
+});
+
+test("composeRestart targets a single service when given one", async () => {
+  const calls: { file: string; args: string[] }[] = [];
+  const fakeExec = async (file: string, args: string[]) => {
+    calls.push({ file, args });
+    return { stdout: "", stderr: "" };
+  };
+
+  await composeRestart(ctx, fakeExec, undefined, "web");
+
+  assert.deepEqual(calls[0].args, [...baseArgs(), "restart", "web"]);
+});
+
+test("composeUp builds and recreates only the given service when passed one", async () => {
+  const calls: { file: string; args: string[] }[] = [];
+  const fakeExec = async (file: string, args: string[]) => {
+    calls.push({ file, args });
+    return { stdout: "", stderr: "" };
+  };
+
+  await composeUp(ctx, fakeExec, undefined, "api");
+
+  assert.deepEqual(calls[0].args, [...baseArgs(), "up", "-d", "--build", "api"]);
 });

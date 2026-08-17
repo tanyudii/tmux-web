@@ -100,6 +100,7 @@ export function TerminalScreen(props: TerminalScreenProps) {
   const [environmentMenuOpen, setEnvironmentMenuOpen] = createSignal(false);
   const [isSelecting, setSelecting] = createSignal(false);
   const [isArrowMode, setArrowMode] = createSignal(false);
+  const [isCtrlMode, setCtrlMode] = createSignal(false);
   const [isPasteOpen, setPasteOpen] = createSignal(false);
   // TerminalView hands this over on mount; it is the only route to xterm's
   // own paste()/selection APIs from up here.
@@ -126,9 +127,12 @@ export function TerminalScreen(props: TerminalScreenProps) {
   // output the next time tmux repaints under it.
   function handleToggleSelecting(next: boolean): void {
     setSelecting(next);
-    // The two modes compete for the same row and for the same touch gesture,
-    // so entering one leaves the other.
-    if (next) setArrowMode(false);
+    // The modes compete for the same row and for the same touch gesture,
+    // so entering one leaves the others.
+    if (next) {
+      setArrowMode(false);
+      setCtrlMode(false);
+    }
     if (!next) terminalHandle()?.clearSelection();
   }
 
@@ -137,7 +141,21 @@ export function TerminalScreen(props: TerminalScreenProps) {
   // while the user starts navigating a menu just looks like a stuck artifact.
   function handleToggleArrows(next: boolean): void {
     setArrowMode(next);
-    if (next && isSelecting()) handleToggleSelecting(false);
+    if (next) {
+      setCtrlMode(false);
+      if (isSelecting()) handleToggleSelecting(false);
+    }
+  }
+
+  // Entering ctrl mode leaves the other two modes for the same reason they
+  // leave each other: one row, one mode. Unlike selection mode there is no
+  // highlight to drop, so this is purely the flag dance.
+  function handleToggleCtrl(next: boolean): void {
+    setCtrlMode(next);
+    if (next) {
+      setArrowMode(false);
+      if (isSelecting()) handleToggleSelecting(false);
+    }
   }
 
   function handleEditConfig(): void {
@@ -185,6 +203,7 @@ export function TerminalScreen(props: TerminalScreenProps) {
               isBusy={environment.state.isBusy}
               onRun={() => void environment.setup()}
               onStop={() => environment.requestStop()}
+              onReload={(rebuild, service) => void environment.reload(rebuild, service)}
               onCancel={() => void environment.cancel()}
               onEditConfig={handleEditConfig}
               onViewLogs={handleViewLogs}
@@ -241,6 +260,8 @@ export function TerminalScreen(props: TerminalScreenProps) {
         isArrowMode={isArrowMode()}
         onToggleArrows={handleToggleArrows}
         onPressKey={(name) => terminalHandle()?.pressKey(name)}
+        isCtrlMode={isCtrlMode()}
+        onToggleCtrl={handleToggleCtrl}
       />
 
       <Show when={isPasteOpen()}>

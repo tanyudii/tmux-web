@@ -53,9 +53,11 @@ export async function composeUp(
   ctx: ComposeContext,
   exec: ExecFn = defaultExec,
   signal?: AbortSignal,
+  service?: string,
 ): Promise<void> {
   try {
-    await exec("docker", [...baseArgs(ctx), "up", "-d", "--build"], { signal });
+    const serviceArgs = service === undefined ? [] : [service];
+    await exec("docker", [...baseArgs(ctx), "up", "-d", "--build", ...serviceArgs], { signal });
   } catch (error) {
     if (signal?.aborted) throw new ComposeCancelledError("Environment setup was cancelled");
     throw new DockerComposeError(messageOf(error));
@@ -66,6 +68,25 @@ export async function composeDown(ctx: ComposeContext, exec: ExecFn = defaultExe
   try {
     await exec("docker", [...baseArgs(ctx), "down", "-v"]);
   } catch (error) {
+    throw new DockerComposeError(messageOf(error));
+  }
+}
+
+// Reload-without-rebuild: re-runs the containers' entrypoints against the
+// existing images and volumes. Unlike composeUp there is no build and no
+// container recreation -- stopped containers stay stopped, running ones
+// restart in place.
+export async function composeRestart(
+  ctx: ComposeContext,
+  exec: ExecFn = defaultExec,
+  signal?: AbortSignal,
+  service?: string,
+): Promise<void> {
+  try {
+    const serviceArgs = service === undefined ? [] : [service];
+    await exec("docker", [...baseArgs(ctx), "restart", ...serviceArgs], { signal });
+  } catch (error) {
+    if (signal?.aborted) throw new ComposeCancelledError("Environment reload was cancelled");
     throw new DockerComposeError(messageOf(error));
   }
 }

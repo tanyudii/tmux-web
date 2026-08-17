@@ -12,6 +12,7 @@ export type SessionEventType =
   | "env_setup_finished"
   | "env_setup_failed"
   | "env_stopped"
+  | "env_reloaded"
   | "deleted";
 
 export interface SessionEvent {

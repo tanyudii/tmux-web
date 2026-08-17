@@ -128,6 +128,12 @@ export interface ServerDeps {
 
   getProjectSessionEnvStatus: (project: Project, sessionSlug: string, requestHost?: string) => Promise<EnvStatus>;
   startProjectSessionEnv: (project: Project, sessionSlug: string) => Promise<void>;
+  reloadProjectSessionEnv: (
+    project: Project,
+    sessionSlug: string,
+    rebuild: boolean,
+    service?: string,
+  ) => Promise<void>;
   stopProjectSessionEnv: (project: Project, sessionSlug: string) => Promise<void>;
   cancelProjectSessionEnv: (project: Project, sessionSlug: string) => Promise<void>;
 
@@ -987,6 +993,38 @@ export function createServer(deps: ServerDeps): Server {
           throw error;
         }
         return sendEmpty(res, 204);
+      }
+
+      // Reload the session's environment: `{rebuild: false}` (the default)
+      // = docker compose restart; `{rebuild: true}` = the full setup
+      // lifecycle again against the running project. Same background
+      // contract as POST .../env -- resolves after the fast checks,
+      // progress observed by polling GET .../env.
+      const envReloadMatch = path.match(/^\/api\/projects\/([^/]+)\/sessions\/([^/]+)\/env\/reload$/);
+      if (envReloadMatch && req.method === "POST") {
+        if (!checkAuthorized(req, res, deps.token, clientIp, authFailureLimiter, deps.accessLogPath)) return;
+
+        const project = await deps.getProject(decodeURIComponent(envReloadMatch[1]));
+        if (!project) return sendJson(res, 404, { error: "Project not found" });
+
+        const sessionSlug = decodeURIComponent(envReloadMatch[2]);
+
+        const envReloadLimit = expensiveActionLimiter.check(clientIp);
+        if (envReloadLimit.limited) return sendTooManyRequests(res, envReloadLimit.retryAfterMs);
+
+        const body = (await readJsonBody(req)) as { rebuild?: unknown; service?: unknown };
+        const rebuild = body?.rebuild === true;
+        // Only a non-empty string counts -- anything else (absent, 42, null)
+        // reloads every service, never a command-injection-shaped surprise.
+        const service = typeof body?.service === "string" && body.service.length > 0 ? body.service : undefined;
+
+        try {
+          await deps.reloadProjectSessionEnv(project, sessionSlug, rebuild, service);
+        } catch (error) {
+          if (sendMappedError(res, error)) return;
+          throw error;
+        }
+        return sendEmpty(res, 202);
       }
 
       const envMatch = path.match(/^\/api\/projects\/([^/]+)\/sessions\/([^/]+)\/env$/);

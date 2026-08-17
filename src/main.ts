@@ -70,6 +70,7 @@ import { listEnvFiles, readEnvFile, writeEnvFile } from "./env-editor.ts";
 import {
   composeUp,
   composeDown,
+  composeRestart,
   composePs,
   composePort,
   checkPortCollisions,
@@ -79,6 +80,7 @@ import { runScript } from "./run-script.ts";
 import {
   getSessionEnvStatus as getSessionEnvStatusImpl,
   startSessionEnv as startSessionEnvImpl,
+  reloadSessionEnv as reloadSessionEnvImpl,
   stopSessionEnv as stopSessionEnvImpl,
   cancelSessionEnv as cancelSessionEnvImpl,
   requireEnvContext,
@@ -193,6 +195,7 @@ export async function main(): Promise<void> {
     runScript,
     composeUp,
     composeDown,
+    composeRestart,
     composePs,
     composePort,
     checkPortCollisions,
@@ -320,6 +323,8 @@ export async function main(): Promise<void> {
       getSessionEnvStatusImpl(project, slug, sessionEnvDeps, sessionEnvStore, requestHost),
     startProjectSessionEnv: (project, slug) =>
       startSessionEnvImpl(project, slug, sessionEnvDeps, sessionEnvStore, sessionEnvControllers),
+    reloadProjectSessionEnv: (project, slug, rebuild, service) =>
+      reloadSessionEnvImpl(project, slug, { rebuild, service }, sessionEnvDeps, sessionEnvStore, sessionEnvControllers),
     stopProjectSessionEnv: (project, slug) =>
       stopSessionEnvImpl(project, slug, sessionEnvDeps, sessionEnvStore),
     cancelProjectSessionEnv: (project, slug) =>

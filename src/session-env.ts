@@ -59,8 +59,9 @@ export interface SessionEnvDeps {
     exec?: undefined,
     signal?: AbortSignal,
   ) => Promise<{ stdout: string; stderr: string }>;
-  composeUp: (ctx: ComposeContext, exec?: undefined, signal?: AbortSignal) => Promise<void>;
+  composeUp: (ctx: ComposeContext, exec?: undefined, signal?: AbortSignal, service?: string) => Promise<void>;
   composeDown: (ctx: ComposeContext) => Promise<void>;
+  composeRestart: (ctx: ComposeContext, exec?: undefined, signal?: AbortSignal, service?: string) => Promise<void>;
   composePs: (ctx: ComposeContext) => Promise<ComposeServiceStatus[]>;
   composePort: (ctx: ComposeContext, service: string, containerPort: number) => Promise<number | null>;
   checkPortCollisions: (ctx: ComposeContext) => Promise<void>;
@@ -280,6 +281,117 @@ export async function startSessionEnv(
     controllers,
     controller.signal,
   );
+}
+
+/**
+ * Reloads a session's environment, in one of two flavours:
+ *
+ * - `{rebuild: false}` -- `docker compose restart` only: containers re-run
+ *   their entrypoints against existing images and volumes. No pre/post
+ *   scripts, no build; a no-op for containers that aren't running (docker
+ *   leaves stopped containers stopped -- deliberately no extra guard).
+ * - `{rebuild: true}` -- the full setup lifecycle again (pre-run →
+ *   `up -d --build` → post-run). Unlike startSessionEnv this skips the
+ *   "already running" guard on purpose: `up -d --build` against a running
+ *   project rebuilds images and recreates changed containers IN PLACE,
+ *   keeping volumes -- that is exactly the reload semantic, whereas
+ *   stopSessionEnv's `down -v` would destroy the data.
+ *
+ * Both run in the background (same contract as startSessionEnv: this
+ * resolves after the fast checks; progress is observed via
+ * getSessionEnvStatus polling) and both are cancellable via
+ * cancelSessionEnv while "starting".
+ */
+export async function reloadSessionEnv(
+  project: Project,
+  sessionSlug: string,
+  options: { rebuild: boolean; service?: string },
+  deps: SessionEnvDeps,
+  store: SessionEnvStore,
+  controllers: SessionEnvControllerStore,
+): Promise<void> {
+  const { fullName, worktreePath, config } = await requireConfig(project, sessionSlug, deps);
+  if (store.has(fullName)) {
+    throw new EnvAlreadyRunningError(`Environment for "${sessionSlug}" is already starting`);
+  }
+  // Claim the slot synchronously -- same TOCTOU reasoning as startSessionEnv.
+  const { rebuild, service } = options;
+  const scope = service === undefined ? "containers" : service;
+  store.set(fullName, {
+    phase: "starting",
+    message: rebuild ? `Rebuilding ${scope}…` : `Restarting ${scope}…`,
+  });
+  const controller = new AbortController();
+  controllers.set(fullName, controller);
+  const ctx = contextFor(fullName, worktreePath, config);
+
+  // Per-service reloads are deliberately lightweight: no pre/post scripts
+  // (those are setup-time concerns and already ran), just the one compose
+  // command scoped to the named service, in either flavour.
+  if (service !== undefined) {
+    void (async () => {
+      try {
+        if (rebuild) {
+          await deps.composeUp(ctx, undefined, controller.signal, service);
+        } else {
+          await deps.composeRestart(ctx, undefined, controller.signal, service);
+        }
+        store.delete(fullName);
+        await deps
+          .recordEvent?.(project.id, sessionSlug, "env_reloaded", `${service} ${rebuild ? "rebuilt" : "restarted"}`)
+          .catch(() => {});
+      } catch (error) {
+        const message = controller.signal.aborted
+          ? "Cancelled"
+          : error instanceof Error
+            ? error.message
+            : String(error);
+        store.set(fullName, { phase: "error", message });
+        await deps.recordEvent?.(project.id, sessionSlug, "env_setup_failed", message).catch(() => {});
+      } finally {
+        controllers.delete(fullName);
+      }
+    })();
+    return;
+  }
+
+  if (rebuild) {
+    // startSessionEnv records this just before its own runLifecycle call;
+    // record it here too so the rebuild's finished/failed events always have
+    // a matching started event in the session's history.
+    await deps.recordEvent?.(project.id, sessionSlug, "env_setup_started").catch(() => {});
+    void runLifecycle(
+      project.id,
+      sessionSlug,
+      fullName,
+      worktreePath,
+      config,
+      ctx,
+      deps,
+      store,
+      controllers,
+      controller.signal,
+    );
+    return;
+  }
+
+  void (async () => {
+    try {
+      await deps.composeRestart(ctx, undefined, controller.signal);
+      store.delete(fullName);
+      await deps.recordEvent?.(project.id, sessionSlug, "env_reloaded").catch(() => {});
+    } catch (error) {
+      const message = controller.signal.aborted
+        ? "Cancelled"
+        : error instanceof Error
+          ? error.message
+          : String(error);
+      store.set(fullName, { phase: "error", message });
+      await deps.recordEvent?.(project.id, sessionSlug, "env_setup_failed", message).catch(() => {});
+    } finally {
+      controllers.delete(fullName);
+    }
+  })();
 }
 
 /**

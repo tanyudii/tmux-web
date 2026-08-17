@@ -355,6 +355,14 @@ export function createApiClient(config: ApiClientConfig) {
       );
     },
 
+    async reloadEnv(projectId: string, sessionSlug: string, rebuild: boolean, service?: string): Promise<void> {
+      await request(
+        "POST",
+        `/api/projects/${encodeURIComponent(projectId)}/sessions/${encodeURIComponent(sessionSlug)}/env/reload`,
+        { body: service === undefined ? { rebuild } : { rebuild, service } },
+      );
+    },
+
     // -- Web Push (EMB-212) --------------------------------------------------
     async getPushPublicKey(): Promise<string> {
       return (await requestJson("GET", "/api/push/public-key", pushPublicKeyResponseSchema)).publicKey;

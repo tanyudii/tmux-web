@@ -4,6 +4,7 @@ import {
   requireEnvContext,
   getSessionEnvStatus,
   startSessionEnv,
+  reloadSessionEnv,
   stopSessionEnv,
   cancelSessionEnv,
   createSessionEnvStore,
@@ -43,6 +44,7 @@ function makeDeps(overrides: Partial<SessionEnvDeps> = {}): SessionEnvDeps {
     runScript: async () => ({ stdout: "", stderr: "" }),
     composeUp: async () => {},
     composeDown: async () => {},
+    composeRestart: async () => {},
     composePs: async () => [],
     composePort: async () => null,
     checkPortCollisions: async () => {},
@@ -677,3 +679,140 @@ test(
     }
   },
 );
+
+// -- reloadSessionEnv --------------------------------------------------------
+
+test("reloadSessionEnv with rebuild=false only restarts containers (no scripts, no compose up)", async () => {
+  const events: string[] = [];
+  let composeUpCalled = false;
+  let runScriptCalled = false;
+  const deps = makeDeps({
+    composeUp: async () => {
+      composeUpCalled = true;
+    },
+    runScript: async () => {
+      runScriptCalled = true;
+      return { stdout: "", stderr: "" };
+    },
+    composeRestart: async () => {},
+    recordEvent: async (_projectId, _slug, type) => {
+      events.push(type);
+    },
+  });
+  const store = createSessionEnvStore();
+  const controllers = createSessionEnvControllerStore();
+
+  await reloadSessionEnv(PROJECT, "feature-x", { rebuild: false }, deps, store, controllers);
+  await flush();
+
+  assert.equal(composeUpCalled, false);
+  assert.equal(runScriptCalled, false);
+  assert.deepEqual(events, ["env_reloaded"]);
+  assert.equal(store.has(FULL_NAME), false);
+});
+
+test("reloadSessionEnv with rebuild=true runs the full lifecycle (pre-run, compose up --build, post-run) even with containers running", async () => {
+  const order: string[] = [];
+  const deps = makeDeps({
+    loadEnvConfig: async () => ({
+      ...AVAILABLE_CONFIG,
+      preRunScript: `${WORKTREE_PATH}/.tmux-web-env/pre-run.sh`,
+      postRunScript: `${WORKTREE_PATH}/.tmux-web-env/post-run.sh`,
+    }),
+    // Already running -- startSessionEnv would refuse; reload must not.
+    composePs: async () => [{ service: "web", state: "running" }],
+    runScript: async (scriptPath: string) => {
+      order.push(scriptPath.endsWith("pre-run.sh") ? "pre" : "post");
+      return { stdout: "", stderr: "" };
+    },
+    composeUp: async () => {
+      order.push("up");
+    },
+    composeRestart: async () => {
+      order.push("restart");
+    },
+  });
+  const store = createSessionEnvStore();
+  const controllers = createSessionEnvControllerStore();
+
+  await reloadSessionEnv(PROJECT, "feature-x", { rebuild: true }, deps, store, controllers);
+  await flush();
+
+  assert.deepEqual(order, ["pre", "up", "post"]);
+  assert.equal(store.has(FULL_NAME), false);
+});
+
+test("reloadSessionEnv refuses while another lifecycle is in flight", async () => {
+  const deps = makeDeps({ composeRestart: async () => {} });
+  const store = createSessionEnvStore();
+  const controllers = createSessionEnvControllerStore();
+  store.set(FULL_NAME, { phase: "starting" });
+
+  await assert.rejects(() => reloadSessionEnv(PROJECT, "feature-x", { rebuild: false }, deps, store, controllers), EnvAlreadyRunningError);
+});
+
+test("reloadSessionEnv records an error transient when the restart fails", async () => {
+  const deps = makeDeps({
+    composeRestart: async () => {
+      throw new Error("docker daemon down");
+    },
+  });
+  const store = createSessionEnvStore();
+  const controllers = createSessionEnvControllerStore();
+
+  await reloadSessionEnv(PROJECT, "feature-x", { rebuild: false }, deps, store, controllers);
+  await flush();
+
+  const transient = store.get(FULL_NAME);
+  assert.ok(transient);
+  assert.equal(transient.phase, "error");
+  assert.match(transient.message ?? "", /docker daemon down/);
+});
+
+test("reloadSessionEnv with service + rebuild=false restarts only that service (no scripts)", async () => {
+  const calls: { cmd: string; service?: string }[] = [];
+  let runScriptCalled = false;
+  const deps = makeDeps({
+    runScript: async () => {
+      runScriptCalled = true;
+      return { stdout: "", stderr: "" };
+    },
+    composeRestart: async (_ctx: unknown, _exec?: undefined, _signal?: AbortSignal, service?: string) => {
+      calls.push({ cmd: "restart", service });
+    },
+    composeUp: async (_ctx: unknown, _exec?: undefined, _signal?: AbortSignal, service?: string) => {
+      calls.push({ cmd: "up", service });
+    },
+    recordEvent: async () => {},
+  });
+  const store = createSessionEnvStore();
+  const controllers = createSessionEnvControllerStore();
+
+  await reloadSessionEnv(PROJECT, "feature-x", { rebuild: false, service: "web" }, deps, store, controllers);
+  await flush();
+
+  assert.deepEqual(calls, [{ cmd: "restart", service: "web" }]);
+  assert.equal(runScriptCalled, false);
+  assert.equal(store.has(FULL_NAME), false);
+});
+
+test("reloadSessionEnv with service + rebuild=true rebuilds only that service via compose up --build", async () => {
+  const calls: { cmd: string; service?: string }[] = [];
+  const deps = makeDeps({
+    composeRestart: async (_ctx: unknown, _exec?: undefined, _signal?: AbortSignal, service?: string) => {
+      calls.push({ cmd: "restart", service });
+    },
+    composeUp: async (_ctx: unknown, _exec?: undefined, _signal?: AbortSignal, service?: string) => {
+      calls.push({ cmd: "up", service });
+    },
+    recordEvent: async () => {},
+  });
+  const store = createSessionEnvStore();
+  const controllers = createSessionEnvControllerStore();
+
+  await reloadSessionEnv(PROJECT, "feature-x", { rebuild: true, service: "api" }, deps, store, controllers);
+  await flush();
+
+  assert.deepEqual(calls, [{ cmd: "up", service: "api" }]);
+  assert.equal(store.has(FULL_NAME), false);
+});
