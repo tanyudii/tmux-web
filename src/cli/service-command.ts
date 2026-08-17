@@ -52,6 +52,14 @@ RestartSec=2
 # sessions spawned by this service.
 NoNewPrivileges=true
 
+# KillMode=process: the tmux server daemonizes into this unit's cgroup (tmux
+# only escapes its parent process, never its cgroup), so with the default
+# control-group kill mode every restart -- including the one "tmuxweb upgrade"
+# does -- SIGTERMs the tmux server itself and destroys every session the user
+# had open. Kill only the node process; tmux sessions must outlive tmux-web
+# restarts, stops, and crashes.
+KillMode=process
+
 [Install]
 WantedBy=default.target
 `;

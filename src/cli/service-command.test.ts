@@ -66,6 +66,11 @@ test("installService writes a systemd unit with resolved paths and no Environmen
     // inside tmux sessions spawned by this service (see buildUnit's comment).
     // Match only an actual directive line, not the explanatory comment above.
     assert.doesNotMatch(unit, /^ProtectSystem=/m);
+    // KillMode=process, likewise deliberate -- the tmux server daemonizes into
+    // this unit's cgroup, and the default (control-group) kill mode takes it
+    // down on every restart, i.e. the "all sessions vanish after `tmuxweb
+    // upgrade`" bug (see buildUnit's comment).
+    assert.match(unit, /^KillMode=process$/m);
 
     assert.deepEqual(calls, [
       "systemctl --version",
