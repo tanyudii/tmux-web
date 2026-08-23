@@ -7,7 +7,7 @@
 // ChangesRail instead of a toggleable full-screen dialog) is intentionally
 // separate, same split as the Kotlin original (§8 of the Phase 7 research
 // pass: shared session wiring, separate screen composables).
-import { createSignal, onCleanup, Show } from "solid-js";
+import { createSignal, onCleanup, onMount, Show } from "solid-js";
 import { Button, ConfirmDialog, ConnectionBanner, ErrorBanner, IconButton } from "../ui";
 import { TerminalView } from "../terminal/TerminalView";
 import type { FitAddonLike, SearchAddonLike, TerminalLike } from "../terminal/types";
@@ -142,6 +142,17 @@ function SessionPane(props: WebMainPaneProps & { project: Project; session: Proj
 
   const terminalVisible = () =>
     !environmentMenuOpen() && !environment.state.isShowingStopConfirm && envEditorStore() === null && environment.state.logsService === null;
+
+  // The windowNames/windowCount seeds above come from the shell store's
+  // snapshot, which is fetched at app load / project select and never on
+  // session select -- by the time the user switches away and back, it can be
+  // arbitrarily stale (windows created while this pane was last open die with
+  // the unmount, and the store never learned about them). One refetch on
+  // mount keeps the tab strip honest; the only other refresh path is
+  // WindowTabs' add/close/rename callbacks.
+  onMount(() => {
+    void refreshWindows();
+  });
 
   onCleanup(() => {
     terminal.dispose();
