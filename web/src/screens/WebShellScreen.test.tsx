@@ -78,20 +78,17 @@ describe("WebShellScreen", () => {
     expect(screen.getByText("New Project")).toBeInTheDocument();
   });
 
-  it("shows a two-tier confirm for deleting a session with an unmerged branch", async () => {
+  it("escalates to force delete on conflict, with no branch opt-in in the dialog", async () => {
     const { store } = await renderShell({
       deleteSession: vi.fn().mockRejectedValue(new ConflictError("has changes")),
     });
     store.requestDeleteSession("p1", SESSION_A);
     expect(screen.getByText("Delete session")).toBeInTheDocument();
+    // The branch is deleted unconditionally -- no checkbox, no unmerged warning.
+    expect(screen.queryByLabelText("Delete branch too")).not.toBeInTheDocument();
+
     // First confirm hits the 409 and escalates the dialog to its force variant.
     await store.confirmPendingDelete();
-
-    fireEvent.click(screen.getByLabelText("Delete branch too"));
-    await Promise.resolve();
-    await Promise.resolve();
-
-    expect(await screen.findByText(/This branch has unmerged commits\./)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Force delete" })).toBeInTheDocument();
   });
 

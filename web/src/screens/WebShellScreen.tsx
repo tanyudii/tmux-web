@@ -51,22 +51,7 @@ function SessionDeleteDialog(props: { pending: PendingDeleteSession; store: WebS
       force={pending.forced}
       onConfirm={() => store.confirmPendingDelete()}
       onCancel={store.cancelPendingDelete}
-    >
-      <label class="tw-delete-branch-option">
-        <input
-          type="checkbox"
-          checked={pending.deleteBranch}
-          onChange={(event) => void store.setDeleteBranchOnSessionDelete(event.currentTarget.checked)}
-        />
-        Delete branch too
-      </label>
-      <Show when={pending.deleteBranch && pending.branchMergeChecked && pending.branchMerged === false}>
-        <p class="tw-delete-branch-warning">
-          This branch has unmerged commits.
-          <Show when={!pending.unmergedConfirmed}> Tap Force delete again to confirm.</Show>
-        </p>
-      </Show>
-    </ConfirmDialog>
+    />
   );
 }
 
