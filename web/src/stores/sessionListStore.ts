@@ -127,7 +127,7 @@ export function createSessionListStore(deps: SessionListStoreDeps) {
     if (pending.forced) return confirmForceDelete();
 
     const outcome = await deleteHandlingConflict(pending.session, (force) =>
-      api.deleteSession(projectId, pending.session.name, { force }),
+      api.deleteSession(projectId, pending.session.name, { force, deleteBranch: true }),
     );
     if (outcome.kind === "deleted") {
       setState("sessions", (sessions) => sessions.filter((s) => s.name !== pending.session.name));
@@ -147,7 +147,7 @@ export function createSessionListStore(deps: SessionListStoreDeps) {
     const pending = state.pendingDelete;
     if (!pending) return;
     try {
-      await api.deleteSession(projectId, pending.session.name, { force: true });
+      await api.deleteSession(projectId, pending.session.name, { force: true, deleteBranch: true });
       setState("sessions", (sessions) => sessions.filter((s) => s.name !== pending.session.name));
       setState({ pendingDelete: null });
     } catch (error) {
@@ -299,7 +299,7 @@ export function createSessionListStore(deps: SessionListStoreDeps) {
     for (const name of pending.names) {
       const session = state.sessions.find((s) => s.name === name);
       if (!session) continue;
-      const outcome = await deleteHandlingConflict(session, (force) => api.deleteSession(projectId, name, { force }));
+      const outcome = await deleteHandlingConflict(session, (force) => api.deleteSession(projectId, name, { force, deleteBranch: true }));
       if (outcome.kind === "deleted") {
         setState("sessions", (sessions) => sessions.filter((s) => s.name !== name));
       } else if (outcome.kind === "conflict") {
@@ -321,7 +321,7 @@ export function createSessionListStore(deps: SessionListStoreDeps) {
     if (!pending) return;
     for (const session of pending.sessions) {
       try {
-        await api.deleteSession(projectId, session.name, { force: true });
+        await api.deleteSession(projectId, session.name, { force: true, deleteBranch: true });
         setState("sessions", (sessions) => sessions.filter((s) => s.name !== session.name));
       } catch (error) {
         setState({ errorMessage: toUiMessage(error) });

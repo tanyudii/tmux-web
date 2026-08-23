@@ -41,10 +41,6 @@ export interface PendingDeleteSession {
   session: ProjectSession;
   forced: boolean;
   message?: string;
-  deleteBranch: boolean;
-  branchMergeChecked: boolean;
-  branchMerged: boolean | null;
-  unmergedConfirmed: boolean;
 }
 
 export type PendingDelete = PendingDeleteProject | PendingDeleteSession;
@@ -372,11 +368,7 @@ export function createWebShellStore(deps: WebShellStoreDeps) {
         projectId,
         session,
         forced: false,
-        message: `Delete session "${session.name}"? Its tmux session and git worktree are removed.`,
-        deleteBranch: false,
-        branchMergeChecked: false,
-        branchMerged: null,
-        unmergedConfirmed: false,
+        message: `Delete session "${session.name}"? Its tmux session, git worktree, and branch are removed.`,
       },
     });
   }
@@ -385,15 +377,6 @@ export function createWebShellStore(deps: WebShellStoreDeps) {
     setState({ pendingDelete: null });
   }
 
-  async function setDeleteBranchOnSessionDelete(deleteBranch: boolean): Promise<void> {
-    const pending = state.pendingDelete;
-    if (!pending || pending.kind !== "session") return;
-    setState("pendingDelete", { deleteBranch } as Partial<PendingDeleteSession>);
-    if (deleteBranch && !pending.branchMergeChecked) {
-      const merged = await api.isBranchMerged(pending.projectId, pending.session.name);
-      setState("pendingDelete", { branchMergeChecked: true, branchMerged: merged } as Partial<PendingDeleteSession>);
-    }
-  }
 
   async function confirmPendingDelete(): Promise<void> {
     const pending = state.pendingDelete;
@@ -429,10 +412,12 @@ export function createWebShellStore(deps: WebShellStoreDeps) {
       return;
     }
 
-    // Same first-confirm step as the project branch above.
+    // Same first-confirm step as the project branch above. The branch is
+    // always deleted together with the session -- no opt-in checkbox and no
+    // unmerged-branch second confirm (deliberate product decision).
     if (!pending.forced) {
       const outcome = await deleteHandlingConflict(pending.session, (force) =>
-        api.deleteSession(pending.projectId, pending.session.name, { force, deleteBranch: pending.deleteBranch }),
+        api.deleteSession(pending.projectId, pending.session.name, { force, deleteBranch: true }),
       );
       if (outcome.kind === "deleted") {
         setState("sessionsByProjectId", pending.projectId, (sessions) =>
@@ -448,14 +433,8 @@ export function createWebShellStore(deps: WebShellStoreDeps) {
       return;
     }
 
-    // Two-tier confirm: deleting an unmerged branch needs one extra tap.
-    if (pending.deleteBranch && pending.branchMerged === false && !pending.unmergedConfirmed) {
-      setState("pendingDelete", { unmergedConfirmed: true } as Partial<PendingDeleteSession>);
-      return;
-    }
-
     try {
-      await api.deleteSession(pending.projectId, pending.session.name, { force: true, deleteBranch: pending.deleteBranch });
+      await api.deleteSession(pending.projectId, pending.session.name, { force: true, deleteBranch: true });
       setState("sessionsByProjectId", pending.projectId, (sessions) =>
         (sessions ?? []).filter((s) => s.name !== pending.session.name),
       );
@@ -494,7 +473,6 @@ export function createWebShellStore(deps: WebShellStoreDeps) {
     requestDeleteProject,
     requestDeleteSession,
     cancelPendingDelete,
-    setDeleteBranchOnSessionDelete,
     confirmPendingDelete,
   };
 }

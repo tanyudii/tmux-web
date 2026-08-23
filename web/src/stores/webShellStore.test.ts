@@ -324,30 +324,23 @@ describe("createWebShellStore", () => {
     expect(store.state.projects).toEqual([PROJECT_A]);
   });
 
-  it("session delete-branch flow: checks merge status once and requires a second confirm when unmerged", async () => {
+  it("session delete always deletes the branch -- no opt-in, no merge check, no second confirm", async () => {
     const api = fakeApi({
       deleteSession: vi.fn().mockRejectedValueOnce(new ConflictError("has changes")).mockResolvedValueOnce(undefined),
-      isBranchMerged: vi.fn().mockResolvedValue(false),
     });
     const store = createWebShellStore({ api });
     await store.loadProjects();
     store.selectProject("p1");
     store.requestDeleteSession("p1", SESSION_A);
-    // first confirm: the server rejects with 409, escalating to force
-    await store.confirmPendingDelete();
 
-    await store.setDeleteBranchOnSessionDelete(true);
-    expect(api.isBranchMerged).toHaveBeenCalledWith("p1", "a");
-    expect(store.state.pendingDelete).toMatchObject({ branchMergeChecked: true, branchMerged: false, deleteBranch: true });
-
-    // First confirm only flips unmergedConfirmed -- doesn't delete yet (the
-    // one call so far is requestDeleteSession's own initial non-force
-    // attempt above, not a new call from this confirm).
+    // First confirm: the server rejects with 409, escalating to force. The
+    // branch flag is already true on the very first attempt.
     await store.confirmPendingDelete();
     expect(api.deleteSession).toHaveBeenCalledTimes(1);
-    expect(store.state.pendingDelete).toMatchObject({ unmergedConfirmed: true });
+    expect(api.deleteSession).toHaveBeenCalledWith("p1", "a", { force: false, deleteBranch: true });
+    expect(store.state.pendingDelete).toMatchObject({ forced: true });
 
-    // Second confirm actually deletes.
+    // Second confirm force-deletes immediately -- no unmerged-branch tier.
     await store.confirmPendingDelete();
     expect(api.deleteSession).toHaveBeenLastCalledWith("p1", "a", { force: true, deleteBranch: true });
     expect(store.state.pendingDelete).toBeNull();

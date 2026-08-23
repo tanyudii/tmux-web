@@ -179,7 +179,7 @@ describe("SessionListScreen", () => {
     await Promise.resolve();
     await Promise.resolve();
 
-    expect(api.deleteSession).toHaveBeenCalledWith("proj", "a", { force: false });
+    expect(api.deleteSession).toHaveBeenCalledWith("proj", "a", { force: false, deleteBranch: true });
   });
 
   it("shows a force-delete confirmation on a 409 when deleting a single session", async () => {
