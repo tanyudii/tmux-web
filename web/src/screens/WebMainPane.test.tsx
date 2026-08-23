@@ -411,4 +411,33 @@ describe("WebMainPane", () => {
     expect(firstSocket.close).toHaveBeenCalledOnce();
     expect(secondSocket.connect).toHaveBeenCalledWith("p1__worker", 0);
   });
+
+  it("refetches windows on mount, so a stale session snapshot self-corrects (tabs missing after switching back)", async () => {
+    const socket = fakeSocket();
+    // The shell store's snapshot was fetched once at app load, before the
+    // user opened the extra windows -- remounting SessionPane seeds from it.
+    const staleSession = { ...SESSION, windows: 1, windowNames: ["main"] };
+    const freshSession = { ...SESSION, windows: 3, windowNames: ["main", "logs", "test"] };
+    const api = fakeApi({ listSessions: vi.fn().mockResolvedValue([freshSession]) });
+    render(() => (
+      <WebMainPane
+        api={api as never}
+        baseUrl="https://tmux.example.com"
+        token="tok"
+        project={PROJECT}
+        session={staleSession}
+        projectId="p1"
+        onNewSession={vi.fn()}
+        onSessionEnded={vi.fn()}
+        pushStore={fakePushStore()}
+        createSocket={() => socket as never}
+        createTerminal={fakeTerminal}
+        createFitAddon={fakeFitAddon}
+        createSearchAddon={fakeSearchAddon}
+      />
+    ));
+
+    expect(await screen.findByRole("tab", { name: "2: test" })).toBeInTheDocument();
+    expect(api.listSessions).toHaveBeenCalledWith("p1");
+  });
 });
