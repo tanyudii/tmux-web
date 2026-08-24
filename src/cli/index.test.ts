@@ -15,11 +15,11 @@ function recordingDeps(): { deps: Required<Omit<RunCliDeps, "exit">> & Pick<RunC
     runInit: async (args) => {
       calls.push(`runInit ${args.join(" ")}`);
     },
-    runGenerate: async (args) => {
-      calls.push(`runGenerate ${args.join(" ")}`);
-    },
     runConfigCommand: async (args) => {
       calls.push(`runConfigCommand ${args.join(" ")}`);
+    },
+    runUserCommand: async (args) => {
+      calls.push(`runUserCommand ${args.join(" ")}`);
     },
     runServiceCommand: async (args) => {
       calls.push(`runServiceCommand ${args.join(" ")}`);
@@ -68,17 +68,17 @@ test("`--version` and `-v` print the version", async () => {
   }
 });
 
-test("routes init/generate/config/service/upgrade with the remaining args", async () => {
+test("routes init/config/user/service/upgrade with the remaining args", async () => {
   const { deps, calls } = recordingDeps();
   await runCli(["init", "--force"], deps);
-  await runCli(["generate"], deps);
   await runCli(["config", "port", "1234"], deps);
+  await runCli(["user", "add", "alice", "password123"], deps);
   await runCli(["service", "status"], deps);
   await runCli(["upgrade", "--tag", "v1.2.3"], deps);
   assert.deepEqual(calls, [
     "runInit --force",
-    "runGenerate ",
     "runConfigCommand port 1234",
+    "runUserCommand add alice password123",
     "runServiceCommand status",
     "runUpgrade --tag v1.2.3",
   ]);

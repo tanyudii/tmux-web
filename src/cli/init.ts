@@ -5,7 +5,7 @@ export async function runInit(args: string[], configDir: string = defaultConfigD
 
   if (!force && (await configExists(configDir))) {
     console.log(`Config already exists at ${configFilePath(configDir)} -- leaving it as-is.`);
-    console.log("Run `tmuxweb generate` to rotate the token, or pass --force to overwrite everything.");
+    console.log("Pass --force to overwrite it.");
     return;
   }
 
@@ -14,11 +14,11 @@ export async function runInit(args: string[], configDir: string = defaultConfigD
 
   console.log(`Wrote ${configFilePath(configDir)}`);
   console.log("");
-  console.log(`token: ${config.token}`);
   console.log(`port:  ${config.port}`);
   console.log(`host:  ${config.host}`);
   console.log("");
   console.log("Next steps:");
-  console.log("  tmuxweb                  start the server in the foreground");
-  console.log("  tmuxweb service install  or run it as a systemd --user service");
+  console.log("  tmuxweb user add <username> <password>  create the first login account");
+  console.log("  tmuxweb                                start the server in the foreground");
+  console.log("  tmuxweb service install                or run it as a systemd --user service");
 }

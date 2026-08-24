@@ -6,7 +6,7 @@
 // loading-spinner branch App.kt's `when` has for this is dropped as a
 // deliberate simplification, not a fidelity gap.
 import { createStore } from "solid-js/store";
-import { createApiClient } from "../api/client";
+import { createApiClient, loginRequest } from "../api/client";
 import {
   clearConnectionSettings,
   loadConnectionSettings,
@@ -19,16 +19,20 @@ import { toUiMessage } from "./errorMessage";
 export interface ConnectionSettingsState {
   current: ConnectionSettings | null;
   serverUrlText: string;
-  token: string;
+  username: string;
+  password: string;
   isTesting: boolean;
   errorMessage: string | null;
 }
 
 export interface ConnectionSettingsStoreDeps {
   // Injectable so tests never hit a real network -- defaults to a real
-  // connectivity probe against the entered server (mirrors
-  // data/remote/ConnectionTester.kt).
-  testConnection?: (config: { baseUrl: string; token: string }) => Promise<void>;
+  // POST /api/login against the entered server; resolves to the issued
+  // bearer token on success.
+  login?: (config: { baseUrl: string; username: string; password: string }) => Promise<string>;
+  // Best-effort token revocation (POST /api/logout) when the user
+  // disconnects; injectable for the same reason as login.
+  logout?: (config: { baseUrl: string; token: string }) => Promise<void>;
   // window.location.origin is meaningless as a *default server* under
   // jsdom's test origin; injectable for tests. Defaults to the real value
   // -- see CLAUDE.md's "DefaultServerUrl.kt" note: this PWA always serves
@@ -40,8 +44,11 @@ export interface ConnectionSettingsStoreDeps {
   isSecureContext?: () => boolean;
 }
 
-const defaultTestConnection = async (config: { baseUrl: string; token: string }): Promise<void> => {
-  await createApiClient(config).listProjects();
+const defaultLogin = async (config: { baseUrl: string; username: string; password: string }): Promise<string> =>
+  loginRequest(config);
+
+const defaultLogout = async (config: { baseUrl: string; token: string }): Promise<void> => {
+  await createApiClient(config).logout();
 };
 
 const realDefaultServerUrl = (): string | null =>
@@ -50,7 +57,8 @@ const realDefaultServerUrl = (): string | null =>
 const realIsSecureContext = (): boolean => (typeof window !== "undefined" ? window.isSecureContext : true);
 
 export function createConnectionSettingsStore(deps: ConnectionSettingsStoreDeps = {}) {
-  const testConnection = deps.testConnection ?? defaultTestConnection;
+  const login = deps.login ?? defaultLogin;
+  const logout = deps.logout ?? defaultLogout;
   const getDefaultServerUrl = deps.defaultServerUrl ?? realDefaultServerUrl;
   const getIsSecureContext = deps.isSecureContext ?? realIsSecureContext;
 
@@ -58,7 +66,8 @@ export function createConnectionSettingsStore(deps: ConnectionSettingsStoreDeps 
   const [state, setState] = createStore<ConnectionSettingsState>({
     current: saved,
     serverUrlText: saved?.baseUrl ?? getDefaultServerUrl() ?? "",
-    token: saved?.token ?? "",
+    username: "",
+    password: "",
     isTesting: false,
     errorMessage: null,
   });
@@ -67,12 +76,18 @@ export function createConnectionSettingsStore(deps: ConnectionSettingsStoreDeps 
     setState({ serverUrlText: text, errorMessage: null });
   }
 
-  function updateToken(text: string): void {
-    setState({ token: text, errorMessage: null });
+  function updateUsername(text: string): void {
+    setState({ username: text, errorMessage: null });
+  }
+
+  function updatePassword(text: string): void {
+    setState({ password: text, errorMessage: null });
   }
 
   function canSubmit(): boolean {
-    return state.serverUrlText.trim() !== "" && state.token.trim() !== "" && !state.isTesting;
+    return (
+      state.serverUrlText.trim() !== "" && state.username.trim() !== "" && state.password !== "" && !state.isTesting
+    );
   }
 
   function pasteRestricted(): boolean {
@@ -85,14 +100,15 @@ export function createConnectionSettingsStore(deps: ConnectionSettingsStoreDeps 
       setState({ errorMessage: "Enter a valid server URL." });
       return;
     }
-    const token = state.token.trim();
-    if (!token) {
-      setState({ errorMessage: "Enter your access token." });
+    const username = state.username.trim();
+    const password = state.password;
+    if (!username || !password) {
+      setState({ errorMessage: "Enter your username and password." });
       return;
     }
     setState({ isTesting: true, errorMessage: null });
     try {
-      await testConnection({ baseUrl, token });
+      const token = await login({ baseUrl, username, password });
       saveConnectionSettings(baseUrl, token);
       setState({ isTesting: false, current: { baseUrl, token } });
     } catch (error) {
@@ -100,18 +116,21 @@ export function createConnectionSettingsStore(deps: ConnectionSettingsStoreDeps 
     }
   }
 
-  /** "Switch server" -- clears saved settings and returns to the Connect screen. */
+  /** "Switch server" -- revokes the token, clears saved settings, and returns to the Connect screen. */
   function clear(): void {
+    // Best-effort: never blocks or fails the disconnect itself.
+    if (state.current) void logout(state.current).catch(() => {});
     clearConnectionSettings();
     setState({
       current: null,
       serverUrlText: getDefaultServerUrl() ?? "",
-      token: "",
+      username: "",
+      password: "",
       errorMessage: null,
     });
   }
 
-  return { state, updateServerUrlText, updateToken, testAndSave, clear, canSubmit, pasteRestricted };
+  return { state, updateServerUrlText, updateUsername, updatePassword, testAndSave, clear, canSubmit, pasteRestricted };
 }
 
 export type ConnectionSettingsStore = ReturnType<typeof createConnectionSettingsStore>;

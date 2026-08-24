@@ -1,7 +1,7 @@
 import { createServer as createHttpServer, type IncomingMessage, type ServerResponse, type Server } from "node:http";
 import { readFile } from "node:fs/promises";
 import { join, normalize } from "node:path";
-import { extractBearerToken, verifyToken } from "./auth.ts";
+import { extractBearerToken } from "./auth.ts";
 import { ValidationError } from "./tmux.ts";
 import { ProjectValidationError, type Project } from "./projects.ts";
 import {
@@ -47,13 +47,19 @@ import type { SessionMeta } from "./session-meta.ts";
 const DIFF_MODES: readonly DiffMode[] = ["staged", "unstaged", "untracked"];
 
 export interface ServerDeps {
-  token: string;
   publicDir?: string;
 
-  listProjects: () => Promise<Project[]>;
-  registerProject: (name: string, repoPath: string) => Promise<Project>;
-  getProject: (id: string) => Promise<Project | undefined>;
-  removeProject: (id: string) => Promise<void>;
+  // Auth (Phase 2 multi-user rewrite). "userId" is the username throughout
+  // this codebase -- users.ts/auth-tokens.ts have no separate id concept.
+  verifyPassword: (username: string, password: string) => Promise<boolean>;
+  issueToken: (username: string) => Promise<string>;
+  resolveToken: (rawToken: string | undefined) => Promise<string | undefined>;
+  revokeToken: (rawToken: string) => Promise<void>;
+
+  listProjects: (userId: string) => Promise<Project[]>;
+  registerProject: (userId: string, name: string, repoPath: string) => Promise<Project>;
+  getProject: (userId: string, id: string) => Promise<Project | undefined>;
+  removeProject: (userId: string, id: string) => Promise<void>;
   browseDirectory: (path: string | undefined) => Promise<DirectoryListing>;
 
   listProjectSessions: (project: Project) => Promise<ProjectSession[]>;
@@ -189,15 +195,15 @@ async function readJsonBody(req: IncomingMessage): Promise<unknown> {
   return raw ? JSON.parse(raw) : {};
 }
 
-function isAuthorized(req: IncomingMessage, token: string): boolean {
-  return verifyToken(extractBearerToken(req.headers.authorization), token);
-}
-
 // 10 failed auth attempts per minute per IP -- generous for a mistyped
 // token retried a few times, tight enough to make brute-forcing the
-// 32-byte hex token (see config.ts's generateToken()) computationally
+// 32-byte hex token (see auth-tokens.ts's issueAuthToken) computationally
 // pointless even before considering the keyspace itself.
 const AUTH_FAILURE_LIMIT: RateLimiterOptions = { windowMs: 60_000, max: 10 };
+
+// 5 failed logins per minute per username -- see the /api/login handler for
+// why this is keyed separately from AUTH_FAILURE_LIMIT.
+const LOGIN_FAILURE_LIMIT: RateLimiterOptions = { windowMs: 60_000, max: 5 };
 
 // 30 create-session / env-setup requests per minute per IP. Both spin up
 // real resources (git worktree + tmux session, or a docker-compose stack)
@@ -229,32 +235,33 @@ function sendTooManyRequests(res: ServerResponse, retryAfterMs: number): void {
 // disk write can never add latency to or block the actual response.
 // `accessLogPath` is optional: undefined skips logging entirely, so tests
 // that don't care about the audit log don't need to provide one.
-function checkAuthorized(
+async function checkAuthorized(
   req: IncomingMessage,
   res: ServerResponse,
-  token: string,
+  resolveToken: (rawToken: string | undefined) => Promise<string | undefined>,
   clientIp: string,
   limiter: RateLimiter,
   accessLogPath: string | undefined,
-): boolean {
-  const authorized = isAuthorized(req, token);
+): Promise<{ userId: string } | undefined> {
+  const userId = await resolveToken(extractBearerToken(req.headers.authorization));
   if (accessLogPath) {
     void appendAccessLogEntry(accessLogPath, {
       timestamp: new Date().toISOString(),
       ip: clientIp,
       method: req.method ?? "UNKNOWN",
       path: req.url ?? "",
-      outcome: authorized ? "authorized" : "denied",
+      outcome: userId ? "authorized" : "denied",
+      userId: userId ?? undefined,
     }).catch(() => {});
   }
-  if (authorized) return true;
+  if (userId) return { userId };
   const result = limiter.check(clientIp);
   if (result.limited) {
     sendTooManyRequests(res, result.retryAfterMs);
   } else {
     sendEmpty(res, 401);
   }
-  return false;
+  return undefined;
 }
 
 // Derives the "Open" URL's host from whatever address the browser is
@@ -430,6 +437,7 @@ async function serveStatic(publicDir: string, urlPath: string, res: ServerRespon
 
 export function createServer(deps: ServerDeps): Server {
   const authFailureLimiter = new RateLimiter(AUTH_FAILURE_LIMIT);
+  const loginFailureLimiter = new RateLimiter(LOGIN_FAILURE_LIMIT);
   const expensiveActionLimiter = new RateLimiter(EXPENSIVE_ACTION_LIMIT);
 
   return createHttpServer(async (req, res) => {
@@ -439,13 +447,53 @@ export function createServer(deps: ServerDeps): Server {
       const path = url.pathname;
       const isTruthy = (value: string | null) => value === "true" || value === "1";
 
+      if (path === "/api/login" && req.method === "POST") {
+        let body: unknown;
+        try {
+          body = await readJsonBody(req);
+        } catch {
+          return sendJson(res, 400, { error: "Malformed JSON body" });
+        }
+        const { username, password } = body as { username?: unknown; password?: unknown };
+        if (typeof username !== "string" || typeof password !== "string") {
+          return sendJson(res, 400, { error: "Missing username or password" });
+        }
+
+        if (!(await deps.verifyPassword(username, password))) {
+          // Two keys: per-IP (AUTH_FAILURE_LIMIT) and per-username
+          // (stricter) -- passwords are human-chosen, unlike the old
+          // 32-byte-hex token that limit was calibrated for, so a
+          // rotating-IP attacker must not get unlimited guesses at one
+          // account.
+          const ipResult = authFailureLimiter.check(clientIp);
+          const userResult = loginFailureLimiter.check(`login-user:${username}`);
+          if (ipResult.limited || userResult.limited) {
+            return sendTooManyRequests(res, Math.max(ipResult.retryAfterMs, userResult.retryAfterMs));
+          }
+          return sendJson(res, 401, { error: "Invalid username or password." });
+        }
+
+        const token = await deps.issueToken(username);
+        return sendJson(res, 200, { token });
+      }
+
+      if (path === "/api/logout" && req.method === "POST") {
+        const token = extractBearerToken(req.headers.authorization);
+        if (token) await deps.revokeToken(token);
+        return sendEmpty(res, 204);
+      }
+
       if (path === "/api/projects" && req.method === "GET") {
-        if (!checkAuthorized(req, res, deps.token, clientIp, authFailureLimiter, deps.accessLogPath)) return;
-        return sendJson(res, 200, { projects: await deps.listProjects() });
+        const auth = await checkAuthorized(req, res, deps.resolveToken, clientIp, authFailureLimiter, deps.accessLogPath);
+        if (!auth) return;
+        const { userId } = auth;
+        return sendJson(res, 200, { projects: await deps.listProjects(userId) });
       }
 
       if (path === "/api/browse" && req.method === "GET") {
-        if (!checkAuthorized(req, res, deps.token, clientIp, authFailureLimiter, deps.accessLogPath)) return;
+        const auth = await checkAuthorized(req, res, deps.resolveToken, clientIp, authFailureLimiter, deps.accessLogPath);
+        if (!auth) return;
+        const { userId } = auth;
 
         try {
           const listing = await deps.browseDirectory(url.searchParams.get("path") ?? undefined);
@@ -457,7 +505,9 @@ export function createServer(deps: ServerDeps): Server {
       }
 
       if (path === "/api/projects" && req.method === "POST") {
-        if (!checkAuthorized(req, res, deps.token, clientIp, authFailureLimiter, deps.accessLogPath)) return;
+        const auth = await checkAuthorized(req, res, deps.resolveToken, clientIp, authFailureLimiter, deps.accessLogPath);
+        if (!auth) return;
+        const { userId } = auth;
 
         let body: unknown;
         try {
@@ -471,7 +521,7 @@ export function createServer(deps: ServerDeps): Server {
         }
 
         try {
-          const project = await deps.registerProject(name, repoPath);
+          const project = await deps.registerProject(userId, name, repoPath);
           return sendJson(res, 201, project);
         } catch (error) {
           if (sendMappedError(res, error)) return;
@@ -481,9 +531,11 @@ export function createServer(deps: ServerDeps): Server {
 
       const projectIdMatch = path.match(/^\/api\/projects\/([^/]+)$/);
       if (projectIdMatch && req.method === "DELETE") {
-        if (!checkAuthorized(req, res, deps.token, clientIp, authFailureLimiter, deps.accessLogPath)) return;
+        const auth = await checkAuthorized(req, res, deps.resolveToken, clientIp, authFailureLimiter, deps.accessLogPath);
+        if (!auth) return;
+        const { userId } = auth;
 
-        const project = await deps.getProject(decodeURIComponent(projectIdMatch[1]));
+        const project = await deps.getProject(userId, decodeURIComponent(projectIdMatch[1]));
         if (!project) return sendJson(res, 404, { error: "Project not found" });
 
         const force = isTruthy(url.searchParams.get("force"));
@@ -494,15 +546,17 @@ export function createServer(deps: ServerDeps): Server {
           }
         }
 
-        await deps.removeProject(project.id);
+        await deps.removeProject(userId, project.id);
         return sendEmpty(res, 204);
       }
 
       const sessionsMatch = path.match(/^\/api\/projects\/([^/]+)\/sessions$/);
       if (sessionsMatch && (req.method === "GET" || req.method === "POST")) {
-        if (!checkAuthorized(req, res, deps.token, clientIp, authFailureLimiter, deps.accessLogPath)) return;
+        const auth = await checkAuthorized(req, res, deps.resolveToken, clientIp, authFailureLimiter, deps.accessLogPath);
+        if (!auth) return;
+        const { userId } = auth;
 
-        const project = await deps.getProject(decodeURIComponent(sessionsMatch[1]));
+        const project = await deps.getProject(userId, decodeURIComponent(sessionsMatch[1]));
         if (!project) return sendJson(res, 404, { error: "Project not found" });
 
         if (req.method === "GET") {
@@ -538,9 +592,11 @@ export function createServer(deps: ServerDeps): Server {
       // EMB-220 session templates.
       const templatesMatch = path.match(/^\/api\/projects\/([^/]+)\/templates$/);
       if (templatesMatch && (req.method === "GET" || req.method === "POST")) {
-        if (!checkAuthorized(req, res, deps.token, clientIp, authFailureLimiter, deps.accessLogPath)) return;
+        const auth = await checkAuthorized(req, res, deps.resolveToken, clientIp, authFailureLimiter, deps.accessLogPath);
+        if (!auth) return;
+        const { userId } = auth;
 
-        const project = await deps.getProject(decodeURIComponent(templatesMatch[1]));
+        const project = await deps.getProject(userId, decodeURIComponent(templatesMatch[1]));
         if (!project) return sendJson(res, 404, { error: "Project not found" });
 
         if (req.method === "GET") {
@@ -575,9 +631,11 @@ export function createServer(deps: ServerDeps): Server {
 
       const templateMatch = path.match(/^\/api\/projects\/([^/]+)\/templates\/([^/]+)$/);
       if (templateMatch && (req.method === "PUT" || req.method === "DELETE")) {
-        if (!checkAuthorized(req, res, deps.token, clientIp, authFailureLimiter, deps.accessLogPath)) return;
+        const auth = await checkAuthorized(req, res, deps.resolveToken, clientIp, authFailureLimiter, deps.accessLogPath);
+        if (!auth) return;
+        const { userId } = auth;
 
-        const project = await deps.getProject(decodeURIComponent(templateMatch[1]));
+        const project = await deps.getProject(userId, decodeURIComponent(templateMatch[1]));
         if (!project) return sendJson(res, 404, { error: "Project not found" });
         const templateId = decodeURIComponent(templateMatch[2]);
 
@@ -614,9 +672,11 @@ export function createServer(deps: ServerDeps): Server {
 
       const sessionDeleteMatch = path.match(/^\/api\/projects\/([^/]+)\/sessions\/([^/]+)$/);
       if (sessionDeleteMatch && req.method === "DELETE") {
-        if (!checkAuthorized(req, res, deps.token, clientIp, authFailureLimiter, deps.accessLogPath)) return;
+        const auth = await checkAuthorized(req, res, deps.resolveToken, clientIp, authFailureLimiter, deps.accessLogPath);
+        if (!auth) return;
+        const { userId } = auth;
 
-        const project = await deps.getProject(decodeURIComponent(sessionDeleteMatch[1]));
+        const project = await deps.getProject(userId, decodeURIComponent(sessionDeleteMatch[1]));
         if (!project) return sendJson(res, 404, { error: "Project not found" });
 
         const sessionSlug = decodeURIComponent(sessionDeleteMatch[2]);
@@ -638,9 +698,11 @@ export function createServer(deps: ServerDeps): Server {
       // request above is ever sent.
       const branchMergedMatch = path.match(/^\/api\/projects\/([^/]+)\/sessions\/([^/]+)\/branch-merged$/);
       if (branchMergedMatch && req.method === "GET") {
-        if (!checkAuthorized(req, res, deps.token, clientIp, authFailureLimiter, deps.accessLogPath)) return;
+        const auth = await checkAuthorized(req, res, deps.resolveToken, clientIp, authFailureLimiter, deps.accessLogPath);
+        if (!auth) return;
+        const { userId } = auth;
 
-        const project = await deps.getProject(decodeURIComponent(branchMergedMatch[1]));
+        const project = await deps.getProject(userId, decodeURIComponent(branchMergedMatch[1]));
         if (!project) return sendJson(res, 404, { error: "Project not found" });
 
         const sessionSlug = decodeURIComponent(branchMergedMatch[2]);
@@ -659,9 +721,11 @@ export function createServer(deps: ServerDeps): Server {
       // TerminalKeydownHandlers.wasmJs.kt for the client side.
       const pasteBufferMatch = path.match(/^\/api\/projects\/([^/]+)\/sessions\/([^/]+)\/paste-buffer$/);
       if (pasteBufferMatch && req.method === "GET") {
-        if (!checkAuthorized(req, res, deps.token, clientIp, authFailureLimiter, deps.accessLogPath)) return;
+        const auth = await checkAuthorized(req, res, deps.resolveToken, clientIp, authFailureLimiter, deps.accessLogPath);
+        if (!auth) return;
+        const { userId } = auth;
 
-        const project = await deps.getProject(decodeURIComponent(pasteBufferMatch[1]));
+        const project = await deps.getProject(userId, decodeURIComponent(pasteBufferMatch[1]));
         if (!project) return sendJson(res, 404, { error: "Project not found" });
 
         const sessionSlug = decodeURIComponent(pasteBufferMatch[2]);
@@ -678,9 +742,11 @@ export function createServer(deps: ServerDeps): Server {
       // deleted) for a single session.
       const sessionEventsMatch = path.match(/^\/api\/projects\/([^/]+)\/sessions\/([^/]+)\/events$/);
       if (sessionEventsMatch && req.method === "GET") {
-        if (!checkAuthorized(req, res, deps.token, clientIp, authFailureLimiter, deps.accessLogPath)) return;
+        const auth = await checkAuthorized(req, res, deps.resolveToken, clientIp, authFailureLimiter, deps.accessLogPath);
+        if (!auth) return;
+        const { userId } = auth;
 
-        const project = await deps.getProject(decodeURIComponent(sessionEventsMatch[1]));
+        const project = await deps.getProject(userId, decodeURIComponent(sessionEventsMatch[1]));
         if (!project) return sendJson(res, 404, { error: "Project not found" });
 
         const sessionSlug = decodeURIComponent(sessionEventsMatch[2]);
@@ -693,9 +759,11 @@ export function createServer(deps: ServerDeps): Server {
       // frontend can render "N/A" without treating it as an error.
       const resourceUsageMatch = path.match(/^\/api\/projects\/([^/]+)\/sessions\/([^/]+)\/resource-usage$/);
       if (resourceUsageMatch && req.method === "GET") {
-        if (!checkAuthorized(req, res, deps.token, clientIp, authFailureLimiter, deps.accessLogPath)) return;
+        const auth = await checkAuthorized(req, res, deps.resolveToken, clientIp, authFailureLimiter, deps.accessLogPath);
+        if (!auth) return;
+        const { userId } = auth;
 
-        const project = await deps.getProject(decodeURIComponent(resourceUsageMatch[1]));
+        const project = await deps.getProject(userId, decodeURIComponent(resourceUsageMatch[1]));
         if (!project) return sendJson(res, 404, { error: "Project not found" });
 
         const sessionSlug = decodeURIComponent(resourceUsageMatch[2]);
@@ -715,9 +783,11 @@ export function createServer(deps: ServerDeps): Server {
       // shape.
       const sessionMetaMatch = path.match(/^\/api\/projects\/([^/]+)\/sessions\/([^/]+)\/meta$/);
       if (sessionMetaMatch && req.method === "PUT") {
-        if (!checkAuthorized(req, res, deps.token, clientIp, authFailureLimiter, deps.accessLogPath)) return;
+        const auth = await checkAuthorized(req, res, deps.resolveToken, clientIp, authFailureLimiter, deps.accessLogPath);
+        if (!auth) return;
+        const { userId } = auth;
 
-        const project = await deps.getProject(decodeURIComponent(sessionMetaMatch[1]));
+        const project = await deps.getProject(userId, decodeURIComponent(sessionMetaMatch[1]));
         if (!project) return sendJson(res, 404, { error: "Project not found" });
         const sessionSlug = decodeURIComponent(sessionMetaMatch[2]);
 
@@ -744,9 +814,11 @@ export function createServer(deps: ServerDeps): Server {
       // the split was never opened (nothing to tear down).
       const sessionSplitMatch = path.match(/^\/api\/projects\/([^/]+)\/sessions\/([^/]+)\/split$/);
       if (sessionSplitMatch && req.method === "DELETE") {
-        if (!checkAuthorized(req, res, deps.token, clientIp, authFailureLimiter, deps.accessLogPath)) return;
+        const auth = await checkAuthorized(req, res, deps.resolveToken, clientIp, authFailureLimiter, deps.accessLogPath);
+        if (!auth) return;
+        const { userId } = auth;
 
-        const project = await deps.getProject(decodeURIComponent(sessionSplitMatch[1]));
+        const project = await deps.getProject(userId, decodeURIComponent(sessionSplitMatch[1]));
         if (!project) return sendJson(res, 404, { error: "Project not found" });
 
         const sessionSlug = decodeURIComponent(sessionSplitMatch[2]);
@@ -756,9 +828,11 @@ export function createServer(deps: ServerDeps): Server {
 
       const creationMatch = path.match(/^\/api\/projects\/([^/]+)\/sessions\/([^/]+)\/creation$/);
       if (creationMatch && req.method === "GET") {
-        if (!checkAuthorized(req, res, deps.token, clientIp, authFailureLimiter, deps.accessLogPath)) return;
+        const auth = await checkAuthorized(req, res, deps.resolveToken, clientIp, authFailureLimiter, deps.accessLogPath);
+        if (!auth) return;
+        const { userId } = auth;
 
-        const project = await deps.getProject(decodeURIComponent(creationMatch[1]));
+        const project = await deps.getProject(userId, decodeURIComponent(creationMatch[1]));
         if (!project) return sendJson(res, 404, { error: "Project not found" });
 
         const sessionSlug = decodeURIComponent(creationMatch[2]);
@@ -774,9 +848,11 @@ export function createServer(deps: ServerDeps): Server {
 
       const changesMatch = path.match(/^\/api\/projects\/([^/]+)\/sessions\/([^/]+)\/changes$/);
       if (changesMatch && req.method === "GET") {
-        if (!checkAuthorized(req, res, deps.token, clientIp, authFailureLimiter, deps.accessLogPath)) return;
+        const auth = await checkAuthorized(req, res, deps.resolveToken, clientIp, authFailureLimiter, deps.accessLogPath);
+        if (!auth) return;
+        const { userId } = auth;
 
-        const project = await deps.getProject(decodeURIComponent(changesMatch[1]));
+        const project = await deps.getProject(userId, decodeURIComponent(changesMatch[1]));
         if (!project) return sendJson(res, 404, { error: "Project not found" });
 
         const sessionSlug = decodeURIComponent(changesMatch[2]);
@@ -791,9 +867,11 @@ export function createServer(deps: ServerDeps): Server {
 
       const diffMatch = path.match(/^\/api\/projects\/([^/]+)\/sessions\/([^/]+)\/diff$/);
       if (diffMatch && req.method === "GET") {
-        if (!checkAuthorized(req, res, deps.token, clientIp, authFailureLimiter, deps.accessLogPath)) return;
+        const auth = await checkAuthorized(req, res, deps.resolveToken, clientIp, authFailureLimiter, deps.accessLogPath);
+        if (!auth) return;
+        const { userId } = auth;
 
-        const project = await deps.getProject(decodeURIComponent(diffMatch[1]));
+        const project = await deps.getProject(userId, decodeURIComponent(diffMatch[1]));
         if (!project) return sendJson(res, 404, { error: "Project not found" });
 
         const filePath = url.searchParams.get("path");
@@ -816,9 +894,11 @@ export function createServer(deps: ServerDeps): Server {
 
       const stageMatch = path.match(/^\/api\/projects\/([^/]+)\/sessions\/([^/]+)\/stage$/);
       if (stageMatch && req.method === "POST") {
-        if (!checkAuthorized(req, res, deps.token, clientIp, authFailureLimiter, deps.accessLogPath)) return;
+        const auth = await checkAuthorized(req, res, deps.resolveToken, clientIp, authFailureLimiter, deps.accessLogPath);
+        if (!auth) return;
+        const { userId } = auth;
 
-        const project = await deps.getProject(decodeURIComponent(stageMatch[1]));
+        const project = await deps.getProject(userId, decodeURIComponent(stageMatch[1]));
         if (!project) return sendJson(res, 404, { error: "Project not found" });
 
         let body: unknown;
@@ -842,9 +922,11 @@ export function createServer(deps: ServerDeps): Server {
 
       const unstageMatch = path.match(/^\/api\/projects\/([^/]+)\/sessions\/([^/]+)\/unstage$/);
       if (unstageMatch && req.method === "POST") {
-        if (!checkAuthorized(req, res, deps.token, clientIp, authFailureLimiter, deps.accessLogPath)) return;
+        const auth = await checkAuthorized(req, res, deps.resolveToken, clientIp, authFailureLimiter, deps.accessLogPath);
+        if (!auth) return;
+        const { userId } = auth;
 
-        const project = await deps.getProject(decodeURIComponent(unstageMatch[1]));
+        const project = await deps.getProject(userId, decodeURIComponent(unstageMatch[1]));
         if (!project) return sendJson(res, 404, { error: "Project not found" });
 
         let body: unknown;
@@ -868,9 +950,11 @@ export function createServer(deps: ServerDeps): Server {
 
       const discardMatch = path.match(/^\/api\/projects\/([^/]+)\/sessions\/([^/]+)\/discard$/);
       if (discardMatch && req.method === "POST") {
-        if (!checkAuthorized(req, res, deps.token, clientIp, authFailureLimiter, deps.accessLogPath)) return;
+        const auth = await checkAuthorized(req, res, deps.resolveToken, clientIp, authFailureLimiter, deps.accessLogPath);
+        if (!auth) return;
+        const { userId } = auth;
 
-        const project = await deps.getProject(decodeURIComponent(discardMatch[1]));
+        const project = await deps.getProject(userId, decodeURIComponent(discardMatch[1]));
         if (!project) return sendJson(res, 404, { error: "Project not found" });
 
         let body: unknown;
@@ -897,9 +981,11 @@ export function createServer(deps: ServerDeps): Server {
 
       const commitMatch = path.match(/^\/api\/projects\/([^/]+)\/sessions\/([^/]+)\/commit$/);
       if (commitMatch && req.method === "POST") {
-        if (!checkAuthorized(req, res, deps.token, clientIp, authFailureLimiter, deps.accessLogPath)) return;
+        const auth = await checkAuthorized(req, res, deps.resolveToken, clientIp, authFailureLimiter, deps.accessLogPath);
+        if (!auth) return;
+        const { userId } = auth;
 
-        const project = await deps.getProject(decodeURIComponent(commitMatch[1]));
+        const project = await deps.getProject(userId, decodeURIComponent(commitMatch[1]));
         if (!project) return sendJson(res, 404, { error: "Project not found" });
 
         let body: unknown;
@@ -925,9 +1011,11 @@ export function createServer(deps: ServerDeps): Server {
 
       const envFilesMatch = path.match(/^\/api\/projects\/([^/]+)\/sessions\/([^/]+)\/env-files$/);
       if (envFilesMatch && req.method === "GET") {
-        if (!checkAuthorized(req, res, deps.token, clientIp, authFailureLimiter, deps.accessLogPath)) return;
+        const auth = await checkAuthorized(req, res, deps.resolveToken, clientIp, authFailureLimiter, deps.accessLogPath);
+        if (!auth) return;
+        const { userId } = auth;
 
-        const project = await deps.getProject(decodeURIComponent(envFilesMatch[1]));
+        const project = await deps.getProject(userId, decodeURIComponent(envFilesMatch[1]));
         if (!project) return sendJson(res, 404, { error: "Project not found" });
 
         const sessionSlug = decodeURIComponent(envFilesMatch[2]);
@@ -942,9 +1030,11 @@ export function createServer(deps: ServerDeps): Server {
 
       const envFileMatch = path.match(/^\/api\/projects\/([^/]+)\/sessions\/([^/]+)\/env-files\/([^/]+)$/);
       if (envFileMatch && (req.method === "GET" || req.method === "PUT")) {
-        if (!checkAuthorized(req, res, deps.token, clientIp, authFailureLimiter, deps.accessLogPath)) return;
+        const auth = await checkAuthorized(req, res, deps.resolveToken, clientIp, authFailureLimiter, deps.accessLogPath);
+        if (!auth) return;
+        const { userId } = auth;
 
-        const project = await deps.getProject(decodeURIComponent(envFileMatch[1]));
+        const project = await deps.getProject(userId, decodeURIComponent(envFileMatch[1]));
         if (!project) return sendJson(res, 404, { error: "Project not found" });
 
         const sessionSlug = decodeURIComponent(envFileMatch[2]);
@@ -980,9 +1070,11 @@ export function createServer(deps: ServerDeps): Server {
 
       const envCancelMatch = path.match(/^\/api\/projects\/([^/]+)\/sessions\/([^/]+)\/env\/cancel$/);
       if (envCancelMatch && req.method === "POST") {
-        if (!checkAuthorized(req, res, deps.token, clientIp, authFailureLimiter, deps.accessLogPath)) return;
+        const auth = await checkAuthorized(req, res, deps.resolveToken, clientIp, authFailureLimiter, deps.accessLogPath);
+        if (!auth) return;
+        const { userId } = auth;
 
-        const project = await deps.getProject(decodeURIComponent(envCancelMatch[1]));
+        const project = await deps.getProject(userId, decodeURIComponent(envCancelMatch[1]));
         if (!project) return sendJson(res, 404, { error: "Project not found" });
 
         const sessionSlug = decodeURIComponent(envCancelMatch[2]);
@@ -1002,9 +1094,11 @@ export function createServer(deps: ServerDeps): Server {
       // progress observed by polling GET .../env.
       const envReloadMatch = path.match(/^\/api\/projects\/([^/]+)\/sessions\/([^/]+)\/env\/reload$/);
       if (envReloadMatch && req.method === "POST") {
-        if (!checkAuthorized(req, res, deps.token, clientIp, authFailureLimiter, deps.accessLogPath)) return;
+        const auth = await checkAuthorized(req, res, deps.resolveToken, clientIp, authFailureLimiter, deps.accessLogPath);
+        if (!auth) return;
+        const { userId } = auth;
 
-        const project = await deps.getProject(decodeURIComponent(envReloadMatch[1]));
+        const project = await deps.getProject(userId, decodeURIComponent(envReloadMatch[1]));
         if (!project) return sendJson(res, 404, { error: "Project not found" });
 
         const sessionSlug = decodeURIComponent(envReloadMatch[2]);
@@ -1029,9 +1123,11 @@ export function createServer(deps: ServerDeps): Server {
 
       const envMatch = path.match(/^\/api\/projects\/([^/]+)\/sessions\/([^/]+)\/env$/);
       if (envMatch && (req.method === "GET" || req.method === "POST" || req.method === "DELETE")) {
-        if (!checkAuthorized(req, res, deps.token, clientIp, authFailureLimiter, deps.accessLogPath)) return;
+        const auth = await checkAuthorized(req, res, deps.resolveToken, clientIp, authFailureLimiter, deps.accessLogPath);
+        if (!auth) return;
+        const { userId } = auth;
 
-        const project = await deps.getProject(decodeURIComponent(envMatch[1]));
+        const project = await deps.getProject(userId, decodeURIComponent(envMatch[1]));
         if (!project) return sendJson(res, 404, { error: "Project not found" });
 
         const sessionSlug = decodeURIComponent(envMatch[2]);
@@ -1072,12 +1168,16 @@ export function createServer(deps: ServerDeps): Server {
       }
 
       if (path === "/api/push/public-key" && req.method === "GET") {
-        if (!checkAuthorized(req, res, deps.token, clientIp, authFailureLimiter, deps.accessLogPath)) return;
+        const auth = await checkAuthorized(req, res, deps.resolveToken, clientIp, authFailureLimiter, deps.accessLogPath);
+        if (!auth) return;
+        const { userId } = auth;
         return sendJson(res, 200, { publicKey: deps.getPushPublicKey() });
       }
 
       if (path === "/api/push/subscribe" && req.method === "POST") {
-        if (!checkAuthorized(req, res, deps.token, clientIp, authFailureLimiter, deps.accessLogPath)) return;
+        const auth = await checkAuthorized(req, res, deps.resolveToken, clientIp, authFailureLimiter, deps.accessLogPath);
+        if (!auth) return;
+        const { userId } = auth;
 
         let body: unknown;
         try {
@@ -1099,7 +1199,9 @@ export function createServer(deps: ServerDeps): Server {
       }
 
       if (path === "/api/push/unsubscribe" && req.method === "POST") {
-        if (!checkAuthorized(req, res, deps.token, clientIp, authFailureLimiter, deps.accessLogPath)) return;
+        const auth = await checkAuthorized(req, res, deps.resolveToken, clientIp, authFailureLimiter, deps.accessLogPath);
+        if (!auth) return;
+        const { userId } = auth;
 
         let body: unknown;
         try {
@@ -1119,8 +1221,15 @@ export function createServer(deps: ServerDeps): Server {
       // when. Bearer-token gated like every other route -- so viewing the
       // log is itself an audited access, same as everything else here.
       if (path === "/api/access-log" && req.method === "GET") {
-        if (!checkAuthorized(req, res, deps.token, clientIp, authFailureLimiter, deps.accessLogPath)) return;
-        return sendJson(res, 200, { entries: await deps.getAccessLog() });
+        const auth = await checkAuthorized(req, res, deps.resolveToken, clientIp, authFailureLimiter, deps.accessLogPath);
+        if (!auth) return;
+        const { userId } = auth;
+        // Scoped to the requesting user: the raw log is cross-tenant data
+        // now that accounts are separate (entries from before the
+        // multi-user rewrite, and WS-upgrade entries, carry no userId and
+        // are hidden from everyone).
+        const entries = (await deps.getAccessLog()).filter((entry) => entry.userId === userId);
+        return sendJson(res, 200, { entries });
       }
 
       // No bearer-token auth by design -- see isLoopbackAddress's comment.

@@ -35,11 +35,12 @@ describe("App", () => {
 
   test("renders the mobile Project list once a server is configured, below the desktop breakpoint", async () => {
     const settingsStore = createConnectionSettingsStore({
-      testConnection: vi.fn().mockResolvedValue(undefined),
+      login: vi.fn().mockResolvedValue("secret"),
       defaultServerUrl: () => null,
     });
     settingsStore.updateServerUrlText("https://tmux.example.com");
-    settingsStore.updateToken("secret");
+    settingsStore.updateUsername("alice");
+    settingsStore.updatePassword("secret");
     await settingsStore.testAndSave();
 
     const createApiClientImpl = vi.fn().mockReturnValue({
@@ -60,11 +61,12 @@ describe("App", () => {
 
   test("renders the desktop Web shell once a server is configured, at/above the desktop breakpoint", async () => {
     const settingsStore = createConnectionSettingsStore({
-      testConnection: vi.fn().mockResolvedValue(undefined),
+      login: vi.fn().mockResolvedValue("secret"),
       defaultServerUrl: () => null,
     });
     settingsStore.updateServerUrlText("https://tmux.example.com");
-    settingsStore.updateToken("secret");
+    settingsStore.updateUsername("alice");
+    settingsStore.updatePassword("secret");
     await settingsStore.testAndSave();
 
     const createApiClientImpl = vi.fn().mockReturnValue({

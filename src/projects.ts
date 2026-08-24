@@ -5,6 +5,7 @@ import { slugifyBranchName } from "./slug.ts";
 
 export interface Project {
   id: string;
+  userId: string;
   name: string;
   repoPath: string;
   createdAt: string;
@@ -48,8 +49,14 @@ export interface RegisterProjectDeps {
   randomSuffix?: RandomSuffixFn;
 }
 
+export async function listProjects(filePath: string, userId: string): Promise<Project[]> {
+  const projects = await loadProjects(filePath);
+  return projects.filter((project) => project.userId === userId);
+}
+
 export async function registerProject(
   filePath: string,
+  userId: string,
   name: string,
   repoPath: string,
   deps: RegisterProjectDeps,
@@ -65,8 +72,15 @@ export async function registerProject(
   }
 
   const projects = await loadProjects(filePath);
+  // Exact-path match only (symlinked or differently-spelled paths to the
+  // same repo are NOT caught) -- the goal is preventing accidental double
+  // registration, not fencing mutually distrusting users off one repo.
+  if (projects.some((project) => project.repoPath === repoPath)) {
+    throw new ProjectValidationError(`repoPath is already registered: ${repoPath}`);
+  }
   const project: Project = {
     id: generateProjectId(name, deps.randomSuffix),
+    userId,
     name,
     repoPath,
     createdAt: new Date().toISOString(),
@@ -75,12 +89,15 @@ export async function registerProject(
   return project;
 }
 
-export async function removeProject(filePath: string, id: string): Promise<void> {
+export async function removeProject(filePath: string, userId: string, id: string): Promise<void> {
   const projects = await loadProjects(filePath);
-  await saveProjects(filePath, projects.filter((project) => project.id !== id));
+  await saveProjects(
+    filePath,
+    projects.filter((project) => !(project.id === id && project.userId === userId)),
+  );
 }
 
-export async function getProject(filePath: string, id: string): Promise<Project | undefined> {
+export async function getProject(filePath: string, userId: string, id: string): Promise<Project | undefined> {
   const projects = await loadProjects(filePath);
-  return projects.find((project) => project.id === id);
+  return projects.find((project) => project.id === id && project.userId === userId);
 }

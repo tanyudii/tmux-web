@@ -1,10 +1,13 @@
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
-import { randomBytes } from "node:crypto";
 
+// No auth fields here: since the multi-user rewrite, credentials live in
+// users.json (scrypt hashes) and sessions in auth-tokens.json (SHA-256
+// token hashes) -- both created via `tmuxweb user add` / POST /api/login,
+// not via config.json. A legacy `token` field in an existing config.json
+// is simply ignored on read.
 export interface Config {
-  token: string;
   port: number;
   host: string;
 }
@@ -12,7 +15,6 @@ export interface Config {
 export class ConfigError extends Error {}
 export class ConfigNotFoundError extends ConfigError {}
 
-const MIN_TOKEN_LENGTH = 16;
 const DEFAULT_PORT = 5309;
 const DEFAULT_HOST = "127.0.0.1";
 const CONFIG_FILE_NAME = "config.json";
@@ -23,17 +25,6 @@ export function defaultConfigDir(): string {
 
 export function configFilePath(configDir: string = defaultConfigDir()): string {
   return join(configDir, CONFIG_FILE_NAME);
-}
-
-export function generateToken(): string {
-  return randomBytes(32).toString("hex");
-}
-
-export function validateToken(token: unknown): string {
-  if (typeof token !== "string" || token.length < MIN_TOKEN_LENGTH) {
-    throw new ConfigError(`token must be a string of at least ${MIN_TOKEN_LENGTH} characters`);
-  }
-  return token;
 }
 
 export function validatePort(port: unknown): number {
@@ -54,14 +45,13 @@ export function validateHost(host: unknown): string {
 function parseConfigJson(raw: unknown): Config {
   const obj = (raw ?? {}) as Record<string, unknown>;
   return {
-    token: validateToken(obj.token),
     port: validatePort(obj.port ?? DEFAULT_PORT),
     host: validateHost(obj.host ?? DEFAULT_HOST),
   };
 }
 
 export function createDefaultConfig(): Config {
-  return { token: generateToken(), port: DEFAULT_PORT, host: DEFAULT_HOST };
+  return { port: DEFAULT_PORT, host: DEFAULT_HOST };
 }
 
 export async function configExists(configDir: string = defaultConfigDir()): Promise<boolean> {
@@ -98,7 +88,7 @@ export async function readConfig(configDir: string = defaultConfigDir()): Promis
 
 // Write-then-rename keeps concurrent readers from ever seeing a
 // half-written file (same pattern as projects.ts). Mode 0o600 keeps the
-// bearer token unreadable by other local accounts on a shared Linux host --
+// config unreadable by other local accounts on a shared Linux host --
 // the default mode (0o644 minus umask) would leave it world-readable.
 export async function writeConfig(config: Config, configDir: string = defaultConfigDir()): Promise<void> {
   const filePath = configFilePath(configDir);

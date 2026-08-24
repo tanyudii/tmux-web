@@ -38,34 +38,32 @@ test("configExists returns false before init, true after writeConfig", async () 
 
 test("writeConfig then readConfig round-trips the same values", async () => {
   await withTempDir(async (dir) => {
-    const config = { token: "a-secret-token-that-is-long-enough", port: 6000, host: "0.0.0.0" };
+    const config = { port: 6000, host: "0.0.0.0" };
     await writeConfig(config, dir);
     assert.deepEqual(await readConfig(dir), config);
   });
 });
 
-test("readConfig fills in defaults for a partially-specified config.json", async () => {
+test("readConfig ignores a legacy token field from the pre-multi-user config", async () => {
   await withTempDir(async (dir) => {
-    await writeConfig({ token: "a-secret-token-that-is-long-enough" } as never, dir);
+    const { writeFile } = await import("node:fs/promises");
+    await writeFile(configFilePath(dir), JSON.stringify({ token: "legacy-shared-token", port: 6000, host: "0.0.0.0" }));
+    assert.deepEqual(await readConfig(dir), { port: 6000, host: "0.0.0.0" });
+  });
+});
+
+test("readConfig fills in defaults for an empty config.json", async () => {
+  await withTempDir(async (dir) => {
+    await writeConfig({} as never, dir);
     const config = await readConfig(dir);
     assert.equal(config.port, 5309);
     assert.equal(config.host, "127.0.0.1");
   });
 });
 
-test("readConfig throws ConfigError when token is too short", async () => {
-  await withTempDir(async (dir) => {
-    await writeConfig({ token: "short", port: 5309, host: "127.0.0.1" }, dir);
-    await assert.rejects(() => readConfig(dir), ConfigError);
-  });
-});
-
 test("readConfig throws ConfigError when port is out of range", async () => {
   await withTempDir(async (dir) => {
-    await writeConfig(
-      { token: "a-secret-token-that-is-long-enough", port: 70000, host: "127.0.0.1" },
-      dir,
-    );
+    await writeConfig({ port: 70000, host: "127.0.0.1" } as never, dir);
     await assert.rejects(() => readConfig(dir), ConfigError);
   });
 });
@@ -79,14 +77,10 @@ test("readConfig throws ConfigError when config.json is not valid JSON", async (
   });
 });
 
-test("createDefaultConfig generates a token that passes validation", async () => {
+test("createDefaultConfig round-trips through writeConfig/readConfig", async () => {
   await withTempDir(async (dir) => {
     const config = createDefaultConfig();
     await writeConfig(config, dir);
     assert.deepEqual(await readConfig(dir), config);
   });
-});
-
-test("createDefaultConfig generates a different token each call", () => {
-  assert.notEqual(createDefaultConfig().token, createDefaultConfig().token);
 });

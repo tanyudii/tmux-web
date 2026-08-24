@@ -1,8 +1,8 @@
 import { main as startServer } from "../main.ts";
 import { printHelp } from "./help.ts";
 import { runInit } from "./init.ts";
-import { runGenerate } from "./generate-token.ts";
 import { runConfigCommand } from "./config-command.ts";
+import { runUserCommand } from "./user-command.ts";
 import { runServiceCommand } from "./service-command.ts";
 import { runUpgrade } from "./upgrade.ts";
 import { printVersion } from "./version.ts";
@@ -15,8 +15,8 @@ export interface RunCliDeps {
   startServer?: () => Promise<void>;
   printHelp?: () => void;
   runInit?: (args: string[]) => Promise<void>;
-  runGenerate?: (args: string[]) => Promise<void>;
   runConfigCommand?: (args: string[]) => Promise<void>;
+  runUserCommand?: (args: string[]) => Promise<void>;
   runServiceCommand?: (args: string[]) => Promise<void>;
   runUpgrade?: (args: string[]) => Promise<void>;
   runMcpCommand?: (args: string[]) => Promise<void>;
@@ -30,8 +30,8 @@ export async function runCli(argv: string[], deps: RunCliDeps = {}): Promise<voi
     startServer: start = startServer,
     printHelp: help = printHelp,
     runInit: init = runInit,
-    runGenerate: generate = runGenerate,
     runConfigCommand: config = runConfigCommand,
+    runUserCommand: user = runUserCommand,
     runServiceCommand: service = runServiceCommand,
     runUpgrade: upgrade = runUpgrade,
     runMcpCommand: mcp = runMcpCommand,
@@ -47,10 +47,10 @@ export async function runCli(argv: string[], deps: RunCliDeps = {}): Promise<voi
       return start();
     case "init":
       return init(rest);
-    case "generate":
-      return generate(rest);
     case "config":
       return config(rest);
+    case "user":
+      return user(rest);
     case "service":
       return service(rest);
     case "upgrade":

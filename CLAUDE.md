@@ -105,7 +105,8 @@ Code and runtime data live in two deliberately separate places:
   since npm's git-spec resolution is never invoked) + `npm ci --omit=dev` +
   `npm link`.
 - **`~/.tmux-web`** (`src/config.ts`'s `defaultConfigDir()`) -- runtime data
-  only: `config.json` (token/port/host), `projects.json`, worktrees. Never
+  only: `config.json` (port/host), `users.json`, `auth-tokens.json`,
+  `projects.json`, worktrees. Never
   code. Never touched by install/upgrade.
 
 `src/cli/upgrade.ts` is the source of truth for this mechanism:

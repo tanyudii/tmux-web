@@ -10,7 +10,7 @@ import {
 import type { Project } from "../projects.ts";
 
 const PROJECTS: Project[] = [
-  { id: "widgets-ab12cd", name: "widgets", repoPath: "/repos/widgets", createdAt: "2026-01-01T00:00:00.000Z" },
+  { id: "widgets-ab12cd", userId: "alice", name: "widgets", repoPath: "/repos/widgets", createdAt: "2026-01-01T00:00:00.000Z" },
 ];
 
 test("resolveProject matches by id", () => {

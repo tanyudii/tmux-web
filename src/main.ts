@@ -23,12 +23,14 @@ import {
   sendBellPush,
   BellPushDebouncer,
 } from "./push-notifications.ts";
-import { extractQueryToken, verifyToken } from "./auth.ts";
+import { extractQueryToken } from "./auth.ts";
+import { verifyPassword } from "./users.ts";
+import { issueAuthToken, resolveAuthToken, revokeAuthToken } from "./auth-tokens.ts";
 import { RateLimiter } from "./rate-limit.ts";
 import { attachPtyToSocket, type SocketLike } from "./pty-bridge.ts";
 import { attachHeartbeat, type HeartbeatSocketLike } from "./ws-heartbeat.ts";
 import {
-  loadProjects,
+  listProjects as listProjectsImpl,
   registerProject as registerProjectImpl,
   removeProject as removeProjectImpl,
   getProject as getProjectImpl,
@@ -171,6 +173,8 @@ export async function main(): Promise<void> {
   const sessionMetaFile = join(configDir, "session-meta.json");
   const accessLogPath = join(configDir, "access.log");
   const worktreesRoot = join(configDir, "worktrees");
+  const usersFile = join(configDir, "users.json");
+  const authTokensFile = join(configDir, "auth-tokens.json");
 
   // EMB-213: one events file per project (not per session, not global) --
   // see session-events.ts's doc comment.
@@ -264,16 +268,20 @@ export async function main(): Promise<void> {
   }
 
   const httpServer = createServer({
-    token: config.token,
     publicDir: webBuildDir,
     accessLogPath,
     getAccessLog: () => readAccessLog(accessLogPath),
 
-    listProjects: () => loadProjects(projectsFile),
-    registerProject: (name, repoPath) =>
-      registerProjectImpl(projectsFile, name, repoPath, { isGitRepo }),
-    getProject: (id) => getProjectImpl(projectsFile, id),
-    removeProject: (id) => removeProjectImpl(projectsFile, id),
+    verifyPassword: (username, password) => verifyPassword(usersFile, username, password),
+    issueToken: (username) => issueAuthToken(authTokensFile, username),
+    resolveToken: (rawToken) => resolveAuthToken(authTokensFile, rawToken),
+    revokeToken: (rawToken) => revokeAuthToken(authTokensFile, rawToken),
+
+    listProjects: (userId) => listProjectsImpl(projectsFile, userId),
+    registerProject: (userId, name, repoPath) =>
+      registerProjectImpl(projectsFile, userId, name, repoPath, { isGitRepo }),
+    getProject: (userId, id) => getProjectImpl(projectsFile, userId, id),
+    removeProject: (userId, id) => removeProjectImpl(projectsFile, userId, id),
     // Directory browser's default starting point is os.homedir() unless
     // overridden -- useful when the service account's $HOME isn't where
     // repos actually live (or, as here, when $HOME is repurposed for an
@@ -360,9 +368,26 @@ export async function main(): Promise<void> {
       // rather than the same session twice.
       const isSplitPane = url.searchParams.get("pane") === "1";
 
-      if (!isValidSessionName(sessionName) || !verifyToken(token, config.token)) {
+      if (!isValidSessionName(sessionName)) {
         logWsAccess(accessLogPath, clientIp, url.pathname, "denied");
         rejectUnauthorizedUpgrade(socket, clientIp, wsAuthFailureLimiter);
+        return;
+      }
+
+      const wsUserId = await resolveAuthToken(authTokensFile, token);
+      if (!wsUserId) {
+        logWsAccess(accessLogPath, clientIp, url.pathname, "denied");
+        rejectUnauthorizedUpgrade(socket, clientIp, wsAuthFailureLimiter);
+        return;
+      }
+
+      const parsedSession = parseSessionName(sessionName);
+      const owningProject = parsedSession
+        ? await getProjectImpl(projectsFile, wsUserId, parsedSession.projectId)
+        : undefined;
+      if (!owningProject) {
+        logWsAccess(accessLogPath, clientIp, url.pathname, "denied");
+        rejectUpgrade(socket, 404, "Not Found");
         return;
       }
       logWsAccess(accessLogPath, clientIp, url.pathname, "authorized");
@@ -407,7 +432,8 @@ export async function main(): Promise<void> {
     }
 
     if (url.pathname === "/ws/logs") {
-      if (!verifyToken(token, config.token)) {
+      const wsLogsUserId = await resolveAuthToken(authTokensFile, token);
+      if (!wsLogsUserId) {
         logWsAccess(accessLogPath, clientIp, url.pathname, "denied");
         rejectUnauthorizedUpgrade(socket, clientIp, wsAuthFailureLimiter);
         return;
@@ -423,7 +449,7 @@ export async function main(): Promise<void> {
       // branch above -- this can't be validated synchronously before the
       // upgrade.
       try {
-        const project = await getProjectImpl(projectsFile, projectId);
+        const project = await getProjectImpl(projectsFile, wsLogsUserId, projectId);
         if (!project) {
           rejectUpgrade(socket, 404, "Not Found");
           return;

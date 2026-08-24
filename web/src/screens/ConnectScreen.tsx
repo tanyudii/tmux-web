@@ -37,7 +37,7 @@ function LinkIcon() {
 // paste-restricted hint only surfaces once there's no real error to show.
 function pasteRestrictedHelper(store: ConnectionSettingsStore): string | undefined {
   if (store.state.errorMessage === null && store.pasteRestricted()) {
-    return "Clipboard paste isn't available on this connection (needs HTTPS or localhost) — type the token instead.";
+    return "Clipboard paste isn't available on this connection (needs HTTPS or localhost) — type the password instead.";
   }
   return undefined;
 }
@@ -69,12 +69,19 @@ export function ConnectScreen(props: ConnectScreenProps) {
               disabled={store.state.isTesting}
             />
             <TextField
-              label="Access token"
-              value={store.state.token}
-              onValueChange={store.updateToken}
-              mono
+              label="Username"
+              value={store.state.username}
+              onValueChange={store.updateUsername}
+              autoCapitalize="none"
+              autocomplete="username"
+              disabled={store.state.isTesting}
+            />
+            <TextField
+              label="Password"
+              value={store.state.password}
+              onValueChange={store.updatePassword}
               password
-              placeholder="ghp_…"
+              autocomplete="current-password"
               error={store.state.errorMessage ?? undefined}
               helper={pasteRestrictedHelper(store)}
               disabled={store.state.isTesting}

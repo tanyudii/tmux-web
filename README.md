@@ -71,9 +71,12 @@ throughout every client rewrite.
   changes, killing its session is refused (409) until you explicitly
   confirm force-delete in the UI — this tool never silently discards
   work, unlike some worktree-removal defaults elsewhere.
-- A single shared token (`~/.tmux-web/config.json`, see `tmuxweb generate`)
-  gates every API and WebSocket
-  request, compared with a constant-time check (`crypto.timingSafeEqual`).
+- **Per-user accounts with login.** Users are provisioned from the CLI
+  (`tmuxweb user add <username> <password>` — no self-registration) and log
+  in from the web UI with username/password. Each login issues a random
+  32-byte bearer token (hashed at rest, expiring after 30 days) that gates
+  every API and WebSocket request; each user sees only their own projects
+  and sessions.
 - **The right sidebar shows what's changed** in the attached session's
   worktree — staged/unstaged/untracked files as a collapsible tree, click a
   file to see its diff inline. The diff text is whatever `git diff` prints;
@@ -125,24 +128,21 @@ accordingly:
    port-forward this on your router.
 2. **Run it as a non-root, non-privileged user.** The provided systemd
    unit runs as a `--user` service, not root.
-3. **Generate a real token**, not a short/guessable string — `tmuxweb init`
-   does this for you automatically; rotate it any time with:
-   ```bash
-   tmuxweb generate
-   ```
-4. **The access log records per-token activity, not per-person identity.**
-   Every bearer-token-authenticated API/WS request is appended to
-   `<data dir>/access.log` (timestamp, IP, method, path, and whether the
-   token check passed) — viewable read-only from the Web UI's sidebar
-   ("Access log"). Because this tool has one shared token rather than
-   per-user accounts, this log tells you *what happened when from which
-   IP*, not *who* did it in any personal sense — if you share the token
-   with multiple people/devices, they're indistinguishable in this log.
+3. **Use real passwords.** Accounts are provisioned by the server's
+   administrator via `tmuxweb user add`; passwords are stored as scrypt
+   hashes (`~/.tmux-web/users.json`, mode 0600), never in plaintext.
+   Removing a user (`tmuxweb user remove <username>`) immediately revokes
+   every token they hold.
+4. **The access log is per-user.** Every API/WS request is appended to
+   `<data dir>/access.log` (timestamp, IP, method, path, acting user, and
+   whether the token check passed) — viewable read-only from the Web UI's
+   sidebar ("Access log"), scoped to the requesting user's own entries.
    The file rotates automatically (5 MiB per generation, 5 generations
    kept) so it never grows unbounded.
 5. **Audit it yourself.** This is a young, low-adoption project (it's
    yours). Before trusting it with real access, read at minimum:
-   `src/auth.ts` (token check), `src/server.ts` (route handling and error
+   `src/users.ts` + `src/auth-tokens.ts` (credential checks, token issue/
+   resolve/revoke), `src/server.ts` (route handling and error
    mapping), `src/worktree.ts` and `src/git-status.ts` (every `git`
    invocation this tool makes, including the diff-endpoint's path-traversal
    guard), and `src/main.ts` (how they're wired together with the WebSocket
@@ -213,7 +213,8 @@ tmuxweb upgrade --tag v1.0.2
 
 `~/.local/share/tmux-web` (the XDG convention for installed application
 code) is deliberately separate from `~/.tmux-web`, which holds runtime data
-only — token, port, host, projects, worktrees (see "Data directory" below).
+only — port, host, user accounts, login tokens, projects, worktrees (see
+"Data directory" below).
 This is the same clone-and-install shape as **Local development** below,
 minus dev dependencies and plus the global `npm link`.
 
@@ -231,12 +232,15 @@ web UI — until the next `tmuxweb upgrade`.
 Either way this puts a `tmuxweb` binary on your `PATH`. Then:
 
 ```bash
-tmuxweb init              # creates ~/.tmux-web/config.json with a generated token
-tmuxweb service install   # installs + starts a systemd --user service
+tmuxweb init                                # creates ~/.tmux-web/config.json
+tmuxweb user add alice 'a-real-password'    # create the first login account
+tmuxweb service install                     # installs + starts a systemd --user service
 ```
 
-`tmuxweb init` prints the generated token once — save it, you'll need it to
-open the UI. `tmuxweb help` lists every subcommand.
+Accounts are CLI-only (no self-registration); each user then logs in from
+the web UI with their username and password. `tmuxweb user list` /
+`tmuxweb user remove <username>` manage them — removing a user also revokes
+every login token they hold. `tmuxweb help` lists every subcommand.
 
 ### Configuring port and host
 
@@ -247,15 +251,6 @@ tmuxweb config host 127.0.0.1   # see "Security model" above before changing thi
 
 Both write to `~/.tmux-web/config.json`; restart the service afterward
 (`systemctl --user restart tmux-web`) for the change to take effect.
-
-### Rotating the token
-
-```bash
-tmuxweb generate
-```
-
-Prints the new token and restarts nothing for you — restart the service
-afterward so the running process picks it up.
 
 ### Upgrading
 
@@ -288,7 +283,7 @@ service automatically if it was already running.
 git clone git@github.com:tanyudii/tmux-web.git
 cd tmux-web
 npm install
-npm run init                 # creates ~/.tmux-web/config.json with a generated token
+npm run init                 # creates ~/.tmux-web/config.json
 
 npm test                    # includes real-tmux, real-git and real-npm integration tests
 npm run typecheck
@@ -300,7 +295,8 @@ Same underlying shape as the production install above (`git clone` +
 `npm install`), minus `--omit=dev` and `npm link`.
 
 Open `http://<host>:<port>` (`http://127.0.0.1:5309` by default — see
-`~/.tmux-web/config.json`), paste the token, click **+ Add project** and
+`~/.tmux-web/config.json`), log in with an account created via
+`tmuxweb user add`, click **+ Add project** and
 point it at an absolute path to a git repo already on this server, open the
 project, then **+ New session** and confirm you land in a real shell whose
 `pwd` is a freshly created worktree.
@@ -336,7 +332,9 @@ Everything this tool persists lives under `~/.tmux-web/`:
 
 ```
 ~/.tmux-web/
-  config.json             token, port, host (see `tmuxweb config`/`tmuxweb generate`)
+  config.json             port, host (see `tmuxweb config`)
+  users.json             user accounts (scrypt password hashes, mode 0600)
+  auth-tokens.json       issued login tokens (SHA-256 hashes, mode 0600)
   projects.json          registered projects (name, id, repo path)
   worktrees/
     <projectId>/
@@ -474,7 +472,7 @@ Useful commands afterward:
 ```bash
 tmuxweb service status                  # same as `systemctl --user status tmux-web`
 journalctl --user -u tmux-web -f        # tail logs
-systemctl --user restart tmux-web       # restart (needed after `tmuxweb config`/`tmuxweb generate`)
+systemctl --user restart tmux-web       # restart (needed after `tmuxweb config`)
 tmuxweb service uninstall               # stop and remove from autostart
 ```
 
@@ -572,10 +570,9 @@ result or a question that needs an answer.
   spawn a local process" is implicitly the trust boundary, a network
   listener needs an explicit credential, since anything reachable on that
   network segment could otherwise call `send_message`. Losing control of
-  this token is equivalent to losing control of the main API token: rotate
-  it by deleting the file and restarting `tmuxweb mcp --http` (a fresh one
-  is generated on next start; there's no `tmuxweb mcp generate` command
-  yet, unlike the main token's `tmuxweb generate`).
+  this token grants shell-level trust on this host: rotate it by deleting
+  the file and restarting `tmuxweb mcp --http` (a fresh one is generated
+  on next start).
 - `tmuxweb mcp` also opens a **second**, separate local HTTP listener (port
   5310 by default) that the installed hooks POST to when a session
   finishes a turn or needs input. This is a distinct trust boundary from
@@ -596,7 +593,9 @@ result or a question that needs an answer.
 
 ```
 src/
-  auth.ts               token extraction + constant-time verification
+  auth.ts               bearer-token header/query extraction
+  users.ts              user accounts (scrypt hashing, constant-time verify)
+  auth-tokens.ts        login tokens (issue/resolve/revoke, SHA-256 at rest)
   slug.ts                branch-name slugification (pure)
   session-naming.ts       <projectId>__<slug> composite tmux session names
   tmux.ts                shells out to `tmux` (list/create/kill sessions)
@@ -631,7 +630,7 @@ src/
     index.ts                argv router for the `tmuxweb` command;
                               no subcommand -> help, not the server
     init.ts                  `tmuxweb init`
-    generate-token.ts         `tmuxweb generate`
+    user-command.ts            `tmuxweb user add|list|remove`
     config-command.ts          `tmuxweb config port|host`
     service-command.ts          `tmuxweb service install|uninstall|status`
     upgrade.ts                   `tmuxweb upgrade [--tag <tag>]`
@@ -686,7 +685,6 @@ docs/testing/
 - No build step / bundler — Node runs the `.ts` sources directly.
 - No real database — one JSON file for the project registry, tmux/git
   themselves are the source of truth for everything else.
-- No user accounts — one shared token, one server.
 - No TLS termination built in — terminate TLS at your VPN/reverse proxy,
   not here. Note that plain HTTP on a non-`localhost` host (the
   WireGuard/Tailscale setup above) is not a browser "secure context", so
