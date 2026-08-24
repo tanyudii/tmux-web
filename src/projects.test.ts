@@ -210,7 +210,7 @@ test(
   },
 );
 
-test("registerProject rejects a repoPath already registered by any user", async () => {
+test("registerProject rejects the same user re-registering a repoPath they already have", async () => {
   await withTempDir(async (dir) => {
     const filePath = join(dir, "projects.json");
     await saveProjects(filePath, [
@@ -218,16 +218,21 @@ test("registerProject rejects a repoPath already registered by any user", async 
     ]);
 
     await assert.rejects(
-      () => registerProject(filePath, "bob", "Bob's copy", "/repo/main", { isGitRepo: async () => true }),
-      ProjectValidationError,
-    );
-    // Same user re-registering the same repoPath is rejected too.
-    await assert.rejects(
       () => registerProject(filePath, "alice", "Alice again", "/repo/main", { isGitRepo: async () => true }),
       ProjectValidationError,
     );
-    // A different path still works.
-    const project = await registerProject(filePath, "bob", "Other repo", "/repo/other", { isGitRepo: async () => true });
-    assert.equal(project.repoPath, "/repo/other");
+  });
+});
+
+test("registerProject allows a different user to register a repoPath already registered by someone else", async () => {
+  await withTempDir(async (dir) => {
+    const filePath = join(dir, "projects.json");
+    await saveProjects(filePath, [
+      { id: "p1", userId: "alice", name: "Alice's copy", repoPath: "/repo/main", createdAt: "2026-01-01T00:00:00.000Z" },
+    ]);
+
+    const project = await registerProject(filePath, "bob", "Bob's copy", "/repo/main", { isGitRepo: async () => true });
+    assert.equal(project.repoPath, "/repo/main");
+    assert.equal(project.userId, "bob");
   });
 });

@@ -73,9 +73,11 @@ export async function registerProject(
 
   const projects = await loadProjects(filePath);
   // Exact-path match only (symlinked or differently-spelled paths to the
-  // same repo are NOT caught) -- the goal is preventing accidental double
-  // registration, not fencing mutually distrusting users off one repo.
-  if (projects.some((project) => project.repoPath === repoPath)) {
+  // same repo are NOT caught) -- the goal is preventing the same user from
+  // accidentally double-registering, not fencing other accounts off a repo
+  // path they legitimately share (e.g. a team repo checked out at the same
+  // path for multiple accounts on a shared host).
+  if (projects.some((project) => project.userId === userId && project.repoPath === repoPath)) {
     throw new ProjectValidationError(`repoPath is already registered: ${repoPath}`);
   }
   const project: Project = {
