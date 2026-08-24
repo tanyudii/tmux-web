@@ -30,9 +30,11 @@ import {
 } from "./directory-browser.ts";
 
 const TOKEN = "test-token-123";
+const USER_ID = "test-user";
 
 const SAMPLE_PROJECT: Project = {
   id: "proj1-ab12cd",
+  userId: USER_ID,
   name: "My Project",
   repoPath: "/repo",
   createdAt: "2026-01-01T00:00:00.000Z",
@@ -48,15 +50,19 @@ const SAMPLE_TEMPLATE: SessionTemplate = {
 
 function makeDeps(overrides: Partial<ServerDeps> = {}): ServerDeps {
   return {
-    token: TOKEN,
+    verifyPassword: async () => true,
+    issueToken: async () => TOKEN,
+    resolveToken: async (rawToken?: string) => (rawToken === TOKEN ? USER_ID : undefined),
+    revokeToken: async () => {},
     listProjects: async () => [SAMPLE_PROJECT],
-    registerProject: async (name: string, repoPath: string) => ({
+    registerProject: async (userId: string, name: string, repoPath: string) => ({
       id: "new-id",
+      userId,
       name,
       repoPath,
       createdAt: "2026-01-01T00:00:00.000Z",
     }),
-    getProject: async (id: string) => (id === SAMPLE_PROJECT.id ? SAMPLE_PROJECT : undefined),
+    getProject: async (_userId: string, id: string) => (id === SAMPLE_PROJECT.id ? SAMPLE_PROJECT : undefined),
     removeProject: async () => {},
     browseDirectory: async (path?: string) => ({
       path: path ?? "/home/user",
@@ -159,9 +165,9 @@ test("GET /api/projects with the correct token returns the project list", async 
 test("POST /api/projects creates a project and returns 201", async () => {
   const calls: Array<{ name: string; repoPath: string }> = [];
   const deps = makeDeps({
-    registerProject: async (name: string, repoPath: string) => {
+    registerProject: async (userId: string, name: string, repoPath: string) => {
       calls.push({ name, repoPath });
-      return { id: "new-id", name, repoPath, createdAt: "2026-01-01T00:00:00.000Z" };
+      return { id: "new-id", userId, name, repoPath, createdAt: "2026-01-01T00:00:00.000Z" };
     },
   });
   await withServer(deps, async (baseUrl) => {
@@ -316,7 +322,7 @@ test("GET /api/browse returns 403 for DirectoryAccessDeniedError", async () => {
 
 test("DELETE /api/projects/:id removes the project when it has no active sessions", async () => {
   const calls: string[] = [];
-  const deps = makeDeps({ removeProject: async (id: string) => { calls.push(id); } });
+  const deps = makeDeps({ removeProject: async (_userId: string, id: string) => { calls.push(id); } });
   await withServer(deps, async (baseUrl) => {
     const res = await fetch(`${baseUrl}/api/projects/${SAMPLE_PROJECT.id}`, {
       method: "DELETE",
@@ -1872,7 +1878,7 @@ test("GET /api/access-log without a token returns 401", async () => {
 test("GET /api/access-log returns entries from deps.getAccessLog", async () => {
   const deps = makeDeps({
     getAccessLog: async () => [
-      { timestamp: "2026-01-01T00:00:00.000Z", ip: "203.0.113.5", method: "GET", path: "/api/projects", outcome: "authorized" },
+      { timestamp: "2026-01-01T00:00:00.000Z", ip: "203.0.113.5", method: "GET", path: "/api/projects", outcome: "authorized", userId: USER_ID },
     ],
   });
   await withServer(deps, async (baseUrl) => {
@@ -2251,5 +2257,68 @@ test("POST /api/projects/:id/sessions/:name/env/reload ignores a non-string serv
     });
     assert.equal(res.status, 202);
     assert.deepEqual(calls, [{ rebuild: false, service: undefined }]);
+  });
+});
+
+// --- Login / logout ---
+
+test("POST /api/login returns a token for valid credentials", async () => {
+  await withServer(makeDeps(), async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/login`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ username: USER_ID, password: "password123" }),
+    });
+    assert.equal(res.status, 200);
+    assert.deepEqual(await res.json(), { token: TOKEN });
+  });
+});
+
+test("POST /api/login rejects a non-JSON body and non-string fields with 400", async () => {
+  await withServer(makeDeps(), async (baseUrl) => {
+    const malformed = await fetch(`${baseUrl}/api/login`, { method: "POST", body: "not-json" });
+    assert.equal(malformed.status, 400);
+
+    const nonString = await fetch(`${baseUrl}/api/login`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ username: USER_ID }),
+    });
+    assert.equal(nonString.status, 400);
+  });
+});
+
+test("POST /api/login returns 429 after 5 failures against one username", async () => {
+  await withServer(makeDeps({ verifyPassword: async () => false }), async (baseUrl) => {
+    const statuses: number[] = [];
+    for (let i = 0; i < 6; i++) {
+      const res = await fetch(`${baseUrl}/api/login`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ username: "victim", password: "wrong" }),
+      });
+      statuses.push(res.status);
+    }
+    // Per-username limit (5) trips before the per-IP one (10).
+    assert.ok(statuses.slice(0, 5).every((status) => status === 401));
+    assert.equal(statuses[5], 429);
+  });
+});
+
+test("POST /api/logout returns 204", async () => {
+  await withServer(makeDeps(), async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/logout`, { method: "POST", headers: authHeaders() });
+    assert.equal(res.status, 204);
+  });
+});
+
+test("GET /api/access-log returns only the requesting user's entries", async () => {
+  const ownEntry = { timestamp: "t1", ip: "1.1.1.1", method: "GET", path: "/a", outcome: "authorized" as const, userId: USER_ID };
+  const otherUserEntry = { timestamp: "t2", ip: "2.2.2.2", method: "GET", path: "/b", outcome: "authorized" as const, userId: "someone-else" };
+  const noUserEntry = { timestamp: "t3", ip: "3.3.3.3", method: "WS", path: "/ws", outcome: "denied" as const };
+  await withServer(makeDeps({ getAccessLog: async () => [ownEntry, otherUserEntry, noUserEntry] }), async (baseUrl) => {
+    const res = await fetch(`${baseUrl}/api/access-log`, { headers: authHeaders() });
+    assert.equal(res.status, 200);
+    assert.deepEqual((await res.json()).entries, [ownEntry]);
   });
 });

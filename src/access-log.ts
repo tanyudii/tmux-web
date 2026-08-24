@@ -1,10 +1,10 @@
 import { appendRotatingLogLine, readRotatingLogLines, type RotationOptions } from "./rotating-log.ts";
 
 // EMB-223: audit log of every bearer-token-gated request this server
-// receives. The token is shared (not per-user, see server.ts's ServerDeps
-// doc comment and the README), so this identifies *what happened when from
-// which IP* -- not *who* in any personal sense. That limitation is
-// deliberate and documented, not an oversight.
+// receives. Entries carry the acting `userId` where known (undefined for
+// denied/unknown-token requests), and GET /api/access-log filters to the
+// requesting user's own entries -- with multiple users, the raw log is
+// cross-tenant data, not a shared debug view.
 export type AccessLogOutcome = "authorized" | "denied";
 
 export interface AccessLogEntry {
@@ -13,6 +13,7 @@ export interface AccessLogEntry {
   method: string;
   path: string;
   outcome: AccessLogOutcome;
+  userId?: string;
 }
 
 export type AccessLogRotationOptions = RotationOptions;

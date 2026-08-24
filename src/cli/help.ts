@@ -3,10 +3,13 @@ export const HELP_TEXT = `tmuxweb - browser GUI for tmux sessions
 Usage:
   tmuxweb                         Show this help (same as \`tmuxweb help\`)
   tmuxweb start                   Start the server (reads ~/.tmux-web/config.json)
-  tmuxweb init                    Create ~/.tmux-web/config.json with a generated token
-  tmuxweb generate                Regenerate the auth token
+  tmuxweb init                    Create ~/.tmux-web/config.json
   tmuxweb config port <n>         Set the listen port
   tmuxweb config host <addr>      Set the bind host
+  tmuxweb user add <username> <password>
+                                  Create a user account
+  tmuxweb user list               List user accounts
+  tmuxweb user remove <username>  Delete a user account
   tmuxweb service install         Install as a systemd --user service
   tmuxweb service uninstall       Remove the systemd --user service
   tmuxweb service status          Show the systemd --user service status

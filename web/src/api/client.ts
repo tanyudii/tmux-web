@@ -14,6 +14,7 @@ import {
   envStatusSchema,
   fileDiffSchema,
   groupedChangesSchema,
+  loginResponseSchema,
   pasteBufferResponseSchema,
   pendingSessionCreationSchema,
   projectListResponseSchema,
@@ -78,6 +79,26 @@ async function parseJson<T>(response: Response, schema: ZodType<T>): Promise<T> 
   return result.data;
 }
 
+// Login happens before any token exists, so it lives outside
+// createApiClient()'s bearer-token-authenticated closure.
+export async function loginRequest(
+  config: { baseUrl: string; username: string; password: string; fetchImpl?: typeof fetch },
+): Promise<string> {
+  const fetchImpl = config.fetchImpl ?? fetch;
+  let response: Response;
+  try {
+    response = await fetchImpl(`${config.baseUrl}/api/login`, {
+      method: "POST",
+      headers: new Headers({ "Content-Type": "application/json" }),
+      body: JSON.stringify({ username: config.username, password: config.password }),
+    });
+  } catch (error) {
+    throw new TransportError(error);
+  }
+  if (!response.ok) throw await mapErrorResponse(response);
+  return (await parseJson(response, loginResponseSchema)).token;
+}
+
 export function createApiClient(config: ApiClientConfig) {
   const { baseUrl, token } = config;
   const fetchImpl = config.fetchImpl ?? fetch;
@@ -115,6 +136,11 @@ export function createApiClient(config: ApiClientConfig) {
   }
 
   return {
+    // -- Auth ----------------------------------------------------------------
+    async logout(): Promise<void> {
+      await request("POST", "/api/logout");
+    },
+
     // -- Projects --------------------------------------------------------
     async listProjects(): Promise<Project[]> {
       return (await requestJson("GET", "/api/projects", projectListResponseSchema)).projects;

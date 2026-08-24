@@ -15,13 +15,12 @@ async function withTempDir(fn: (dir: string) => Promise<void>): Promise<void> {
   }
 }
 
-test("runInit creates config.json with a valid token when none exists", async () => {
+test("runInit creates config.json when none exists", async () => {
   await withTempDir(async (dir) => {
     await runInit([], dir);
     const config = await readConfig(dir);
     assert.equal(config.port, 5309);
     assert.equal(config.host, "127.0.0.1");
-    assert.equal(config.token.length >= 16, true);
   });
 });
 
@@ -38,9 +37,12 @@ test("runInit does not overwrite an existing config without --force", async () =
 test("runInit overwrites an existing config with --force", async () => {
   await withTempDir(async (dir) => {
     await runInit([], dir);
-    const before = await readConfig(dir);
+    // Hand-modify the config so --force overwriting is observable.
+    const { writeFile } = await import("node:fs/promises");
+    const { configFilePath } = await import("../config.ts");
+    await writeFile(configFilePath(dir), JSON.stringify({ port: 6000, host: "0.0.0.0" }));
     await runInit(["--force"], dir);
     const after = await readConfig(dir);
-    assert.notEqual(after.token, before.token);
+    assert.deepEqual(after, { port: 5309, host: "127.0.0.1" });
   });
 });

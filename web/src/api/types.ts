@@ -20,6 +20,8 @@ export type Project = z.infer<typeof projectSchema>;
 
 export const projectListResponseSchema = z.object({ projects: z.array(projectSchema) });
 
+export const loginResponseSchema = z.object({ token: z.string() });
+
 export interface NewProjectRequest {
   name: string;
   repoPath: string;

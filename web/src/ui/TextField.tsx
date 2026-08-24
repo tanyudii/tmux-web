@@ -23,6 +23,8 @@ export interface TextFieldProps {
   icon?: JSX.Element;
   disabled?: boolean;
   password?: boolean;
+  autoCapitalize?: JSX.HTMLAutocapitalize;
+  autocomplete?: string;
   class?: string;
 }
 
@@ -54,6 +56,8 @@ export function TextField(props: TextFieldProps) {
           type={props.password ? "password" : "text"}
           value={props.value}
           placeholder={props.placeholder}
+          autoCapitalize={props.autoCapitalize}
+          autocomplete={props.autocomplete}
           disabled={props.disabled === true}
           onInput={(event) => props.onValueChange(event.currentTarget.value)}
         />

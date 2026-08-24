@@ -9,8 +9,10 @@ const apiErrorBodySchema = z.object({
 });
 
 export class UnauthorizedError extends Error {
-  constructor() {
-    super("Token is invalid or expired.");
+  // serverMessage overrides the token-centric default when the backend
+  // sent one -- e.g. POST /api/login's "Invalid username or password."
+  constructor(public readonly serverMessage?: string) {
+    super(serverMessage ?? "Token is invalid or expired.");
     this.name = "UnauthorizedError";
   }
 }
@@ -84,7 +86,7 @@ export async function mapErrorResponse(response: Response): Promise<ApiError> {
 
   switch (response.status) {
     case 401:
-      return new UnauthorizedError();
+      return new UnauthorizedError(parsed.success ? parsed.data.error : undefined);
     case 404:
       return new NotFoundError(message);
     case 400:

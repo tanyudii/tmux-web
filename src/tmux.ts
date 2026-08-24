@@ -228,10 +228,9 @@ export async function scrollPane(
 // lose to an unrelated, concurrently-active session's own copy landing in
 // that window (observed ~14ms gap). [delayFn] narrows (does not eliminate)
 // that window by waiting a short, fixed settle time first -- this app runs
-// one shared token against one server (see README's "one shared token, one
-// server" scope note), so on a lightly-used host the caller's own copy is
-// overwhelmingly likely to already be the newest buffer by the time this
-// runs. A fully session-scoped fix would need tmux's own mouse keybindings
+// against one server on one host, so on a lightly-used host the caller's
+// own copy is overwhelmingly likely to already be the newest buffer by the
+// time this runs. A fully session-scoped fix would need tmux's own mouse keybindings
 // rebound per-session (invasive: would also affect the user's own tmux
 // customizations outside this app) -- not attempted here.
 export async function readPasteBuffer(exec: ExecFn = defaultExec, delayFn: DelayFn = defaultDelay): Promise<string> {

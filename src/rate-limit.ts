@@ -10,8 +10,7 @@ export interface RateLimitResult {
 
 // Simple in-memory sliding-window counter, keyed by an arbitrary string
 // (client IP). Good enough for tmux-web's single-process, single-server
-// deployment model (see README's "single shared token, one server") --
-// no need for a shared store across processes.
+// deployment model -- no need for a shared store across processes.
 export class RateLimiter {
   private readonly options: RateLimiterOptions;
   private readonly now: () => number;

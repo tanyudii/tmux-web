@@ -9,6 +9,7 @@ import {
   loadProjects,
   saveProjects,
   generateProjectId,
+  listProjects,
   registerProject,
   removeProject,
   getProject,
@@ -37,7 +38,9 @@ test("loadProjects returns an empty array when the file does not exist", async (
 test("saveProjects then loadProjects round-trips the data", async () => {
   await withTempDir(async (dir) => {
     const filePath = join(dir, "projects.json");
-    const projects = [{ id: "p1", name: "Proj One", repoPath: "/repo1", createdAt: "2026-01-01T00:00:00.000Z" }];
+    const projects = [
+      { id: "p1", userId: "alice", name: "Proj One", repoPath: "/repo1", createdAt: "2026-01-01T00:00:00.000Z" },
+    ];
     await saveProjects(filePath, projects);
     assert.deepEqual(await loadProjects(filePath), projects);
   });
@@ -62,7 +65,7 @@ test("generateProjectId falls back to 'project' when the name has nothing slugga
 test("registerProject rejects an empty name", async () => {
   await withTempDir(async (dir) => {
     await assert.rejects(
-      () => registerProject(join(dir, "projects.json"), "  ", "/abs/repo", { isGitRepo: async () => true }),
+      () => registerProject(join(dir, "projects.json"), "alice", "  ", "/abs/repo", { isGitRepo: async () => true }),
       ProjectValidationError,
     );
   });
@@ -71,7 +74,10 @@ test("registerProject rejects an empty name", async () => {
 test("registerProject rejects a relative repoPath", async () => {
   await withTempDir(async (dir) => {
     await assert.rejects(
-      () => registerProject(join(dir, "projects.json"), "Proj", "relative/path", { isGitRepo: async () => true }),
+      () =>
+        registerProject(join(dir, "projects.json"), "alice", "Proj", "relative/path", {
+          isGitRepo: async () => true,
+        }),
       ProjectValidationError,
     );
   });
@@ -80,21 +86,23 @@ test("registerProject rejects a relative repoPath", async () => {
 test("registerProject rejects a path that isn't a git repo", async () => {
   await withTempDir(async (dir) => {
     await assert.rejects(
-      () => registerProject(join(dir, "projects.json"), "Proj", "/abs/repo", { isGitRepo: async () => false }),
+      () =>
+        registerProject(join(dir, "projects.json"), "alice", "Proj", "/abs/repo", { isGitRepo: async () => false }),
       ProjectValidationError,
     );
   });
 });
 
-test("registerProject appends a new project and persists it", async () => {
+test("registerProject appends a new project owned by the given user and persists it", async () => {
   await withTempDir(async (dir) => {
     const filePath = join(dir, "projects.json");
-    const project = await registerProject(filePath, "My Project", "/abs/repo", {
+    const project = await registerProject(filePath, "alice", "My Project", "/abs/repo", {
       isGitRepo: async () => true,
       randomSuffix: () => "ab12cd",
     });
 
     assert.equal(project.id, "my-project-ab12cd");
+    assert.equal(project.userId, "alice");
     assert.equal(project.name, "My Project");
     assert.equal(project.repoPath, "/abs/repo");
     assert.equal(typeof project.createdAt, "string");
@@ -108,11 +116,11 @@ test("removeProject removes only the matching project", async () => {
   await withTempDir(async (dir) => {
     const filePath = join(dir, "projects.json");
     await saveProjects(filePath, [
-      { id: "p1", name: "One", repoPath: "/r1", createdAt: "2026-01-01T00:00:00.000Z" },
-      { id: "p2", name: "Two", repoPath: "/r2", createdAt: "2026-01-01T00:00:00.000Z" },
+      { id: "p1", userId: "alice", name: "One", repoPath: "/r1", createdAt: "2026-01-01T00:00:00.000Z" },
+      { id: "p2", userId: "alice", name: "Two", repoPath: "/r2", createdAt: "2026-01-01T00:00:00.000Z" },
     ]);
 
-    await removeProject(filePath, "p1");
+    await removeProject(filePath, "alice", "p1");
 
     const remaining = await loadProjects(filePath);
     assert.deepEqual(remaining.map((p) => p.id), ["p2"]);
@@ -122,10 +130,51 @@ test("removeProject removes only the matching project", async () => {
 test("getProject finds a project by id and returns undefined when missing", async () => {
   await withTempDir(async (dir) => {
     const filePath = join(dir, "projects.json");
-    await saveProjects(filePath, [{ id: "p1", name: "One", repoPath: "/r1", createdAt: "2026-01-01T00:00:00.000Z" }]);
+    await saveProjects(filePath, [
+      { id: "p1", userId: "alice", name: "One", repoPath: "/r1", createdAt: "2026-01-01T00:00:00.000Z" },
+    ]);
 
-    assert.equal((await getProject(filePath, "p1"))?.name, "One");
-    assert.equal(await getProject(filePath, "missing"), undefined);
+    assert.equal((await getProject(filePath, "alice", "p1"))?.name, "One");
+    assert.equal(await getProject(filePath, "alice", "missing"), undefined);
+  });
+});
+
+test("listProjects returns only the calling user's projects", async () => {
+  await withTempDir(async (dir) => {
+    const filePath = join(dir, "projects.json");
+    await saveProjects(filePath, [
+      { id: "p1", userId: "alice", name: "One", repoPath: "/r1", createdAt: "2026-01-01T00:00:00.000Z" },
+      { id: "p2", userId: "bob", name: "Two", repoPath: "/r2", createdAt: "2026-01-01T00:00:00.000Z" },
+    ]);
+
+    assert.deepEqual((await listProjects(filePath, "alice")).map((p) => p.id), ["p1"]);
+    assert.deepEqual((await listProjects(filePath, "bob")).map((p) => p.id), ["p2"]);
+    assert.deepEqual(await listProjects(filePath, "carol"), []);
+  });
+});
+
+test("getProject returns undefined when the project is owned by a different user", async () => {
+  await withTempDir(async (dir) => {
+    const filePath = join(dir, "projects.json");
+    await saveProjects(filePath, [
+      { id: "p1", userId: "alice", name: "One", repoPath: "/r1", createdAt: "2026-01-01T00:00:00.000Z" },
+    ]);
+
+    assert.equal(await getProject(filePath, "bob", "p1"), undefined);
+  });
+});
+
+test("removeProject does not remove a project owned by a different user", async () => {
+  await withTempDir(async (dir) => {
+    const filePath = join(dir, "projects.json");
+    await saveProjects(filePath, [
+      { id: "p1", userId: "alice", name: "One", repoPath: "/r1", createdAt: "2026-01-01T00:00:00.000Z" },
+    ]);
+
+    await removeProject(filePath, "bob", "p1");
+
+    const remaining = await loadProjects(filePath);
+    assert.deepEqual(remaining.map((p) => p.id), ["p1"]);
   });
 });
 
@@ -150,13 +199,35 @@ test(
 
       const filePath = join(dir, "projects.json");
 
-      const project = await registerProject(filePath, "Real Repo", repoPath, { isGitRepo });
+      const project = await registerProject(filePath, "alice", "Real Repo", repoPath, { isGitRepo });
       assert.equal(project.repoPath, repoPath);
 
       await assert.rejects(
-        () => registerProject(filePath, "Plain Dir", plainDir, { isGitRepo }),
+        () => registerProject(filePath, "alice", "Plain Dir", plainDir, { isGitRepo }),
         ProjectValidationError,
       );
     });
   },
 );
+
+test("registerProject rejects a repoPath already registered by any user", async () => {
+  await withTempDir(async (dir) => {
+    const filePath = join(dir, "projects.json");
+    await saveProjects(filePath, [
+      { id: "p1", userId: "alice", name: "Alice's copy", repoPath: "/repo/main", createdAt: "2026-01-01T00:00:00.000Z" },
+    ]);
+
+    await assert.rejects(
+      () => registerProject(filePath, "bob", "Bob's copy", "/repo/main", { isGitRepo: async () => true }),
+      ProjectValidationError,
+    );
+    // Same user re-registering the same repoPath is rejected too.
+    await assert.rejects(
+      () => registerProject(filePath, "alice", "Alice again", "/repo/main", { isGitRepo: async () => true }),
+      ProjectValidationError,
+    );
+    // A different path still works.
+    const project = await registerProject(filePath, "bob", "Other repo", "/repo/other", { isGitRepo: async () => true });
+    assert.equal(project.repoPath, "/repo/other");
+  });
+});
